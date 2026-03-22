@@ -1829,8 +1829,12 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
         setMessages(m=>[...m, {id:uid(), role:'ai', text:reply, at:new Date().toISOString()}]);
         setTyping(false); return;
       }
-      // Build conversation history for context
-      const history = [...messages, userMsg].map(m=>({role: m.role==='user'?'user':'assistant', content: m.text}));
+      // Build conversation history — append plain-text reminder to every user turn
+      const PLAIN_REMINDER = ' (Reply in plain spoken sentences only. Absolutely no markdown, no asterisks, no bullet points, no headers, no arrows, no bold, no numbered lists.)';
+      const history = [...messages, userMsg].map(m=>({
+        role: m.role==='user' ? 'user' : 'assistant',
+        content: m.role==='user' ? m.text + PLAIN_REMINDER : m.text,
+      }));
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method:'POST',
         headers:{
@@ -1848,7 +1852,15 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
       });
       const j = await resp.json();
       if(j.error) throw new Error(j.error.message || 'API error');
-      const out = j?.content?.[0]?.text || '(no response)';
+      const raw = j?.content?.[0]?.text || '(no response)';
+      // Strip any residual markdown from display too
+      const out = raw
+        .replace(/#{1,6}\s*/g,'').replace(/\*\*\*(.+?)\*\*\*/g,'$1').replace(/\*\*(.+?)\*\*/g,'$1')
+        .replace(/\*(.+?)\*/g,'$1').replace(/__(.+?)__/g,'$1').replace(/_(.+?)_/g,'$1')
+        .replace(/`{1,3}[^`]*`{1,3}/g,'').replace(/\[(.+?)\]\(.+?\)/g,'$1')
+        .replace(/^>\s*/gm,'').replace(/^[-*+]\s+/gm,'').replace(/^\d+\.\s+/gm,'')
+        .replace(/^-{3,}$/gm,'').replace(/→|←|↑|↓/g,'').replace(/\|.+\|/g,'')
+        .replace(/\n{3,}/g,'\n\n').trim();
       const bot = {id:uid(), role:'ai', text:out, at:new Date().toISOString()};
       setMessages(m=>[...m, bot]);
       speak(out);
