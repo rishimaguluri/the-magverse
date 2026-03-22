@@ -13,12 +13,14 @@ function ls(k, v) {
 }
 
 // Hub system prompts
+const NO_MARKDOWN = `CRITICAL FORMATTING RULE: You are speaking out loud. Never use markdown. No asterisks, no pound signs, no dashes as bullets, no numbered lists, no arrows, no blockquotes, no bold, no italics, no headers, no horizontal rules. Write only in plain natural spoken sentences and paragraphs, exactly as you would say it out loud to someone's face. If you need to list things, weave them into a sentence naturally.`;
+
 const DEFAULT_HUBS = () => [
-  { id:'hub1', emoji:'🏛️', name:'Philosophy', system:`You are a brilliant philosophy professor — curious, sharp, and genuinely excited by ideas. When someone asks you something, don't give them a Wikipedia entry. Talk to them like you're both sitting at a coffee shop having a real conversation. Share your actual perspective. Push back if you disagree. Ask follow-up questions that make them think harder. Use real-world analogies and examples. Skip the bullet points and headers — just talk. Keep responses focused and conversational, not lecture-length unless they ask you to go deep.` },
-  { id:'hub2', emoji:'😮‍💨', name:'Stress & Mind', system:`You are a wise, grounded mental wellness coach — part therapist, part older sibling who's figured some things out. You speak warmly and directly, never in therapy-speak or self-help clichés. When someone shares what they're going through, actually engage with their specific situation — don't give generic advice. Ask the right questions. Be honest, including when you think they're being too hard on themselves or not hard enough. Sound like a person, not a wellness app. No bullet points, no headers — just real conversation.` },
-  { id:'hub3', emoji:'📐', name:'Quant Hub', system:`You are a quant who has worked at a top hedge fund and now genuinely loves teaching. You explain things the way a brilliant friend would — clearly, directly, and without condescension. When someone asks about math, stats, or finance, give them the real intuition first, then the mechanics. Use concrete examples and numbers. Call out where people usually get confused. Don't over-format — write like you're explaining it over a whiteboard session. If they're getting something wrong, correct them nicely but honestly.` },
-  { id:'hub4', emoji:'💼', name:'Case Coach', system:`You are a former McKinsey partner who now coaches candidates for consulting interviews. You are direct, demanding, and genuinely helpful. When someone gives you a case answer, react like a real interviewer would — praise what's good, push back on what's weak, and explain exactly why. Don't sugarcoat. You've seen hundreds of interviews and you know what separates the people who get offers from those who don't. Be conversational, not scripted. No bullet point lists of generic tips — give real, specific feedback on what they just said.` },
-  { id:'hub5', emoji:'📰', name:'WSJ Digest', system:`You are a veteran Wall Street professional — 20+ years across investment banking, hedge funds, and private markets. You explain finance the way a senior banker explains it to a smart intern over lunch: directly, with real examples, your own opinions, and zero tolerance for vague buzzwords. When someone asks what investment bankers do, don't give them a textbook. Tell them what the job is actually like. Use specific stories and numbers. Say what you actually think about things. Speak in natural paragraphs — no headers, no bullet points unless it genuinely helps. If someone asks a shallow question, give them a deeper answer than they expected.` },
+  { id:'hub1', emoji:'🏛️', name:'Philosophy', system:`${NO_MARKDOWN}\n\nYou are a brilliant philosophy professor — curious, sharp, and genuinely excited by ideas. When someone asks you something, don't give them a Wikipedia entry. Talk to them like you're sitting at a coffee shop having a real conversation. Share your actual perspective, push back if you disagree, ask follow-up questions that make them think harder. Use real-world analogies. Keep it focused and conversational.` },
+  { id:'hub2', emoji:'😮‍💨', name:'Stress & Mind', system:`${NO_MARKDOWN}\n\nYou are a wise, grounded mental wellness coach — part therapist, part older sibling who has figured some things out. You speak warmly and directly, never in therapy-speak or self-help clichés. When someone shares what they're going through, engage with their specific situation. Ask the right questions. Be honest, including when you think they're being too hard on themselves or not hard enough. Sound like a real person.` },
+  { id:'hub3', emoji:'📐', name:'Quant Hub', system:`${NO_MARKDOWN}\n\nYou are a quant who has worked at a top hedge fund and now genuinely loves teaching. Explain things the way a brilliant friend would — clearly, directly, without condescension. Give the real intuition first, then the mechanics. Use concrete examples and numbers. Call out where people usually get confused. If they're getting something wrong, correct them honestly but kindly.` },
+  { id:'hub4', emoji:'💼', name:'Case Coach', system:`${NO_MARKDOWN}\n\nYou are a former McKinsey partner who now coaches candidates for consulting interviews. You are direct, demanding, and genuinely helpful. When someone gives a case answer, react like a real interviewer would — acknowledge what's good, push back on what's weak, explain exactly why. Don't sugarcoat. Give real, specific feedback on what they just said, not generic tips.` },
+  { id:'hub5', emoji:'📰', name:'WSJ Digest', system:`${NO_MARKDOWN}\n\nYou are a veteran Wall Street professional with 20 plus years across investment banking, hedge funds, and private markets. You explain finance the way a senior banker explains it to a smart intern over lunch — directly, with real examples, your own opinions, and zero tolerance for vague buzzwords. Don't give textbook answers. Tell them what the job and the industry are actually like. Use specific stories and numbers. Say what you actually think. If someone asks a shallow question, give them a deeper answer than they expected.` },
   { id:'hub6', emoji:'⚙️', name:'Custom Hub', system:'Custom assistant — edit this prompt in Settings to define any persona or expertise you want.' },
 ];
 
@@ -1755,16 +1757,31 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
     if(!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
 
-    // Strip markdown so it reads naturally
+    // Strip all markdown so it reads naturally out loud
     const clean = txt
-      .replace(/#{1,6}\s/g,'').replace(/\*\*(.+?)\*\*/g,'$1').replace(/\*(.+?)\*/g,'$1')
-      .replace(/`(.+?)`/g,'$1').replace(/\[(.+?)\]\(.+?\)/g,'$1')
-      .replace(/^[-*]\s/gm,'').replace(/^\d+\.\s/gm,'').trim();
+      .replace(/#{1,6}\s*/g,'')           // headers
+      .replace(/\*\*\*(.+?)\*\*\*/g,'$1') // bold+italic
+      .replace(/\*\*(.+?)\*\*/g,'$1')     // bold
+      .replace(/\*(.+?)\*/g,'$1')         // italic
+      .replace(/__(.+?)__/g,'$1')         // bold underscore
+      .replace(/_(.+?)_/g,'$1')           // italic underscore
+      .replace(/~~(.+?)~~/g,'$1')         // strikethrough
+      .replace(/`{1,3}[^`]*`{1,3}/g,'')  // code
+      .replace(/\[(.+?)\]\(.+?\)/g,'$1') // links
+      .replace(/^>\s*/gm,'')             // blockquotes
+      .replace(/^[-*+]\s+/gm,'')        // unordered bullets
+      .replace(/^\d+\.\s+/gm,'')        // numbered lists
+      .replace(/^-{3,}$/gm,'')          // horizontal rules ---
+      .replace(/→|←|↑|↓|▶|►/g,' ')     // arrows
+      .replace(/\n{3,}/g,'\n\n')        // excess newlines
+      .trim();
 
     const doSpeak = () => {
       const voices = window.speechSynthesis.getVoices();
       // Priority: best natural/neural voices first
+      const savedVoiceName = ls('magverse:v1')?.settings?.ttsVoice || '';
       const ranked = [
+        v => savedVoiceName && v.name === savedVoiceName,
         v => v.name === 'Samantha',
         v => v.name === 'Karen',
         v => v.name === 'Daniel',
@@ -1774,7 +1791,7 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
         v => v.name.includes('Microsoft Aria'),
         v => v.name.includes('Microsoft Jenny'),
         v => v.name.includes('Google US English'),
-        v => v.name.includes('en-US') && v.localService===false,
+        v => v.lang==='en-US' && v.localService===false,
         v => v.lang==='en-US',
         v => v.lang.startsWith('en'),
       ];
@@ -1929,7 +1946,30 @@ function SettingsPanel({data, setData, toasts}){
   const [apiKey, setApiKey] = useState(data.settings?.apiKey || '');
   const [accent, setAccent] = useState(data.settings?.accent || 'indigo');
   const [name, setName] = useState(data.settings?.userName || 'You');
-  const save = ()=>{ setData(d=>({...d, settings:{...d.settings, apiKey,accent,userName:name,avatarInitial:(name[0]||'Y').toUpperCase()}})); toasts.push('Settings saved'); };
+  const [ttsVoice, setTtsVoice] = useState(data.settings?.ttsVoice || '');
+  const [availableVoices, setAvailableVoices] = useState([]);
+
+  useEffect(()=>{
+    const load = ()=>{
+      const v = window.speechSynthesis?.getVoices().filter(v=>v.lang.startsWith('en')) || [];
+      setAvailableVoices(v);
+    };
+    load();
+    window.speechSynthesis?.addEventListener('voiceschanged', load);
+    return ()=>window.speechSynthesis?.removeEventListener('voiceschanged', load);
+  },[]);
+
+  const testVoice = ()=>{
+    if(!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance("Hey, this is what I sound like. Pretty natural, right?");
+    const voice = availableVoices.find(v=>v.name===ttsVoice);
+    if(voice) utt.voice = voice;
+    utt.rate = 0.90; utt.pitch = 1.0;
+    window.speechSynthesis.speak(utt);
+  };
+
+  const save = ()=>{ setData(d=>({...d, settings:{...d.settings, apiKey,accent,userName:name,avatarInitial:(name[0]||'Y').toUpperCase(),ttsVoice}})); toasts.push('Settings saved'); };
   const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='magverse-export.json'; a.click(); URL.revokeObjectURL(url); };
   const clearAll = ()=>{ if(!confirm('Clear all data? This cannot be undone.')) return; localStorage.clear(); location.reload(); };
   const resetHubs = ()=>{ if(!confirm('Reset all hub prompts to defaults? Custom edits will be lost.')) return; setData(d=>({...d, hubs:DEFAULT_HUBS()})); toasts.push('Hub prompts reset'); };
@@ -1958,6 +1998,19 @@ function SettingsPanel({data, setData, toasts}){
         <div>
           <label className="block text-xs opacity-80">Avatar Initial</label>
           <div className="w-12 h-12 rounded bg-white/5 flex items-center justify-center">{(name[0]||'Y').toUpperCase()}</div>
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs opacity-80 mb-1">Voice for AI Responses</label>
+          <div className="flex gap-2">
+            <select className="flex-1 p-2 bg-transparent border border-white/5 rounded text-sm" value={ttsVoice} onChange={e=>setTtsVoice(e.target.value)}>
+              <option value="">(Auto — best available)</option>
+              {availableVoices.map(v=>(
+                <option key={v.name} value={v.name}>{v.name} {v.localService?'':'🌐'}</option>
+              ))}
+            </select>
+            <button onClick={testVoice} className="px-3 py-1 rounded text-sm" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>▶ Test</button>
+          </div>
+          <p className="text-xs mt-1" style={{color:'#334155'}}>🌐 = online (higher quality) · For best results on Windows, install Microsoft Neural voices in System Settings → Speech</p>
         </div>
       </div>
       <div className="flex gap-2 mt-4">
