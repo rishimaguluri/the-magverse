@@ -1530,6 +1530,56 @@ const STOCK_PICKS = [
 const QUOTES_CACHE_KEY = 'magverse:stockquotes:v2';
 const QUOTES_CACHE_TTL = 8 * 60 * 60 * 1000; // 8 hours
 
+const PROXIES = [
+  u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+  u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+];
+
+async function proxyFetch(url){
+  for(const proxy of PROXIES){
+    try{
+      const r = await fetch(proxy(url), {signal: AbortSignal.timeout(6000)});
+      if(!r.ok) continue;
+      const j = await r.json();
+      if(j) return j;
+    }catch(e){}
+  }
+  throw new Error('all proxies failed');
+}
+
+async function fetchAllQuotes(tickers){
+  // Attempt 1: batch v7 quote endpoint
+  try{
+    const syms = tickers.join(',');
+    const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent`;
+    const j = await proxyFetch(url);
+    const result = {};
+    (j?.quoteResponse?.result||[]).forEach(q=>{
+      result[q.symbol] = {price:q.regularMarketPrice, chg:q.regularMarketChange, pct:q.regularMarketChangePercent};
+    });
+    if(Object.keys(result).length > 0) return result;
+  }catch(e){}
+
+  // Attempt 2: per-ticker v8 chart endpoint
+  const result = {};
+  await Promise.all(tickers.map(async ticker=>{
+    try{
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2d`;
+      const j = await proxyFetch(url);
+      const meta = j?.chart?.result?.[0]?.meta;
+      if(!meta) return;
+      const price = meta.regularMarketPrice;
+      const prev  = meta.chartPreviousClose || meta.previousClose;
+      const chg   = price - prev;
+      result[ticker] = {price, chg, pct:(chg/prev)*100};
+    }catch(e){}
+  }));
+  if(Object.keys(result).length > 0) return result;
+
+  throw new Error('all fetch strategies failed');
+}
+
 function useStockQuotes(){
   const tickers = STOCK_PICKS.map(s=>s.ticker);
   const [quotes, setQuotes] = useState(()=>{
@@ -1540,39 +1590,33 @@ function useStockQuotes(){
     return {};
   });
   const [fetchedAt, setFetchedAt] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
-  useEffect(()=>{
+  const load = async (force=false)=>{
+    if(!force){
+      try{
+        const c = JSON.parse(localStorage.getItem(QUOTES_CACHE_KEY));
+        if(c && Date.now()-c.ts < QUOTES_CACHE_TTL){ setFetchedAt(new Date(c.ts)); return; }
+      }catch(e){}
+    }
+    setLoading(true); setError(false);
     try{
-      const c = JSON.parse(localStorage.getItem(QUOTES_CACHE_KEY));
-      if(c && Date.now()-c.ts < QUOTES_CACHE_TTL){ setFetchedAt(new Date(c.ts)); return; }
-    }catch(e){}
+      const result = await fetchAllQuotes(tickers);
+      setQuotes(result);
+      const now = Date.now();
+      localStorage.setItem(QUOTES_CACHE_KEY, JSON.stringify({ts:now, data:result}));
+      setFetchedAt(new Date(now));
+    }catch(e){
+      setError(true);
+    }finally{
+      setLoading(false);
+    }
+  };
 
-    const syms = tickers.join(',');
-    const target = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent`;
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+  useEffect(()=>{ load(); },[]);
 
-    fetch(proxied)
-      .then(r=>r.json())
-      .then(j=>{
-        const result={};
-        (j?.quoteResponse?.result||[]).forEach(q=>{
-          result[q.symbol]={
-            price: q.regularMarketPrice,
-            chg:   q.regularMarketChange,
-            pct:   q.regularMarketChangePercent,
-          };
-        });
-        if(Object.keys(result).length===0) throw new Error('empty');
-        setQuotes(result);
-        const now = Date.now();
-        localStorage.setItem(QUOTES_CACHE_KEY, JSON.stringify({ts:now,data:result}));
-        setFetchedAt(new Date(now));
-      })
-      .catch(()=>setError(true));
-  },[]);
-
-  return {quotes, fetchedAt, error};
+  return {quotes, fetchedAt, loading, error, refetch:()=>load(true)};
 }
 
 function StockCard({pick, quote}){
@@ -1641,15 +1685,20 @@ function StockCard({pick, quote}){
 }
 
 function StockPicker({isMobile}){
-  const {quotes, fetchedAt, error} = useStockQuotes();
+  const {quotes, fetchedAt, loading, error, refetch} = useStockQuotes();
 
   return (
     <div className="mb-10">
       <div className={`flex ${isMobile?'flex-col gap-1':'items-center justify-between'} mb-4`}>
         <h3 className="text-base font-bold tracking-tight">Stock Picks</h3>
         <div className="text-xs flex items-center gap-2" style={{color:'#475569'}}>
-          {fetchedAt && <span>Updated {fetchedAt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>}
-          {error && <span style={{color:'#f87171'}}>Price data unavailable</span>}
+          {loading && <span style={{color:'#818cf8'}}>Fetching prices…</span>}
+          {fetchedAt && !loading && <span>Updated {fetchedAt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>}
+          {error && !loading && (
+            <button onClick={refetch} className="font-semibold transition-all hover:opacity-80" style={{color:'#f87171'}}>
+              ↻ Retry
+            </button>
+          )}
           <span>· Not financial advice</span>
         </div>
       </div>
@@ -1691,64 +1740,150 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
   const [messages, setMessages] = useState(()=> ls(historyKey) || []);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [listening, setListening] = useState(false);
+  const bottomRef = useRef(null);
+  const isMobile = useIsMobile();
 
   useEffect(()=>{ ls(historyKey, messages); }, [messages]);
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages, typing]);
 
-  const send = async () =>{
-    if(!text.trim()) return;
-    const userMsg = {id:uid(), role:'user', text, at:new Date().toISOString()};
+  const speak = (txt) => {
+    if(!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(txt);
+    // Pick a natural-sounding voice
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v=>v.name.includes('Samantha')||v.name.includes('Karen')||v.name.includes('Daniel')||v.name.includes('Google US English')||v.lang==='en-US');
+    if(preferred) utt.voice = preferred;
+    utt.rate = 0.95; utt.pitch = 1.05;
+    utt.onstart = ()=>setSpeaking(true);
+    utt.onend = ()=>setSpeaking(false);
+    utt.onerror = ()=>setSpeaking(false);
+    window.speechSynthesis.speak(utt);
+  };
+
+  const cancelSpeak = () => { window.speechSynthesis?.cancel(); setSpeaking(false); };
+
+  const sendMsg = async (msgText) => {
+    const content = (msgText||text).trim();
+    if(!content) return;
+    const userMsg = {id:uid(), role:'user', text:content, at:new Date().toISOString()};
     setMessages(m=>[...m, userMsg]); setText(''); setTyping(true);
     try{
       const apiKey = (ls('magverse:v1')?.settings?.apiKey) || '';
       if(!apiKey){
-        // fake reply
         await new Promise(r=>setTimeout(r,600));
-        const bot = {id:uid(), role:'ai', text:'(No API key) This is a local mock reply to: '+userMsg.text, at:new Date().toISOString()};
-        setMessages(m=>[...m, bot]);
+        const reply = 'Add your Anthropic API key in Settings to enable real AI responses.';
+        setMessages(m=>[...m, {id:uid(), role:'ai', text:reply, at:new Date().toISOString()}]);
         setTyping(false); return;
       }
-      // Call Anthropic Claude API (simplified)
-      const resp = await fetch('https://api.anthropic.com/v1/complete',{
-        method:'POST', headers:{'Content-Type':'application/json','x-api-key':apiKey},
-        body: JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,prompt:hub.system + '\nHuman: ' + userMsg.text + '\nAssistant:'})
+      // Build conversation history for context
+      const history = [...messages, userMsg].map(m=>({role: m.role==='user'?'user':'assistant', content: m.text}));
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system: hub.system,
+          messages: history,
+        })
       });
       const j = await resp.json();
-      const out = j?.completion || j?.output || '(no response)';
+      if(j.error) throw new Error(j.error.message || 'API error');
+      const out = j?.content?.[0]?.text || '(no response)';
       const bot = {id:uid(), role:'ai', text:out, at:new Date().toISOString()};
       setMessages(m=>[...m, bot]);
+      speak(out);
     }catch(e){
-      setMessages(m=>[...m, {id:uid(), role:'ai', text:'Error: '+String(e), at:new Date().toISOString()}]);
+      const errMsg = 'Error: '+String(e.message||e);
+      setMessages(m=>[...m, {id:uid(), role:'ai', text:errMsg, at:new Date().toISOString()}]);
     }finally{ setTyping(false); }
   };
 
-  // voice support for hub
-  const dict = useDictation((t)=>{ setText(t); send(); });
+  const dict = useDictation((t)=>{ setListening(false); sendMsg(t); });
+  const startVoice = ()=>{ dict.start(); setListening(true); };
 
-  const clear = ()=>{ setMessages([]); toasts.push('Session cleared'); };
+  const clear = ()=>{ cancelSpeak(); setMessages([]); toasts.push('Session cleared'); };
 
   return (
-    <div className="fixed right-0 top-0 bottom-0 w-[420px] bg-[var(--surface-2)] z-50 border-l border-subtle p-4 flex flex-col">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2"><div className="text-2xl">{hub.emoji}</div><div className="font-semibold">{hub.name}</div></div>
+    <div className={`fixed top-0 bottom-0 right-0 z-50 flex flex-col ${isMobile?'w-full':'w-[460px]'}`}
+      style={{background:'#13131a',borderLeft:'1px solid rgba(255,255,255,0.07)',boxShadow:'-8px 0 40px rgba(0,0,0,0.5)'}}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b" style={{borderColor:'rgba(255,255,255,0.07)'}}>
+        <div className="flex items-center gap-3">
+          <div className="text-2xl">{hub.emoji}</div>
+          <div>
+            <div className="font-bold">{hub.name}</div>
+            <div className="text-xs" style={{color:'#475569'}}>AI Assistant</div>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
-          <button onClick={clear} className="px-2 py-1 rounded">New Session</button>
-          <button onClick={onClose} className="px-2 py-1 rounded">Close</button>
+          {speaking && <button onClick={cancelSpeak} className="px-2 py-1 rounded-lg text-xs font-medium" style={{background:'rgba(248,113,113,0.15)',color:'#f87171',border:'1px solid rgba(248,113,113,0.3)'}}>■ Stop</button>}
+          <button onClick={clear} className="px-2 py-1 rounded-lg text-xs hover:bg-white/5" style={{color:'#64748b'}}>Clear</button>
+          <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-white/10" style={{color:'#64748b'}}>×</button>
         </div>
       </div>
-      <div className="flex-1 overflow-auto p-2 space-y-2">
-        {messages.map(m=> (
-          <div key={m.id} className={`p-2 rounded ${m.role==='user'?'bg-indigo-700 text-right':'bg-white/3'}`}>
-            <div className="text-sm">{m.text}</div>
-            <div className="text-xs opacity-70 mt-1">{new Date(m.at).toLocaleString()}</div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
+        {messages.length===0 && (
+          <div className="text-center mt-12" style={{color:'#334155'}}>
+            <div className="text-4xl mb-3">{hub.emoji}</div>
+            <div className="text-sm font-medium">{hub.name}</div>
+            <div className="text-xs mt-1">Ask me anything</div>
+          </div>
+        )}
+        {messages.map(m=>(
+          <div key={m.id} className={`flex ${m.role==='user'?'justify-end':'justify-start'}`}>
+            <div className="max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed"
+              style={m.role==='user'
+                ?{background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white',borderRadius:'18px 18px 4px 18px'}
+                :{background:'rgba(255,255,255,0.05)',color:'#e2e8f0',border:'1px solid rgba(255,255,255,0.07)',borderRadius:'18px 18px 18px 4px'}}>
+              {m.text}
+            </div>
           </div>
         ))}
-        {typing && <div className="text-sm opacity-70">Typing<span className="animate-pulse">...</span></div>}
+        {typing && (
+          <div className="flex justify-start">
+            <div className="px-4 py-3 rounded-2xl" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}}>
+              <div className="flex gap-1.5 items-center">
+                {[0,1,2].map(i=><div key={i} className="w-1.5 h-1.5 rounded-full" style={{background:'#6366f1',animation:`float1 1.2s ease-in-out ${i*0.2}s infinite`}}/>)}
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef}/>
       </div>
-      <div className="mt-2">
-        <div className="flex gap-2">
-          <input className="flex-1 p-2 bg-transparent border border-white/5 rounded" value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') send(); }} placeholder="Message..." />
-          <button className="px-3 py-2 rounded" onClick={()=>{ dict.start(); }}>{IconMic()}</button>
-          <button className="px-3 py-2 rounded bg-indigo-600" onClick={send}>Send</button>
+
+      {/* Input */}
+      <div className="px-4 py-3 border-t" style={{borderColor:'rgba(255,255,255,0.07)'}}>
+        {listening && <div className="text-xs text-center mb-2" style={{color:'#818cf8'}}>Listening… speak now</div>}
+        <div className="flex gap-2 items-end">
+          <textarea
+            className="flex-1 p-3 rounded-2xl text-sm resize-none focus:outline-none transition-all"
+            style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',maxHeight:'120px'}}
+            onFocus={e=>e.target.style.borderColor='rgba(99,102,241,0.5)'}
+            onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.08)'}
+            rows={1} value={text} onChange={e=>setText(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendMsg(); } }}
+            placeholder="Message…" />
+          <button onClick={startVoice}
+            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all"
+            style={{background:listening?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:listening?'#818cf8':'#64748b'}}>
+            {IconMic()}
+          </button>
+          <button onClick={()=>sendMsg()}
+            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all"
+            style={{background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white'}}>
+            ↑
+          </button>
         </div>
       </div>
     </div>
