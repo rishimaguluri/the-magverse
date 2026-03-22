@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Magverse</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root{
+        --bg:#0a0a0f;
+        --surface-1:#111118;
+        --surface-2:#1a1a24;
+        --border:#1e1e2e;
+        --text:#e2e8f0;
+        --muted:#94a3b8;
+        --subtle:#64748b;
+        --accent-from:#6366f1; /* indigo */
+        --accent-to:#8b5cf6;   /* violet */
+      }
+      html,body,#root{height:100%;}
+      body{font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background:var(--bg); color:var(--text);}
+      .glass{background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); backdrop-filter:blur(6px);}
+      .accent-grad{background:linear-gradient(90deg,var(--accent-from),var(--accent-to));}
+      .border-subtle{border:1px solid var(--border)}
+
+      /* Ornaments and ambiance */
+      .bg-ornaments{position:fixed;inset:0;z-index:0;overflow:hidden}
+      .orb{position:absolute;filter:blur(70px);opacity:0.18;mix-blend-mode:screen}
+      .orb-1{width:520px;height:520px;border-radius:50%;left:-10%;top:-8%;background:radial-gradient(circle at 30% 30%, var(--accent-from), transparent 40%)}
+      .orb-2{width:420px;height:420px;border-radius:50%;right:-6%;top:10%;background:radial-gradient(circle at 70% 40%, var(--accent-to), transparent 40%)}
+      .orb-3{width:300px;height:300px;border-radius:50%;left:20%;bottom:-10%;background:radial-gradient(circle at 40% 60%, rgba(139,92,246,0.9), transparent 40%)}
+      .dot-grid{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px);background-size:16px 16px;opacity:0.03}
+
+      /* Animations */
+      @keyframes float1{0%{transform:translateY(0)}50%{transform:translateY(-12px)}100%{transform:translateY(0)}}
+      @keyframes float2{0%{transform:translateY(0)}50%{transform:translateY(-8px)}100%{transform:translateY(0)}}
+      .orb-1{animation:float1 8s ease-in-out infinite}
+      .orb-2{animation:float2 10s ease-in-out infinite}
+      .orb-3{animation:float1 12s ease-in-out infinite}
+
+      /* Glass depths */
+      .glass { transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease; }
+      .glass.depth-1{background:rgba(255,255,255,0.03);backdrop-filter:blur(6px);box-shadow:0 6px 18px rgba(0,0,0,0.6)}
+      .glass.depth-2{background:rgba(255,255,255,0.02);backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,0.7)}
+
+      /* Gradient borders via pseudo element */
+      .border-gradient{position:relative}
+      .border-gradient:before{content:'';position:absolute;inset:-1px;border-radius:8px;padding:1px;background:linear-gradient(90deg,var(--accent-from),var(--accent-to));-webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);pointer-events:none}
+
+      /* Interactive motion */
+      button, .card, .nav-item { transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease }
+      button:hover, .nav-item:hover { transform: translateY(-4px) scale(1.02) }
+      button:active { transform: scale(.97) }
+
+      /* List item mount animation */
+      @keyframes fadeInUp{ from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+      .animate-item{ animation:fadeInUp .36s cubic-bezier(.2,.8,.2,1) both }
+
+      /* Removal animation */
+      @keyframes slideOutRight{ from{opacity:1;transform:translateX(0)} to{opacity:0;transform:translateX(20px)} }
+      .removing{ animation:slideOutRight .44s ease forwards }
+
+      /* Toast action button style */
+      .toast-action{ margin-left:8px; padding:4px 8px; border-radius:6px; background:linear-gradient(90deg,var(--accent-from),var(--accent-to)); color:white; font-weight:600 }
+
+      /* Skeleton shimmer */
+      .skeleton{ background:linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 100%); background-size:200% 100%; animation:shimmer 1.4s linear infinite }
+      @keyframes shimmer{ from{background-position:200% 0} to{background-position:-200% 0} }
+    </style>
+  </head>
+  <body>
+    <div class="bg-ornaments pointer-events-none" aria-hidden>
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+      <div class="dot-grid"></div>
+    </div>
+    <div id="root"></div>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=7"></script>
+  </body>
+</html>
