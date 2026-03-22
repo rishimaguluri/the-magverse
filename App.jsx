@@ -74,46 +74,43 @@ function App(){
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalState('magverse:sidebarCollapsed', false);
   const toasts = useToasts();
   const [isOnboardSeen, setOnboardSeen] = useLocalState('magverse:onboardSeen', false);
-
-  // Cross-tab convenience setters
-  const saveData = (fn) => setData(d=>{ const nd = typeof fn === 'function' ? fn(d) : fn; return {...d, ...nd}; });
+  const isMobile = useIsMobile();
 
   useEffect(()=>{ document.title = 'The Magverse'; },[]);
 
   return (
     <div className="h-full flex text-sm">
-      <Sidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} active={active} setActive={setActive} data={data} />
+      {!isMobile && <Sidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} active={active} setActive={setActive} data={data} />}
       <div className="flex-1 flex flex-col min-h-0">
-        <Topbar setActive={setActive} data={data} toasts={toasts} />
-        <main className="flex-1 overflow-auto p-6">
+        <Topbar setActive={setActive} data={data} toasts={toasts} isMobile={isMobile} />
+        <main className="flex-1 overflow-auto" style={{padding: isMobile ? '12px 12px 80px' : '24px'}}>
           <div className="max-w-full">
-            {active==='schedule' && <SchedulePanel data={data} setData={setData} toasts={toasts} />}
+            {active==='schedule' && <SchedulePanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='assignments' && <AssignmentsPanel data={data} setData={setData} toasts={toasts} />}
             {active==='gym' && <GymPanel data={data} setData={setData} toasts={toasts} />}
             {active==='social' && <SocialPanel data={data} setData={setData} toasts={toasts} />}
             {active==='notes' && <NotesPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='chathubs' && <ChatHubsPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='chathubs' && <ChatHubsPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='settings' && <SettingsPanel data={data} setData={setData} toasts={toasts} />}
           </div>
         </main>
       </div>
 
-      {/* Floating Chat Hubs launcher */}
-      <ChatLauncher onOpen={()=>setActive('chathubs')} />
+      {isMobile && <BottomNav active={active} setActive={setActive} />}
+      {!isMobile && <ChatLauncher onOpen={()=>setActive('chathubs')} />}
 
       {/* Toasts */}
-      <div className="fixed right-6 bottom-6 flex flex-col gap-2 z-50">
+      <div className="fixed flex flex-col gap-2 z-50" style={{right:'16px', bottom: isMobile ? '72px' : '24px'}}>
         {toasts.toasts.map(t=> (
           <div key={t.id} className="glass px-4 py-2 rounded shadow flex items-center gap-2">
             <div className="flex-1 text-sm">{t.text}</div>
-            {t.actionLabel && <button className="toast-action" onClick={()=>{ t.action && t.action(); /* remove toast */ }}>{t.actionLabel}</button>}
+            {t.actionLabel && <button className="toast-action" onClick={()=>{ t.action && t.action(); }}>{t.actionLabel}</button>}
           </div>
         ))}
       </div>
 
-      {/* Onboarding modal */}
       {!isOnboardSeen && <OnboardModal onClose={()=>setOnboardSeen(true)} open={!isOnboardSeen} setActive={setActive} />}
-      <MainAssistant data={data} setData={setData} toasts={toasts} />
+      <MainAssistant data={data} setData={setData} toasts={toasts} isMobile={isMobile} />
     </div>
   );
 }
@@ -338,6 +335,41 @@ function heuristicParse(text){
   return actions.length ? actions : [{type:'event',payload:{title:cleanTitle(norm)||text,type:'Manual',notes:text,when:{day:globalDay}}}];
 }
 
+function useIsMobile(){
+  const [m, setM] = useState(()=>window.innerWidth<768);
+  useEffect(()=>{
+    const h=()=>setM(window.innerWidth<768);
+    window.addEventListener('resize',h);
+    return ()=>window.removeEventListener('resize',h);
+  },[]);
+  return m;
+}
+
+function BottomNav({active, setActive}){
+  const items = [
+    {id:'schedule',     label:'Schedule', icon:IconCalendar},
+    {id:'assignments',  label:'Tasks',    icon:IconKanban},
+    {id:'gym',          label:'Gym',      icon:IconDumbbell},
+    {id:'social',       label:'Social',   icon:IconUsers},
+    {id:'notes',        label:'Notes',    icon:IconNotes},
+    {id:'chathubs',     label:'Learn',    icon:IconChat},
+    {id:'settings',     label:'More',     icon:IconGear},
+  ];
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 z-40 flex justify-around items-center py-2 safe-area-bottom"
+      style={{background:'rgba(10,10,15,0.97)',backdropFilter:'blur(16px)',borderTop:'1px solid rgba(255,255,255,0.07)',paddingBottom:'max(8px,env(safe-area-inset-bottom))'}}>
+      {items.map(it=>(
+        <button key={it.id} onClick={()=>setActive(it.id)}
+          className="flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl transition-all"
+          style={{color:active===it.id?'#818cf8':'#475569',minWidth:'40px'}}>
+          <it.icon />
+          <span style={{fontSize:'9px',fontWeight:active===it.id?700:400}}>{it.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function Sidebar({collapsed, setCollapsed, active, setActive}){
   const items = [
     {id:'schedule', label:'Schedule', icon:IconCalendar},
@@ -409,13 +441,24 @@ function useColumbusWeather(){
   return wx;
 }
 
-function Topbar({setActive, data, toasts}){
+function Topbar({setActive, data, toasts, isMobile}){
   const [now, setNow] = useState(new Date());
   const wx = useColumbusWeather();
   useEffect(()=>{ const id = setInterval(()=>setNow(new Date()), 1000); return ()=>clearInterval(id); },[]);
-  const startGlobalMic = ()=>{ if(!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { toasts.push('Speech recognition not available'); return;} const R = window.SpeechRecognition || window.webkitSpeechRecognition; const r = new R(); r.lang='en-US'; r.onresult=(e)=>{ const t=e.results[0][0].transcript; toasts.push('Heard: '+t); // naive routing
-    if(/gym|workout|bench|squat/i.test(t)) setActive('gym'); else if(/assignment|due|homework|problem/i.test(t)) setActive('assignments'); else if(/remind|reminder/i.test(t)) setActive('social'); else if(/chat|philosophy|coach/i.test(t)) setActive('chathubs'); };
-    r.start(); };
+  const startGlobalMic = ()=>{ if(!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { toasts.push('Speech recognition not available'); return;} const R = window.SpeechRecognition || window.webkitSpeechRecognition; const r = new R(); r.lang='en-US'; r.onresult=(e)=>{ const t=e.results[0][0].transcript; toasts.push('Heard: '+t); if(/gym|workout|bench|squat/i.test(t)) setActive('gym'); else if(/assignment|due|homework|problem/i.test(t)) setActive('assignments'); else if(/remind|reminder/i.test(t)) setActive('social'); }; r.start(); };
+
+  if(isMobile){
+    return (
+      <header className="flex items-center justify-between px-4 py-3 border-b border-subtle glass" style={{minHeight:'52px'}}>
+        <div className="font-bold text-base" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>The Magverse</div>
+        <div className="flex items-center gap-3">
+          {wx && <span className="text-xs font-medium">{WX_ICON[wx.code]} {wx.temp}°F</span>}
+          <span className="text-xs" style={{color:'#94a3b8'}}>{now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+          <button className="p-2 rounded-xl hover:bg-white/5" onClick={startGlobalMic}>{IconMic()}</button>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="flex items-center justify-between p-4 border-b border-subtle glass">
@@ -451,8 +494,8 @@ const TYPE_COLORS = {
 
 function fmtHour(h){ if(h===0) return '12 AM'; if(h<12) return h+' AM'; if(h===12) return '12 PM'; return (h-12)+' PM'; }
 
-function SchedulePanel({data, setData, toasts}){
-  const [view, setView] = useState('week');
+function SchedulePanel({data, setData, toasts, isMobile}){
+  const [view, setView] = useState(isMobile ? 'day' : 'week');
   const [offset, setOffset] = useState(0);
   const [modal, setModal] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
@@ -508,9 +551,9 @@ function SchedulePanel({data, setData, toasts}){
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+      <div className={`flex ${isMobile?'flex-col gap-3':'items-center justify-between'} mb-5`}>
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Schedule</h2>
+          <h2 className={`${isMobile?'text-xl':'text-2xl'} font-bold tracking-tight`}>Schedule</h2>
           <p className="text-xs mt-0.5" style={{color:'var(--muted)'}}>{getPeriodLabel()}</p>
         </div>
         <div className="flex items-center gap-3">
@@ -586,14 +629,15 @@ function EventChip({ev, onRemove, onExpand, removingIds, delay=0}){
 }
 
 function EventDetailModal({ev, onClose, onRemove, onEdit}){
+  const isMobile = useIsMobile();
   const c = TYPE_COLORS[ev.type] || TYPE_COLORS.Manual;
   const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const dayStr = ev.when?.day!==undefined ? days[ev.when.day] : null;
   const timeStr = ev.when?.hour!==undefined ? fmtHour(ev.when.hour) : null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className={`fixed inset-0 z-50 flex ${isMobile?'items-end':'items-center'} justify-center`}>
       <div className="absolute inset-0" style={{background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}} onClick={onClose}/>
-      <div className="relative z-50 p-6 rounded-2xl w-[380px]" style={{background:'#1a1a24',border:`1px solid ${c.border}`,boxShadow:`0 25px 60px rgba(0,0,0,0.7), 0 0 40px ${c.bg}`}}>
+      <div className={`relative z-50 p-6 ${isMobile?'w-full rounded-t-3xl':'rounded-2xl w-[380px]'}`} style={{background:'#1a1a24',border:`1px solid ${c.border}`,boxShadow:`0 -8px 40px rgba(0,0,0,0.7), 0 0 40px ${c.bg}`}}>
         {/* Type badge */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -854,6 +898,7 @@ function MonthView({events, onAdd, offset=0}){
 }
 
 function EventModal({modal, onClose, onSave}){
+  const isMobile = useIsMobile();
   const p = modal.prefill;
   const [title, setTitle]   = useState(p?.title || '');
   const [type, setType]     = useState(p?.type  || 'Manual');
@@ -891,9 +936,9 @@ function EventModal({modal, onClose, onSave}){
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
+    <div className={`fixed inset-0 z-40 flex ${isMobile?'items-end':'items-center'} justify-center`}>
       <div className="absolute inset-0" style={{background:'rgba(0,0,0,0.65)',backdropFilter:'blur(4px)'}} onClick={onClose}/>
-      <div className="relative z-50 p-6 rounded-2xl w-[440px]" style={{background:'#1a1a24',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 25px 60px rgba(0,0,0,0.7)'}}>
+      <div className={`relative z-50 p-6 ${isMobile?'w-full rounded-t-3xl':'rounded-2xl w-[440px]'}`} style={{background:'#1a1a24',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 -8px 40px rgba(0,0,0,0.7)',maxHeight:'92vh',overflowY:'auto'}}>
         <h3 className="font-bold text-lg mb-1">{modal.editId ? 'Edit Event' : 'New Event'}</h3>
         {day!=='' && <p className="text-xs mb-4" style={{color:'#475569'}}>
           {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][Number(day)]}
@@ -1586,12 +1631,12 @@ function StockCard({pick, quote}){
   );
 }
 
-function StockPicker(){
+function StockPicker({isMobile}){
   const {quotes, fetchedAt, error} = useStockQuotes();
 
   return (
     <div className="mb-10">
-      <div className="flex items-center justify-between mb-4">
+      <div className={`flex ${isMobile?'flex-col gap-1':'items-center justify-between'} mb-4`}>
         <h3 className="text-base font-bold tracking-tight">Stock Picks</h3>
         <div className="text-xs flex items-center gap-2" style={{color:'#475569'}}>
           {fetchedAt && <span>Updated {fetchedAt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>}
@@ -1599,7 +1644,7 @@ function StockPicker(){
           <span>· Not financial advice</span>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className={`grid ${isMobile?'grid-cols-1':'grid-cols-2'} gap-4`}>
         {STOCK_PICKS.map(pick=>(
           <StockCard key={pick.ticker} pick={pick} quote={quotes[pick.ticker]}/>
         ))}
@@ -1609,15 +1654,15 @@ function StockPicker(){
 }
 
 /* -------------------- Learning Hub Panel -------------------- */
-function ChatHubsPanel({data, setData, toasts}){
+function ChatHubsPanel({data, setData, toasts, isMobile}){
   const [openHub, setOpenHub] = useState(null);
   const hubs = data.hubs || [];
   return (
     <div>
       <h2 className="text-xl font-semibold mb-6">Learning Hub</h2>
-      <StockPicker />
+      <StockPicker isMobile={isMobile} />
       <h3 className="text-base font-bold mb-3">AI Assistants</h3>
-      <div className="grid grid-cols-3 gap-4">
+      <div className={`grid ${isMobile?'grid-cols-2':'grid-cols-3'} gap-4`}>
         {hubs.map(h=> (
           <div key={h.id} className="glass p-4 rounded cursor-pointer" onClick={()=>setOpenHub(h)}>
             <div className="text-3xl">{h.emoji}</div>
