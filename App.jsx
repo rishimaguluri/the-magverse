@@ -116,7 +116,7 @@ function App(){
 }
 
 /* -------------------- Main Assistant (global planning chat) -------------------- */
-function MainAssistant({data, setData, toasts}){
+function MainAssistant({data, setData, toasts, isMobile}){
   const [open, setOpen] = useState(true);
   const [text, setText] = useState('');
   const [listening, setListening] = useState(false);
@@ -157,20 +157,29 @@ function MainAssistant({data, setData, toasts}){
     setText('');
   }
 
+  if(isMobile) return null;
+
   return (
     <div className="fixed left-6 bottom-6 z-50">
-      <div className="glass p-3 rounded w-80 border-subtle shadow-lg">
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-semibold">Magverse Assistant</div>
-          <div className="text-xs opacity-80">Plan your day</div>
+      {open && (
+        <div className="glass p-3 rounded w-80 border-subtle shadow-lg mb-2">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">Magverse Assistant</div>
+            <div className="text-xs opacity-80">Plan your day</div>
+          </div>
+          <textarea className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" rows={3} value={text} onChange={e=>setText(e.target.value)} placeholder="Tell me your plan (or use voice)..." />
+          <div className="flex gap-2">
+            <button className="px-3 py-1 rounded bg-indigo-600" onClick={()=>handleSend(text)}>Send</button>
+            <button className="px-3 py-1 rounded" onClick={()=>{ if(listening){ dict.stop(); setListening(false); } else { dict.start(); setListening(true); } }}>{listening? 'Stop' : 'Voice'}</button>
+            <button className="px-3 py-1 rounded" onClick={()=>setOpen(false)}>Hide</button>
+          </div>
         </div>
-        <textarea className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" rows={3} value={text} onChange={e=>setText(e.target.value)} placeholder="Tell me your plan (or use voice)..." />
-        <div className="flex gap-2">
-          <button className="px-3 py-1 rounded bg-indigo-600" onClick={()=>handleSend(text)}>Send</button>
-          <button className="px-3 py-1 rounded" onClick={()=>{ if(listening){ dict.stop(); setListening(false); } else { dict.start(); setListening(true); } }}>{listening? 'Stop' : 'Voice'}</button>
-          <button className="px-3 py-1 rounded" onClick={()=>setOpen(o=>!o)}>{open? 'Hide':'Show'}</button>
-        </div>
-      </div>
+      )}
+      {!open && (
+        <button className="glass px-3 py-1.5 rounded-xl text-xs font-semibold border-subtle shadow-lg" onClick={()=>setOpen(true)}>
+          ✦ Assistant
+        </button>
+      )}
     </div>
   );
 }
