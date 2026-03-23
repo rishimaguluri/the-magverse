@@ -1695,7 +1695,7 @@ function AssignmentsPanel({data, setData, toasts}){
         />
       )}
 
-      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} />
+      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} onAddTask={addTask} toasts={toasts} />
     </div>
   );
 }
@@ -1779,7 +1779,69 @@ function TaskModal({initialCat, task, onClose, onSave}){
 }
 
 /* -------------------- Tasks Voice Assistant -------------------- */
-function TasksAssistant({tasks, sort, setSort, filter, setFilter}){
+function parseTaskFromSpeech(raw){
+  const t = raw.toLowerCase();
+
+  // --- Title: strip add-task trigger words ---
+  let title = raw
+    .replace(/^(add|create|new|log|make|put|i (want|need) to add|remind me to|add a task|add a new task)\s+/i,'')
+    .replace(/\b(to my (tasks|list|to-do)|on my (list|tasks))\b/gi,'')
+    .trim();
+
+  // --- Category ---
+  let category = 'personal';
+  if(/(class|course|homework|assignment|lecture|exam|essay|quiz|problem set|school|study)/i.test(t)) category = 'classroom';
+  else if(/(club|sport|extracurricular|activity|practice|rehearsal|team|meet)/i.test(t)) category = 'extracurricular';
+
+  // --- Priority ---
+  let priority = 'Med';
+  if(/(high priority|urgent|important|critical|asap)/i.test(t)) priority = 'High';
+  else if(/(low priority|whenever|not urgent|easy)/i.test(t)) priority = 'Low';
+
+  // Strip priority phrases from title
+  title = title.replace(/,?\s*(high|low|medium|med)\s+priority/gi,'').trim();
+
+  // --- Due date ---
+  let dueDate = null;
+  const now = new Date();
+  const addDays = (n) => { const d = new Date(now); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; };
+  if(/\btoday\b/.test(t))    dueDate = addDays(0);
+  if(/\btomorrow\b/.test(t)) dueDate = addDays(1);
+  const thisWeekday = t.match(/\bthis\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  const nextWeekday = t.match(/\b(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  const dayMap = {monday:1,tuesday:2,wednesday:3,thursday:4,friday:5,saturday:6,sunday:0};
+  if(thisWeekday || nextWeekday){
+    const match = thisWeekday || nextWeekday;
+    const targetDay = dayMap[(match[2]||match[1]).toLowerCase()];
+    const diff = ((targetDay - now.getDay()) + 7) % 7 || (nextWeekday?7:0);
+    dueDate = addDays(diff||7);
+  }
+  // "by Friday the 20th" / "by the 15th" / "March 15"
+  const monthMatch = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b/i);
+  if(monthMatch){
+    const months={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+    const mo = months[monthMatch[1].slice(0,3).toLowerCase()];
+    const day2 = parseInt(monthMatch[2],10);
+    const yr = new Date(now.getFullYear(), mo, day2) < now ? now.getFullYear()+1 : now.getFullYear();
+    dueDate = `${yr}-${String(mo+1).padStart(2,'0')}-${String(day2).padStart(2,'0')}`;
+  }
+  // Strip date phrases from title
+  title = title
+    .replace(/\b(by|due|on|this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\b/gi,'')
+    .replace(/\bby\s+(the\s+)?\d{1,2}(st|nd|rd|th)?\b/gi,'')
+    .replace(/(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}/gi,'')
+    .replace(/,?\s*(high|low|medium|med|urgent|important)\s*/gi,' ')
+    .replace(/\s{2,}/g,' ').trim();
+
+  // --- Subject (classroom only) ---
+  let subject = 'Other';
+  const subjMatch = t.match(/\bfor\s+([a-z ]+?)(?:\s+(?:class|course|by|due|on|this|next|today|tomorrow)|$)/i);
+  if(category==='classroom' && subjMatch) subject = subjMatch[1].trim().replace(/\b\w/g,c=>c.toUpperCase());
+
+  return { title: title || raw.trim(), category, priority, dueDate, subject, status:'To Do' };
+}
+
+function TasksAssistant({tasks, sort, setSort, filter, setFilter, onAddTask, toasts}){
   const [open, setOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const [lastCmd, setLastCmd] = useState('');
@@ -1809,6 +1871,21 @@ function TasksAssistant({tasks, sort, setSort, filter, setFilter}){
     const t = raw.toLowerCase();
     const active = tasks.filter(x=>x.status!=='Done');
     const now = new Date();
+
+    // Add task
+    if(/^(add|create|new|log|make|i (want|need) to add|remind me to)\b/i.test(t)){
+      const task = parseTaskFromSpeech(raw);
+      if(task.title.length > 1){
+        onAddTask(task);
+        let conf = `Added "${task.title}" to ${task.category} tasks`;
+        if(task.priority==='High') conf += ', high priority';
+        if(task.dueDate) conf += `, due ${new Date(task.dueDate+'T12:00:00').toLocaleDateString('en',{weekday:'short',month:'short',day:'numeric'})}`;
+        speak(conf+'.');
+      } else {
+        speak('Please say the task name after "add".');
+      }
+      return;
+    }
 
     // Sort
     if(/sort.*(priority|important)/.test(t))   { setSort('priority'); speak('Sorted by priority.'); return; }
@@ -1899,7 +1976,7 @@ function TasksAssistant({tasks, sort, setSort, filter, setFilter}){
             </div>
           )}
           <div className="text-xs mb-3 leading-relaxed" style={{color:'#475569'}}>
-            Say: <span style={{color:'#818cf8'}}>"read my tasks"</span>, <span style={{color:'#818cf8'}}>"what's overdue"</span>, <span style={{color:'#818cf8'}}>"read classroom tasks"</span>, <span style={{color:'#818cf8'}}>"sort by priority"</span>
+            Say: <span style={{color:'#818cf8'}}>"add finish essay high priority"</span>, <span style={{color:'#818cf8'}}>"read my tasks"</span>, <span style={{color:'#818cf8'}}>"what's overdue"</span>, <span style={{color:'#818cf8'}}>"sort by priority"</span>
           </div>
           {speaking ? (
             <button onClick={cancel} className="w-full py-2 rounded-lg text-sm font-medium"
@@ -1908,20 +1985,29 @@ function TasksAssistant({tasks, sort, setSort, filter, setFilter}){
             </button>
           ) : (
             <button onClick={startListening} className="w-full py-2 rounded-lg text-sm font-medium transition-all"
-              style={{background:listening?'rgba(99,102,241,0.3)':'rgba(99,102,241,0.15)',
-                      color:listening?'#c7d2fe':'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+              style={{background:listening?'rgba(239,68,68,0.2)':'rgba(99,102,241,0.15)',
+                      color:listening?'#fca5a5':'#818cf8',
+                      border:listening?'1px solid rgba(239,68,68,0.5)':'1px solid rgba(99,102,241,0.3)',
+                      boxShadow:listening?'0 0 0 3px rgba(239,68,68,0.15)':'none'}}>
               {listening ? '● Listening…' : '🎤 Speak a command'}
             </button>
           )}
         </div>
       )}
-      <button onClick={()=>setOpen(o=>!o)}
-        className="w-12 h-12 rounded-full flex items-center justify-center text-lg shadow-lg transition-all"
-        style={{background: open?'rgba(99,102,241,0.4)':'linear-gradient(135deg,#6366f1,#8b5cf6)',
-                border:'1px solid rgba(99,102,241,0.4)',boxShadow:'0 4px 20px rgba(99,102,241,0.35)',
-                fontSize:'20px'}}>
-        {open ? '×' : '🎤'}
-      </button>
+      <div style={{position:'relative'}}>
+        {listening && (
+          <span style={{position:'absolute',inset:0,borderRadius:'50%',background:'rgba(239,68,68,0.35)',
+            animation:'pulse 1s ease-in-out infinite',pointerEvents:'none'}}/>
+        )}
+        <button onClick={()=>setOpen(o=>!o)}
+          className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-all"
+          style={{background: listening?'rgba(239,68,68,0.85)':open?'rgba(99,102,241,0.4)':'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                  border:listening?'1px solid rgba(239,68,68,0.6)':'1px solid rgba(99,102,241,0.4)',
+                  boxShadow:listening?'0 4px 20px rgba(239,68,68,0.45)':'0 4px 20px rgba(99,102,241,0.35)',
+                  fontSize:'20px',position:'relative',zIndex:1}}>
+          {listening ? '●' : open ? '×' : '🎤'}
+        </button>
+      </div>
     </div>
   );
 }
