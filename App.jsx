@@ -229,7 +229,15 @@ const DAY_MAP = [
 ];
 
 // Normalize spoken/written a.m./p.m. to am/pm for reliable matching
-function normAmPm(s){ return s.replace(/\ba\.m\./gi,'am').replace(/\bp\.m\./gi,'pm'); }
+// Also normalize "930 am" → "9:30 am", "1030" (after from/to/at) → "10:30"
+function normAmPm(s){
+  return s
+    .replace(/\ba\.m\./gi,'am').replace(/\bp\.m\./gi,'pm')
+    // "930 am" / "1045pm" → "9:30 am" / "10:45 pm"
+    .replace(/\b(\d{1,2})([0-5]\d)\s*(am|pm)/gi, (_,h,m,ap)=>`${h}:${m} ${ap}`)
+    // "from 930" / "to 1030" / "at 900" without am/pm
+    .replace(/\b(from|to|at)\s+(\d{1,2})([0-5]\d)\b/gi, (_,prep,h,m)=>`${prep} ${h}:${m}`);
+}
 
 function parseDay(s){
   const t = s.toLowerCase();
@@ -244,11 +252,13 @@ function parseDay(s){
 
 function parseHourStr(hStr, ap){
   // hStr = "8" or "8:30", ap = "am"/"pm"
-  let h = parseInt(hStr);
+  const parts = String(hStr).split(':');
+  let h = parseInt(parts[0], 10);
+  const mins = parts[1] ? parseInt(parts[1], 10) : 0;
   const a = (ap||'').toLowerCase();
   if(a==='pm' && h!==12) h+=12;
   if(a==='am' && h===12) h=0;
-  return h;
+  return h + mins/60;
 }
 
 function parseHour(s){
@@ -258,7 +268,7 @@ function parseHour(s){
   if(m1) return parseHourStr(m1[1], m1[2]);
   // HH:MM only
   const m2 = t.match(/(\d{1,2}):\d{2}/);
-  if(m2) return parseInt(m2[1]);
+  if(m2) return parseInt(m2[1], 10);
   // H am/pm
   const m3 = t.match(/(\d{1,2})\s*(am|pm)/);
   if(m3) return parseHourStr(m3[1], m3[2]);
@@ -278,6 +288,7 @@ function cleanTitle(seg){
     .replace(/\bjust\b/gi,'')
     .replace(/^[\s,;.]+|[\s,;.]+$/g,'') // trim leading/trailing punctuation
     .replace(/^\s*(and|but|or|so)\s+/i,'') // strip leading conjunctions
+    .replace(/\s+(and|or|but)\s*$/i,'')    // strip trailing conjunctions
     .replace(/\s+/g,' ').trim();
 }
 
@@ -366,9 +377,9 @@ function eventMatchesClearFilter(ev, f){
   }
 
   // Hour / range
-  if(f.hour !== undefined && hour !== f.hour) return false;
-  if(f.hourFrom !== undefined && hour < f.hourFrom) return false;
-  if(f.hourTo   !== undefined && hour > f.hourTo)   return false;
+  if(f.hour !== undefined && (hour === undefined || hour !== f.hour)) return false;
+  if(f.hourFrom !== undefined && (hour === undefined || hour < f.hourFrom)) return false;
+  if(f.hourTo   !== undefined && (hour === undefined || hour > f.hourTo))   return false;
 
   // Title keyword
   if(f.title && !ev.title?.toLowerCase().includes(f.title)) return false;
@@ -376,13 +387,84 @@ function eventMatchesClearFilter(ev, f){
   return true;
 }
 
-function heuristicParse(text){
+function parseSubtasks(text){
+  // Detect list-intro patterns — colon optional, "do" optional, works with or without punctuation
+  const introRe = /(?:i want to (?:do )?|the following[:\s]|these (?:\w+ )?(?:things|tasks|items)[:\s]*|:\s*)(.+)$/i;
+  const m = text.match(introRe);
+  const listStr = m?.[1]?.trim() || null;
+  if(!listStr) return null;
+
+  // Try comma/semicolon split first, fall back to " and " split
+  let items = listStr.split(/[,;]/).map(s=>s.replace(/^\s*(and\s+)?/i,'').replace(/\s*[.!?]+$/,'').trim()).filter(s=>s.length>1&&s.length<120);
+  if(items.length < 2){
+    items = listStr.split(/\s+and\s+/i).map(s=>s.replace(/\s*[.!?]+$/,'').trim()).filter(s=>s.length>1&&s.length<120);
+  }
+  return items.length >= 2 ? items : null;
+}
+
+function heuristicParse(text, _depth=0){
   // Check for clear/delete commands first
   const clearAction = parseClearCommand(text);
   if(clearAction) return [clearAction];
 
   const norm = normAmPm(text);
   const globalDay = parseDay(norm);
+
+  // Bulk schedule detection: 3+ time expressions → split into individual events
+  if(_depth === 0){
+    const allTimes = [...norm.matchAll(/\d{1,2}(?::\d{2})?\s*(?:am|pm)/gi)];
+    if(allTimes.length >= 3){
+      // Split on newlines and before "then at/from TIME" or "then i have/want"
+      const chunks = norm
+        .split(/\n+|(?:,\s*|\s+(?:and\s+)?)then\s+(?=(?:at|from|i\s+have|i\s+want)\s)/i)
+        .map(s => s
+          .replace(/^(?:then\s+|,\s*)/i,'')
+          .replace(/\s+\b(and|or|but)\s*$/i,'')
+          .trim())
+        .filter(s => s.length > 2);
+      if(chunks.length >= 2){
+        const inheritDay = globalDay !== undefined ? globalDay : jsDayToMv(new Date().getDay());
+        const allActions = [];
+        const DAY_NAMES = /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)$/i;
+        for(const chunk of chunks){
+          const acts = heuristicParse(chunk, 1);
+          for(const a of acts){
+            if(a.type === 'event'){
+              // Skip events with no time (can't show on calendar)
+              if(a.payload.when?.hour === undefined) continue;
+              // Skip chunks that are just day-name placeholders or have no real title
+              if(DAY_NAMES.test((a.payload.title||'').trim())) continue;
+              if((a.payload.title||'').trim().length < 2) continue;
+              if(a.payload.when.day === undefined) a.payload.when = {...a.payload.when, day: inheritDay};
+              allActions.push(a);
+            } else {
+              allActions.push(a);
+            }
+          }
+        }
+        const evts = allActions.filter(a => a.type==='event' && a.payload.when?.hour !== undefined);
+        if(evts.length >= 2) return allActions;
+      }
+    }
+  }
+
+  // Detect "from HH to HH" time range — treat as single event using start time
+  const rangeRe = /\bfrom\s+(\d{1,2}(?::\d{2})?)\s*(am|pm)?\s+to\s+(\d{1,2}(?::\d{2})?)\s*(am|pm)?/i;
+  const rangeMatch = norm.match(rangeRe);
+  if(rangeMatch){
+    const startHour = parseHourStr(rangeMatch[1], rangeMatch[2] || rangeMatch[4] || '');
+    const endHour   = parseHourStr(rangeMatch[3], rangeMatch[4] || rangeMatch[2] || '');
+    const day = globalDay !== undefined ? globalDay : jsDayToMv(new Date().getDay());
+    const when = {day, hour: startHour, endHour: endHour > startHour ? endHour : startHour+1};
+    const subtaskItems = parseSubtasks(norm);
+    const subtasks = subtaskItems ? subtaskItems.map(t=>({id:uid(),title:t.charAt(0).toUpperCase()+t.slice(1),done:false})) : undefined;
+    // Title = everything before "from" minus noise words
+    const beforeFrom = norm.slice(0, norm.search(/\bfrom\s+\d/i));
+    const rawTitle = cleanTitle(beforeFrom).trim();
+    const title = rawTitle.length > 1 ? rawTitle.charAt(0).toUpperCase()+rawTitle.slice(1) : 'Task Block';
+    const type = detectType(norm);
+    return [{type:'event', payload:{title, type, notes:text, when, subtasks}}];
+  }
 
   // Find every time expression in the text with its position
   // Pattern covers: "8:30 am", "9:00 pm", "8 am", "12pm" etc.
@@ -396,15 +478,21 @@ function heuristicParse(text){
   // Single or no time  -  fall back to simple single-event parse
   if(timeMatches.length <= 1){
     const hour = timeMatches.length===1 ? timeMatches[0].hour : undefined;
-    const day  = globalDay;
+    const day  = globalDay !== undefined ? globalDay : (hour !== undefined ? jsDayToMv(new Date().getDay()) : undefined);
     const when = (day!==undefined||hour!==undefined) ? {day,hour} : undefined;
     const rawTitle = cleanTitle(norm);
     const title = rawTitle.length>1 ? rawTitle.charAt(0).toUpperCase()+rawTitle.slice(1) : text.trim();
     const type = detectType(norm);
+    const subtaskItems = parseSubtasks(norm);
+    const subtasks = subtaskItems ? subtaskItems.map(t=>({id:uid(),title:t.charAt(0).toUpperCase()+t.slice(1),done:false})) : undefined;
+    const eventTitle = subtasks
+      ? (cleanTitle(norm.split(/i want to|do:|these things|the following/i)[0]).trim() || 'Task Block')
+      : title;
+    const finalTitle = (eventTitle.length>1 ? eventTitle.charAt(0).toUpperCase()+eventTitle.slice(1) : 'Task Block');
     const actions = [];
-    if(/assignment|homework|due/.test(norm.toLowerCase())) actions.push({type:'assignment',payload:{title,subject:'Other',notes:text}});
+    if(/assignment|homework|due/.test(norm.toLowerCase())) actions.push({type:'assignment',payload:{title:finalTitle,subject:'Other',notes:text}});
     if(/remind me|reminder/i.test(norm)) actions.push({type:'reminder',payload:{title:text,date:new Date().toISOString()}});
-    if(when || (!actions.length && title.length>1)) actions.push({type:'event',payload:{title,type,notes:text,when}});
+    if(when || (!actions.length && finalTitle.length>1)) actions.push({type:'event',payload:{title:finalTitle,type,notes:text,when,subtasks}});
     return actions;
   }
 
@@ -425,8 +513,10 @@ function heuristicParse(text){
     const hour  = timeMatches[i].hour;
     const type  = detectType(seg);
 
+    const stItems = i===0 ? parseSubtasks(norm) : null;
+    const subtasks = stItems ? stItems.map(t=>({id:uid(),title:t.charAt(0).toUpperCase()+t.slice(1),done:false})) : undefined;
     if(/assignment|homework|due/.test(seg.toLowerCase())) actions.push({type:'assignment',payload:{title,subject:'Other',notes:text}});
-    actions.push({type:'event', payload:{title, type, notes:text, when:{day, hour}}});
+    actions.push({type:'event', payload:{title, type, notes:text, when:{day, hour}, subtasks}});
   }
 
   return actions.length ? actions : [{type:'event',payload:{title:cleanTitle(norm)||text,type:'Manual',notes:text,when:{day:globalDay}}}];
@@ -589,7 +679,14 @@ const TYPE_COLORS = {
   Manual:      { bg:'rgba(99,102,241,0.12)', border:'rgba(99,102,241,0.3)', text:'#a5b4fc', dot:'#6366f1' },
 };
 
-function fmtHour(h){ if(h===0) return '12 AM'; if(h<12) return h+' AM'; if(h===12) return '12 PM'; return (h-12)+' PM'; }
+function fmtHour(h){
+  const hr = Math.floor(h);
+  const mins = Math.round((h - hr) * 60);
+  const ap = hr < 12 ? 'AM' : 'PM';
+  const disp = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+  const minStr = mins > 0 ? ':' + String(mins).padStart(2,'0') : '';
+  return `${disp}${minStr} ${ap}`;
+}
 
 function SchedulePanel({data, setData, toasts, isMobile}){
   const [view, setView] = useState(isMobile ? 'day' : 'week');
@@ -701,7 +798,97 @@ function SchedulePanel({data, setData, toasts, isMobile}){
       {view==='month' && <MonthView events={events} offset={offset} onAdd={(day)=>setModal({when:{day}})} />}
 
       {modal && <EventModal modal={modal} onClose={()=>setModal(null)} onSave={(ev)=>{ modal.editId ? editEvent(modal.editId, ev) : addEvent(ev); setModal(null); }} />}
-      {expandedEvent && <EventDetailModal ev={expandedEvent} onClose={()=>setExpandedEvent(null)} onRemove={(ev)=>{ removeEvent(ev); setExpandedEvent(null); }} onEdit={(ev)=>{ setExpandedEvent(null); setModal({editId:ev.id, when:ev.when, prefill:ev}); }} />}
+      {expandedEvent && <EventDetailModal
+        ev={events.find(e=>e.id===expandedEvent.id) || expandedEvent}
+        onClose={()=>setExpandedEvent(null)}
+        onRemove={(ev)=>{ removeEvent(ev); setExpandedEvent(null); }}
+        onEdit={(ev)=>{ setExpandedEvent(null); setModal({editId:ev.id, when:ev.when, prefill:ev}); }}
+        onToggleSubtask={(evId, stId)=>{
+          setData(d=>({...d, events:(d.events||[]).map(e=>e.id!==evId?e:{...e,
+            subtasks:(e.subtasks||[]).map(s=>s.id===stId?{...s,done:!s.done}:s)
+          })}));
+        }}
+      />}
+    </div>
+  );
+}
+
+/* ---- Positioned calendar helpers ---- */
+const ROW_H = 56; // px per hour slot
+
+function getEventsForDayColumn(events, di){
+  return events.filter(ev=>{
+    if(ev.when?.hour === undefined) return false;
+    const r = ev.recurrence; const d = ev.when?.day;
+    if(!r||r==='weekly') return d===di;
+    if(r==='daily') return true;
+    if(r==='weekdays') return di>=0&&di<=4;
+    if(r==='mwf') return [0,2,4].includes(di);
+    if(r==='tth') return [1,3].includes(di);
+    if(r==='custom') return (ev.customDays||[]).includes(di);
+    return d===di;
+  });
+}
+
+function layoutDayEvents(evs, firstHour){
+  if(!evs.length) return [];
+  const items = evs.map(ev=>({
+    ev,
+    start: ev.when.hour - firstHour,
+    end: (ev.when.endHour || ev.when.hour+1) - firstHour,
+    lane: 0, numLanes: 1,
+  })).sort((a,b)=>a.start!==b.start?a.start-b.start:b.end-a.end);
+
+  // Greedy lane assignment
+  const laneEnds=[];
+  items.forEach(item=>{
+    let lane=laneEnds.findIndex(end=>end<=item.start);
+    if(lane===-1) lane=laneEnds.length;
+    laneEnds[lane]=item.end; item.lane=lane;
+  });
+
+  // Per-event numLanes = highest lane among all overlapping peers + 1
+  items.forEach(item=>{
+    let maxLane=item.lane;
+    items.forEach(other=>{
+      if(other!==item && other.start<item.end && other.end>item.start)
+        maxLane=Math.max(maxLane, other.lane);
+    });
+    item.numLanes=maxLane+1;
+  });
+
+  return items.map(item=>({
+    ev: item.ev,
+    top: item.start*ROW_H+1,
+    height: Math.max((item.end-item.start)*ROW_H-3, 20),
+    leftPct: (item.lane/item.numLanes)*100,
+    widthPct: (1/item.numLanes)*100,
+  }));
+}
+
+function EventBlock({ev, onRemove, onExpand, removingIds, height}){
+  const c = TYPE_COLORS[ev.type]||TYPE_COLORS.Manual;
+  const subtasks = ev.subtasks||[];
+  const doneCount = subtasks.filter(s=>s.done).length;
+  const endH = ev.when?.endHour;
+  const timeStr = ev.when?.hour!==undefined ? fmtHour(ev.when.hour)+(endH?' – '+fmtHour(endH):'') : '';
+  const tall = height >= ROW_H*1.4;
+  return (
+    <div onClick={e=>{e.stopPropagation();onExpand&&onExpand(ev);}}
+      className={`group w-full h-full rounded-lg overflow-hidden cursor-pointer select-none ${removingIds?.includes(ev.id)?'removing':''}`}
+      style={{background:c.bg,border:`1px solid ${c.border}`,padding:'3px 6px',boxSizing:'border-box',transition:'filter .1s'}}>
+      <div className="flex items-start justify-between gap-0.5">
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold leading-tight" style={{fontSize:'11px',color:c.text,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:tall?3:1,WebkitBoxOrient:'vertical'}}>{ev.title}</div>
+          {tall && timeStr && <div style={{fontSize:'10px',color:c.text,opacity:0.7,marginTop:'1px'}}>{timeStr}</div>}
+          {tall && subtasks.length>0 && <div style={{fontSize:'10px',color:c.text,opacity:0.7}}>{doneCount}/{subtasks.length} done</div>}
+          {!tall && subtasks.length>0 && <div style={{fontSize:'9px',color:c.text,opacity:0.6}}>{doneCount}/{subtasks.length}</div>}
+        </div>
+        <button onClick={e=>{e.stopPropagation();onRemove&&onRemove(ev);}}
+          className="opacity-0 group-hover:opacity-100 flex-shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center hover:bg-white/25"
+          style={{color:c.text,fontSize:'11px',lineHeight:1}}>×</button>
+      </div>
+      {ev.recurrence && <div style={{fontSize:'8px',color:c.text,opacity:0.5,marginTop:'1px'}}>↻</div>}
     </div>
   );
 }
@@ -716,6 +903,11 @@ function EventChip({ev, onRemove, onExpand, removingIds, delay=0}){
       <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:c.dot}}></div>
       <span className="truncate max-w-[90px]">{ev.title}</span>
       {ev.recurrence && <span title={ev.recurrence} style={{fontSize:'9px',opacity:0.6}}>↻</span>}
+      {ev.subtasks?.length > 0 && (
+        <span style={{fontSize:'9px',opacity:0.75,background:'rgba(255,255,255,0.1)',borderRadius:'4px',padding:'0 3px'}}>
+          {ev.subtasks.filter(s=>s.done).length}/{ev.subtasks.length}
+        </span>
+      )}
       <button
         onClick={e=>{e.stopPropagation(); onRemove&&onRemove(ev);}}
         className="ml-0.5 opacity-0 group-hover:opacity-100 transition-opacity w-3.5 h-3.5 rounded-full flex items-center justify-center hover:bg-white/20 text-white/70">
@@ -725,16 +917,19 @@ function EventChip({ev, onRemove, onExpand, removingIds, delay=0}){
   );
 }
 
-function EventDetailModal({ev, onClose, onRemove, onEdit}){
+function EventDetailModal({ev, onClose, onRemove, onEdit, onToggleSubtask}){
   const isMobile = useIsMobile();
   const c = TYPE_COLORS[ev.type] || TYPE_COLORS.Manual;
   const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const dayStr = ev.when?.day!==undefined ? days[ev.when.day] : null;
   const timeStr = ev.when?.hour!==undefined ? fmtHour(ev.when.hour) : null;
+  const subtasks = ev.subtasks || [];
+  const doneCount = subtasks.filter(s=>s.done).length;
+  const allDone = subtasks.length > 0 && doneCount === subtasks.length;
   return (
     <div className={`fixed inset-0 z-50 flex ${isMobile?'items-end':'items-center'} justify-center`}>
       <div className="absolute inset-0" style={{background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)'}} onClick={onClose}/>
-      <div className={`relative z-50 p-6 ${isMobile?'w-full rounded-t-3xl':'rounded-2xl w-[380px]'}`} style={{background:'#1a1a24',border:`1px solid ${c.border}`,boxShadow:`0 -8px 40px rgba(0,0,0,0.7), 0 0 40px ${c.bg}`}}>
+      <div className={`relative z-50 p-6 ${isMobile?'w-full rounded-t-3xl':'rounded-2xl w-[400px]'}`} style={{background:'#1a1a24',border:`1px solid ${c.border}`,boxShadow:`0 -8px 40px rgba(0,0,0,0.7), 0 0 40px ${c.bg}`,maxHeight:'90vh',overflowY:'auto'}}>
         {/* Type badge */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -749,9 +944,7 @@ function EventDetailModal({ev, onClose, onRemove, onEdit}){
         {(dayStr||timeStr) && (
           <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-xl" style={{background:'rgba(255,255,255,0.04)'}}>
             <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{color:'#475569'}}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-            <span className="text-sm" style={{color:'#94a3b8'}}>
-              {[dayStr, timeStr].filter(Boolean).join(' at ')}
-            </span>
+            <span className="text-sm" style={{color:'#94a3b8'}}>{[dayStr, timeStr].filter(Boolean).join(' at ')}</span>
           </div>
         )}
         {/* Recurrence */}
@@ -765,6 +958,41 @@ function EventDetailModal({ev, onClose, onRemove, onEdit}){
             </span>
           </div>
         )}
+        {/* Subtasks checklist */}
+        {subtasks.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{color:'#334155'}}>To-Do</span>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+                style={{background: allDone?'rgba(16,185,129,0.15)':'rgba(255,255,255,0.05)', color: allDone?'#34d399':'#64748b'}}>
+                {doneCount}/{subtasks.length} {allDone ? '✓ complete' : 'done'}
+              </span>
+            </div>
+            {/* Progress bar */}
+            <div className="h-1 rounded-full mb-3 overflow-hidden" style={{background:'rgba(255,255,255,0.06)'}}>
+              <div className="h-full rounded-full transition-all duration-500"
+                style={{width:`${subtasks.length?doneCount/subtasks.length*100:0}%`,
+                        background: allDone?'#10b981':'linear-gradient(90deg,#6366f1,#8b5cf6)'}}/>
+            </div>
+            <div className="space-y-1.5">
+              {subtasks.map(st=>(
+                <button key={st.id}
+                  onClick={()=>onToggleSubtask&&onToggleSubtask(ev.id, st.id)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all hover:bg-white/5 group"
+                  style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}>
+                  <div className="w-4 h-4 rounded flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200"
+                    style={{borderColor: st.done?c.dot:'rgba(255,255,255,0.2)', background: st.done?c.bg:'transparent'}}>
+                    {st.done && <span style={{color:c.text,fontSize:'9px',fontWeight:'bold'}}>✓</span>}
+                  </div>
+                  <span className="text-sm flex-1 transition-all duration-200"
+                    style={{textDecoration:st.done?'line-through':'none', color:st.done?'#334155':'#e2e8f0'}}>
+                    {st.title}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {/* Notes */}
         {ev.notes && ev.notes !== ev.title && (
           <div className="mb-4">
@@ -774,24 +1002,9 @@ function EventDetailModal({ev, onClose, onRemove, onEdit}){
         )}
         {/* Actions */}
         <div className="flex justify-end gap-2 mt-4 pt-4" style={{borderTop:'1px solid rgba(255,255,255,0.06)'}}>
-          <button
-            onClick={()=>{onRemove(ev);onClose();}}
-            className="px-3 py-1.5 rounded-lg text-sm transition-all hover:bg-red-900/30"
-            style={{color:'#f87171',border:'1px solid rgba(248,113,113,0.2)'}}>
-            Delete
-          </button>
-          <button
-            onClick={()=>onEdit&&onEdit(ev)}
-            className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-            style={{background:'rgba(255,255,255,0.06)',color:'#e2e8f0'}}>
-            Edit
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
-            style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>
-            Close
-          </button>
+          <button onClick={()=>{onRemove(ev);onClose();}} className="px-3 py-1.5 rounded-lg text-sm transition-all hover:bg-red-900/30" style={{color:'#f87171',border:'1px solid rgba(248,113,113,0.2)'}}>Delete</button>
+          <button onClick={()=>onEdit&&onEdit(ev)} className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all" style={{background:'rgba(255,255,255,0.06)',color:'#e2e8f0'}}>Edit</button>
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>Close</button>
         </div>
       </div>
     </div>
@@ -801,70 +1014,71 @@ function EventDetailModal({ev, onClose, onRemove, onEdit}){
 function WeekView({events, onAdd, onRemove, onExpand, removingIds, offset=0}){
   const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const hours = Array.from({length:18}, (_,i)=>6+i);
+  const totalH = hours.length * ROW_H;
   const now = new Date();
   const nowDow = (now.getDay()+6)%7;
-  // Monday of displayed week
   const weekMon = new Date(now); weekMon.setDate(now.getDate()-nowDow+offset*7);
-  // Today's day index — only relevant if we're on the current week
   const todayDi = offset===0 ? nowDow : -1;
   const currentHour = offset===0 ? now.getHours() : -1;
+  const nowTop = offset===0 ? (now.getHours()-6)*ROW_H+(now.getMinutes()/60)*ROW_H : -1;
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.06)',background:'rgba(255,255,255,0.01)'}}>
       {/* Day headers */}
-      <div className="grid border-b" style={{gridTemplateColumns:'56px repeat(7,1fr)',borderColor:'rgba(255,255,255,0.06)'}}>
-        <div className="border-r" style={{borderColor:'rgba(255,255,255,0.06)'}}/>
+      <div style={{display:'grid',gridTemplateColumns:'56px repeat(7,1fr)',borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
+        <div style={{borderRight:'1px solid rgba(255,255,255,0.06)'}}/>
         {dayNames.map((d,i)=>{
           const colDate = new Date(weekMon); colDate.setDate(weekMon.getDate()+i);
           const isToday = i===todayDi;
           return (
-            <div key={d} className="py-3 text-center border-r last:border-r-0" style={{borderColor:'rgba(255,255,255,0.06)',background:isToday?'rgba(99,102,241,0.08)':'transparent'}}>
-              <div className="text-xs font-bold uppercase tracking-widest" style={{color:isToday?'#818cf8':'#475569'}}>{d}</div>
-              <div className="text-xs mt-0.5" style={{color:isToday?'#6366f1':'#334155'}}>
-                {isToday?'Today':colDate.getDate()}
-              </div>
+            <div key={d} style={{padding:'12px 0',textAlign:'center',borderRight:i<6?'1px solid rgba(255,255,255,0.06)':'none',background:isToday?'rgba(99,102,241,0.08)':'transparent'}}>
+              <div style={{fontSize:'11px',fontWeight:'bold',letterSpacing:'0.08em',color:isToday?'#818cf8':'#475569'}}>{d}</div>
+              <div style={{fontSize:'11px',marginTop:'2px',color:isToday?'#6366f1':'#334155'}}>{isToday?'Today':colDate.getDate()}</div>
             </div>
           );
         })}
       </div>
-
-      {/* Scrollable time grid */}
-      <div style={{maxHeight:'calc(100vh - 300px)', overflowY:'auto'}}>
-        {hours.map(h=>(
-          <div key={h} className="grid border-b last:border-b-0" style={{gridTemplateColumns:'56px repeat(7,1fr)',borderColor:'rgba(255,255,255,0.04)',minHeight:'54px'}}>
-            {/* Time gutter */}
-            <div className="border-r flex items-start justify-end pr-3 pt-2 flex-shrink-0" style={{borderColor:'rgba(255,255,255,0.06)'}}>
-              <span className="text-xs" style={{color:h===currentHour?'#6366f1':'#334155',fontWeight:h===currentHour?600:400}}>{fmtHour(h)}</span>
+      {/* Scrollable body */}
+      <div style={{maxHeight:'calc(100vh - 300px)',overflowY:'auto',display:'flex'}}>
+        {/* Time gutter */}
+        <div style={{width:'56px',flexShrink:0,position:'relative',height:totalH,borderRight:'1px solid rgba(255,255,255,0.06)'}}>
+          {hours.map(h=>(
+            <div key={h} style={{position:'absolute',top:(h-6)*ROW_H,height:ROW_H,right:0,paddingRight:'8px',paddingTop:'5px',display:'flex',alignItems:'flex-start',justifyContent:'flex-end'}}>
+              <span style={{fontSize:'10px',whiteSpace:'nowrap',color:h===currentHour?'#6366f1':'#334155',fontWeight:h===currentHour?600:400}}>{fmtHour(h)}</span>
             </div>
-            {/* Day cells */}
-            {dayNames.map((d,di)=>{
-              const slotEvs = events.filter(ev=>eventMatchesSlot(ev,di,h));
-              const isToday = di===todayDi;
-              const isCurrent = isToday && h===currentHour;
-              return (
-                <div key={d}
-                  onClick={()=>onAdd(di,h)}
-                  className="group/cell border-r last:border-r-0 p-1 cursor-pointer relative transition-colors"
-                  style={{
-                    borderColor:'rgba(255,255,255,0.04)',
-                    background: isCurrent?'rgba(99,102,241,0.07)' : isToday?'rgba(255,255,255,0.01)':'transparent',
-                  }}
-                  onMouseEnter={e=>{ if(!slotEvs.length) e.currentTarget.style.background='rgba(255,255,255,0.03)'; }}
-                  onMouseLeave={e=>{ e.currentTarget.style.background=isCurrent?'rgba(99,102,241,0.07)':isToday?'rgba(255,255,255,0.01)':'transparent'; }}>
-                  {isCurrent && <div className="absolute left-0 top-0 bottom-0 w-0.5" style={{background:'#6366f1',opacity:0.7}}></div>}
-                  <div className="flex flex-col gap-0.5">
-                    {slotEvs.map((ev,idx)=><EventChip key={ev.id} ev={ev} onRemove={onRemove} onExpand={onExpand} removingIds={removingIds} delay={idx*40}/>)}
+          ))}
+        </div>
+        {/* Day columns */}
+        {dayNames.map((d,di)=>{
+          const isToday = di===todayDi;
+          const colEvs = layoutDayEvents(getEventsForDayColumn(events,di), 6);
+          return (
+            <div key={d} style={{flex:1,position:'relative',height:totalH,borderRight:di<6?'1px solid rgba(255,255,255,0.04)':'none',background:isToday?'rgba(255,255,255,0.005)':'transparent',minWidth:0}}>
+              {/* Hour grid lines + click targets */}
+              {hours.map(h=>(
+                <div key={h} onClick={()=>onAdd(di,h)}
+                  className="group/cell"
+                  style={{position:'absolute',top:(h-6)*ROW_H,height:ROW_H,left:0,right:0,borderBottom:'1px solid rgba(255,255,255,0.03)',cursor:'pointer'}}>
+                  {/* 30-min sub-line */}
+                  <div style={{position:'absolute',top:'50%',left:0,right:0,borderBottom:'1px solid rgba(255,255,255,0.015)',pointerEvents:'none'}}/>
+                  <div className="absolute inset-0 opacity-0 group-hover/cell:opacity-100 transition-opacity flex items-center justify-center" style={{background:'rgba(255,255,255,0.02)'}}>
+                    <span style={{fontSize:'11px',color:'#334155'}}>+</span>
                   </div>
-                  {slotEvs.length===0 && (
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/cell:opacity-100 transition-opacity">
-                      <span className="text-xs" style={{color:'#334155'}}>+</span>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-        ))}
+              ))}
+              {/* Current time line */}
+              {isToday && nowTop>0 && (
+                <div style={{position:'absolute',top:nowTop,left:0,right:0,height:'2px',background:'#6366f1',opacity:0.8,zIndex:3,pointerEvents:'none'}}/>
+              )}
+              {/* Events */}
+              {colEvs.map(({ev,top,height,leftPct,widthPct})=>(
+                <div key={ev.id} style={{position:'absolute',top,height,left:`calc(${leftPct}% + 2px)`,width:`calc(${widthPct}% - 4px)`,zIndex:2}}>
+                  <EventBlock ev={ev} onRemove={onRemove} onExpand={onExpand} removingIds={removingIds} height={height}/>
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -872,65 +1086,51 @@ function WeekView({events, onAdd, onRemove, onExpand, removingIds, offset=0}){
 
 function DayView({events, onAdd, onRemove, onExpand, removingIds, offset=0}){
   const hours = Array.from({length:18}, (_,i)=>6+i);
+  const totalH = hours.length * ROW_H;
   const now = new Date();
   const displayDate = new Date(now); displayDate.setDate(now.getDate()+offset);
   const displayDi = (displayDate.getDay()+6)%7;
   const isToday = offset===0;
   const currentHour = isToday ? now.getHours() : -1;
+  const nowTop = isToday ? (now.getHours()-6)*ROW_H+(now.getMinutes()/60)*ROW_H : -1;
   const dayLabel = displayDate.toLocaleDateString('en',{weekday:'long',month:'long',day:'numeric'});
+  const colEvs = layoutDayEvents(getEventsForDayColumn(events, displayDi), 6);
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
       <div className="px-5 py-3 border-b flex items-center justify-between" style={{borderColor:'rgba(255,255,255,0.06)',background:'rgba(255,255,255,0.02)'}}>
         <span className="text-sm font-semibold">{dayLabel}</span>
-        <span className="text-xs" style={{color:'#475569'}}>{events.filter(ev=>ev.when&&ev.when.day===displayDi).length} events</span>
+        <span className="text-xs" style={{color:'#475569'}}>{colEvs.length} event{colEvs.length!==1?'s':''}</span>
       </div>
-      <div style={{maxHeight:'calc(100vh - 280px)',overflowY:'auto'}}>
-        {hours.map(h=>{
-          const slotEvs = events.filter(ev=>eventMatchesSlot(ev,displayDi,h));
-          const isCurrent = h===currentHour;
-          return (
-            <div key={h}
-              onClick={()=>onAdd(displayDi,h)}
-              className="flex border-b last:border-b-0 cursor-pointer group/row transition-colors"
-              style={{borderColor:'rgba(255,255,255,0.04)',minHeight:'52px',background:isCurrent?'rgba(99,102,241,0.06)':'transparent'}}
-              onMouseEnter={e=>{ if(!slotEvs.length) e.currentTarget.style.background='rgba(255,255,255,0.02)'; }}
-              onMouseLeave={e=>{ e.currentTarget.style.background=isCurrent?'rgba(99,102,241,0.06)':'transparent'; }}>
-              {/* Time */}
-              <div className="w-20 flex-shrink-0 flex items-start justify-end pr-4 pt-2 border-r" style={{borderColor:'rgba(255,255,255,0.06)'}}>
-                <span className="text-xs" style={{color:isCurrent?'#6366f1':'#334155',fontWeight:isCurrent?600:400}}>{fmtHour(h)}</span>
-              </div>
-              {isCurrent && <div className="w-0.5 flex-shrink-0 self-stretch" style={{background:'#6366f1',opacity:0.8}}></div>}
-              {/* Events */}
-              <div className="flex-1 p-1.5" onClick={e=>e.stopPropagation()}>
-                {slotEvs.map((ev,i)=>{
-                  const c = TYPE_COLORS[ev.type]||TYPE_COLORS.Manual;
-                  return (
-                    <div key={ev.id}
-                      onClick={e=>{e.stopPropagation();onExpand&&onExpand(ev);}}
-                      className={`group/ev flex items-center gap-2 p-2 rounded-xl mb-1 text-sm font-medium animate-item cursor-pointer ${removingIds?.includes(ev.id)?'removing':''}`}
-                      style={{background:c.bg,border:`1px solid ${c.border}`,color:c.text,animationDelay:`${i*50}ms`}}>
-                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:c.dot}}></div>
-                      <span className="flex-1">{ev.title}</span>
-                      {ev.notes && ev.notes!==ev.title && <span className="text-xs opacity-50 truncate max-w-[120px]">{ev.notes}</span>}
-                      <button
-                        onClick={e=>{e.stopPropagation();onRemove&&onRemove(ev);}}
-                        className="opacity-0 group-hover/ev:opacity-100 transition-opacity w-5 h-5 rounded-full flex items-center justify-center hover:bg-white/10 text-xs">
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              {/* Add hint */}
-              {slotEvs.length===0 && (
-                <div className="flex items-center pr-4 opacity-0 group-hover/row:opacity-100 transition-opacity">
-                  <span className="text-xs" style={{color:'#334155'}}>+ Add</span>
-                </div>
-              )}
+      <div style={{maxHeight:'calc(100vh - 280px)',overflowY:'auto',display:'flex'}}>
+        {/* Time gutter */}
+        <div style={{width:'72px',flexShrink:0,position:'relative',height:totalH,borderRight:'1px solid rgba(255,255,255,0.06)'}}>
+          {hours.map(h=>(
+            <div key={h} style={{position:'absolute',top:(h-6)*ROW_H,height:ROW_H,right:0,paddingRight:'12px',paddingTop:'6px',display:'flex',alignItems:'flex-start',justifyContent:'flex-end'}}>
+              <span style={{fontSize:'11px',whiteSpace:'nowrap',color:h===currentHour?'#6366f1':'#334155',fontWeight:h===currentHour?600:400}}>{fmtHour(h)}</span>
             </div>
-          );
-        })}
+          ))}
+        </div>
+        {/* Event column */}
+        <div style={{flex:1,position:'relative',height:totalH,minWidth:0}}>
+          {hours.map(h=>(
+            <div key={h} onClick={()=>onAdd(displayDi,h)}
+              className="group/cell"
+              style={{position:'absolute',top:(h-6)*ROW_H,height:ROW_H,left:0,right:0,borderBottom:'1px solid rgba(255,255,255,0.03)',cursor:'pointer',background:h===currentHour?'rgba(99,102,241,0.05)':'transparent'}}>
+              <div className="absolute inset-0 opacity-0 group-hover/cell:opacity-100 transition-opacity flex items-center px-3" style={{background:'rgba(255,255,255,0.015)'}}>
+                <span style={{fontSize:'11px',color:'#334155'}}>+ Add event</span>
+              </div>
+            </div>
+          ))}
+          {isToday && nowTop>0 && (
+            <div style={{position:'absolute',top:nowTop,left:0,right:0,height:'2px',background:'#6366f1',opacity:0.8,zIndex:3,pointerEvents:'none'}}/>
+          )}
+          {colEvs.map(({ev,top,height,leftPct,widthPct})=>(
+            <div key={ev.id} style={{position:'absolute',top,height,left:`calc(${leftPct}% + 4px)`,width:`calc(${widthPct}% - 8px)`,zIndex:2}}>
+              <EventBlock ev={ev} onRemove={onRemove} onExpand={onExpand} removingIds={removingIds} height={height}/>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1002,8 +1202,11 @@ function EventModal({modal, onClose, onSave}){
   const [notes, setNotes]   = useState(p?.notes || '');
   const [day,  setDay]      = useState(p?.when?.day  !== undefined ? String(p.when.day)  : modal.when?.day  !== undefined ? String(modal.when.day)  : '');
   const [hour, setHour]     = useState(p?.when?.hour !== undefined ? String(p.when.hour) : modal.when?.hour !== undefined ? String(modal.when.hour) : '');
+  const [endHour, setEndHour] = useState(p?.when?.endHour !== undefined ? String(p.when.endHour) : modal.when?.endHour !== undefined ? String(modal.when.endHour) : '');
   const [recurrence, setRecurrence] = useState(p?.recurrence || '');
   const [customDays, setCustomDays] = useState(p?.customDays || []);
+  const [subtasks, setSubtasks] = useState(p?.subtasks || []);
+  const [newSubtask, setNewSubtask] = useState('');
 
   const RECUR_PRESETS = [
     {value:'',        label:'One-time'},
@@ -1019,10 +1222,10 @@ function EventModal({modal, onClose, onSave}){
 
   const save = () => {
     if(!title.trim()) return;
-    const when = (day!==''||hour!=='') ? {day:day!==''?Number(day):undefined, hour:hour!==''?Number(hour):undefined} : undefined;
+    const when = (day!==''||hour!=='') ? {day:day!==''?Number(day):undefined, hour:hour!==''?Number(hour):undefined, endHour:endHour!==''?Number(endHour):undefined} : undefined;
     const rec = recurrence||undefined;
     const cd  = rec==='custom' && customDays.length ? customDays : undefined;
-    onSave({title,type,notes,when,recurrence:rec,customDays:cd});
+    onSave({title,type,notes,when,recurrence:rec,customDays:cd,subtasks:subtasks.length?subtasks:undefined});
   };
 
   const typeStyles = {
@@ -1052,7 +1255,7 @@ function EventModal({modal, onClose, onSave}){
           onChange={e=>setTitle(e.target.value)}
           onKeyDown={e=>{ if(e.key==='Enter') save(); }}
         />
-        <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
             <label className="block text-xs mb-1" style={{color:'#475569'}}>Day</label>
             <select className="w-full p-2 rounded-xl text-sm focus:outline-none" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
@@ -1062,11 +1265,19 @@ function EventModal({modal, onClose, onSave}){
             </select>
           </div>
           <div>
-            <label className="block text-xs mb-1" style={{color:'#475569'}}>Time</label>
+            <label className="block text-xs mb-1" style={{color:'#475569'}}>Start Time</label>
             <select className="w-full p-2 rounded-xl text-sm focus:outline-none" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-              value={hour} onChange={e=>setHour(e.target.value)}>
+              value={hour} onChange={e=>{setHour(e.target.value); if(endHour&&Number(e.target.value)>=Number(endHour)) setEndHour('');}}>
               <option value="">No time</option>
-              {Array.from({length:18},(_,i)=>6+i).map(h=><option key={h} value={h}>{fmtHour(h)}</option>)}
+              {Array.from({length:18*4},(_,i)=>6+i*0.25).map(h=><option key={h} value={h}>{fmtHour(h)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{color:'#475569'}}>End Time</label>
+            <select className="w-full p-2 rounded-xl text-sm focus:outline-none" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+              value={endHour} onChange={e=>setEndHour(e.target.value)}>
+              <option value="">No end</option>
+              {Array.from({length:18*4},(_,i)=>6+i*0.25).filter(h=>hour===''||h>Number(hour)+0.001).map(h=><option key={h} value={h}>{fmtHour(h)}</option>)}
             </select>
           </div>
         </div>
@@ -1119,6 +1330,37 @@ function EventModal({modal, onClose, onSave}){
           onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.08)'}
           rows={2} placeholder="Notes (optional)" value={notes} onChange={e=>setNotes(e.target.value)}
         />
+        {/* Subtasks */}
+        <div className="mb-4">
+          <label className="block text-xs mb-2" style={{color:'#475569'}}>To-Do Items (optional)</label>
+          <div className="space-y-1.5 mb-2">
+            {subtasks.map((st,i)=>(
+              <div key={st.id} className="flex items-center gap-2 px-3 py-1.5 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="w-3 h-3 rounded border flex-shrink-0" style={{borderColor:'rgba(255,255,255,0.2)'}}/>
+                <span className="flex-1 text-sm" style={{color:'#94a3b8'}}>{st.title}</span>
+                <button onClick={()=>setSubtasks(s=>s.filter((_,j)=>j!==i))} className="text-xs hover:text-red-400 transition-colors" style={{color:'#475569'}}>×</button>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="flex-1 p-2 rounded-xl text-sm focus:outline-none transition-all"
+              style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+              onFocus={e=>e.target.style.borderColor='rgba(99,102,241,0.5)'}
+              onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.08)'}
+              placeholder="Add a to-do item…"
+              value={newSubtask}
+              onChange={e=>setNewSubtask(e.target.value)}
+              onKeyDown={e=>{ if(e.key==='Enter'&&newSubtask.trim()){ setSubtasks(s=>[...s,{id:uid(),title:newSubtask.trim(),done:false}]); setNewSubtask(''); e.preventDefault(); }}}
+            />
+            <button
+              onClick={()=>{ if(newSubtask.trim()){ setSubtasks(s=>[...s,{id:uid(),title:newSubtask.trim(),done:false}]); setNewSubtask(''); }}}
+              className="px-3 py-1.5 rounded-xl text-sm font-medium"
+              style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+              + Add
+            </button>
+          </div>
+        </div>
         <div className="flex justify-end gap-2">
           <button className="px-4 py-2 rounded-xl text-sm transition-all hover:bg-white/5" style={{color:'#64748b'}} onClick={onClose}>Cancel</button>
           <button
@@ -1191,12 +1433,13 @@ function useSpeaker(){
     try{
       if((s.ttsProvider==='elevenlabs'&&s.elevenLabsKey)||(s.ttsProvider==='openai'&&s.openaiTtsKey)){
         const parts = chunks(clean);
-        let nextFetch = fetchUrl(parts[0], s);
-        const prefetch = parts.length>1 ? fetchUrl(parts[1], s) : null;
+        let currentFetch = fetchUrl(parts[0], s);
+        let prefetch = parts.length > 1 ? fetchUrl(parts[1], s) : null;
         for(let i=0;i<parts.length;i++){
           if(genRef.current!==gen) break;
-          const url = await (i===0 ? nextFetch : nextFetch);
-          nextFetch = i===0 && prefetch ? prefetch : (i+2<parts.length ? fetchUrl(parts[i+2],s) : null);
+          const url = await currentFetch;
+          currentFetch = prefetch;
+          prefetch = (i+2<parts.length) ? fetchUrl(parts[i+2],s) : null;
           await playUrl(url, gen);
         }
         if(genRef.current===gen) setSpeaking(false);
@@ -2381,21 +2624,14 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
     try {
       if((provider==='elevenlabs' && settings.elevenLabsKey) || (provider==='openai' && settings.openaiTtsKey)){
         const chunks = splitSentences(clean);
-        // Pre-fetch first two chunks in parallel, then pipeline the rest
-        let nextFetchPromise = fetchTtsUrl(chunks[0], settings);
-        if(chunks.length > 1) {
-          let prefetch = fetchTtsUrl(chunks[1], settings);
-          for(let i = 0; i < chunks.length; i++){
-            if(speakGenRef.current !== gen) break;
-            const url = await nextFetchPromise;
-            nextFetchPromise = (i+2 < chunks.length) ? fetchTtsUrl(chunks[i+2], settings) : null;
-            // Swap in the already-fetching next chunk
-            if(i === 0) nextFetchPromise = prefetch;
-            else if(i+2 < chunks.length) nextFetchPromise = fetchTtsUrl(chunks[i+2], settings);
-            await playUrl(url, gen);
-          }
-        } else {
-          const url = await nextFetchPromise;
+        // Pipeline: fetch chunk[i+1] while playing chunk[i]
+        let currentFetch = fetchTtsUrl(chunks[0], settings);
+        let prefetch = chunks.length > 1 ? fetchTtsUrl(chunks[1], settings) : null;
+        for(let i = 0; i < chunks.length; i++){
+          if(speakGenRef.current !== gen) break;
+          const url = await currentFetch;
+          currentFetch = prefetch;
+          prefetch = (i+2 < chunks.length) ? fetchTtsUrl(chunks[i+2], settings) : null;
           await playUrl(url, gen);
         }
         if(speakGenRef.current === gen) setSpeaking(false);
