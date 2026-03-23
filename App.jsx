@@ -191,26 +191,32 @@ function MainAssistant({data, setData, toasts, isMobile}){
 
 function applyActions(actions, setData, toasts){
   if(!actions || !actions.length) return;
-  // Collect all additions first, then do ONE setData call to avoid React batch stomping
   const newEvents=[], newAssignments=[], newWorkouts=[], newSocial=[];
+  const clearFilters=[];
   actions.forEach(a=>{
-    if(a.type==='event'){
-      newEvents.push({...a.payload, id:uid()});
-    }else if(a.type==='assignment'){
-      newAssignments.push({...a.payload, id:uid(), status:'To Do'});
-    }else if(a.type==='workout'){
-      newWorkouts.push({...a.payload, id:uid()});
-    }else if(a.type==='reminder'){
-      newSocial.push({...a.payload, id:uid()});
-    }
+    if(a.type==='event')       newEvents.push({...a.payload, id:uid()});
+    else if(a.type==='assignment') newAssignments.push({...a.payload, id:uid(), status:'To Do'});
+    else if(a.type==='workout')    newWorkouts.push({...a.payload, id:uid()});
+    else if(a.type==='reminder')   newSocial.push({...a.payload, id:uid()});
+    else if(a.type==='clearEvents') clearFilters.push(a.filter||{});
   });
-  setData(d=>({
-    ...d,
-    events:      [...(d.events||[]),      ...newEvents],
-    assignments: [...(d.assignments||[]), ...newAssignments],
-    workouts:    [...(d.workouts||[]),    ...newWorkouts],
-    social:      [...(d.social||[]),      ...newSocial],
-  }));
+  setData(d=>{
+    let events = [...(d.events||[]), ...newEvents];
+    if(clearFilters.length){
+      const before = events.length;
+      events = events.filter(ev => !clearFilters.some(f => eventMatchesClearFilter(ev, f)));
+      const removed = before - events.length + newEvents.length;
+      if(removed > 0) toasts.push(`Cleared ${removed} event${removed>1?'s':''}`);
+      else toasts.push('No matching events found to clear');
+    }
+    return {
+      ...d,
+      events,
+      assignments: [...(d.assignments||[]), ...newAssignments],
+      workouts:    [...(d.workouts||[]),    ...newWorkouts],
+      social:      [...(d.social||[]),      ...newSocial],
+    };
+  });
   if(newEvents.length)      toasts.push(`Added ${newEvents.length} event${newEvents.length>1?'s':''}: ${newEvents.map(e=>e.title).join(', ')}`);
   if(newAssignments.length) toasts.push(`Added ${newAssignments.length} assignment${newAssignments.length>1?'s':''}`);
   if(newSocial.length)      toasts.push('Added reminder');
@@ -297,7 +303,84 @@ function detectType(s){
   return 'Manual';
 }
 
+// Convert JS getDay() (0=Sun) to Magverse day index (0=Mon)
+function jsDayToMv(jsDay){ return (jsDay + 6) % 7; }
+
+function parseClearCommand(text){
+  const t = normAmPm(text).toLowerCase();
+  if(!/\b(clear|delete|remove|cancel|erase|wipe)\b/.test(t)) return null;
+
+  const f = {};
+
+  // Clear everything
+  if(/\b(all|everything|entire|whole)\b/.test(t) && /\b(schedule|events|day|week)\b/.test(t)) { f.all = true; return {type:'clearEvents',filter:f}; }
+
+  // "today" / "tomorrow"
+  if(/\btoday\b/.test(t))    { f.day = jsDayToMv(new Date().getDay()); }
+  if(/\btomorrow\b/.test(t)) { const d=new Date(); d.setDate(d.getDate()+1); f.day = jsDayToMv(d.getDay()); }
+
+  // Named day
+  const di = parseDay(t);
+  if(di !== undefined && f.day === undefined) f.day = di;
+
+  // Time-of-day ranges
+  if(/\bmorning\b/.test(t))   { f.hourFrom=5;  f.hourTo=11; }
+  if(/\bafternoon\b/.test(t)) { f.hourFrom=12; f.hourTo=16; }
+  if(/\bevening\b/.test(t))   { f.hourFrom=17; f.hourTo=20; }
+  if(/\bnight\b/.test(t))     { f.hourFrom=20; f.hourTo=23; }
+
+  // Specific hour
+  const h = parseHour(t);
+  if(h !== undefined) f.hour = h;
+
+  // Title keyword — strip command words and extract what's left
+  const kw = t
+    .replace(/\b(clear|delete|remove|cancel|erase|wipe|my|all|the|event|events|schedule|today|tomorrow|morning|afternoon|evening|night|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/g,'')
+    .replace(/\b(at|on|from|between|and)\b/g,'')
+    .replace(/\d{1,2}(:\d{2})?\s*(am|pm)/gi,'')
+    .replace(/\s+/g,' ').trim();
+  if(kw.length > 1) f.title = kw;
+
+  // Only return a clear action if we have at least one filter criterion
+  if(Object.keys(f).length === 0) return null;
+  return {type:'clearEvents', filter:f};
+}
+
+function eventMatchesClearFilter(ev, f){
+  if(f.all) return true;
+  const day = ev.when?.day;
+  const hour = ev.when?.hour;
+  const r = ev.recurrence;
+
+  // Day match
+  if(f.day !== undefined){
+    let dm = false;
+    if(!r || r==='weekly') dm = day === f.day;
+    else if(r==='daily')   dm = true;
+    else if(r==='weekdays')dm = f.day >= 0 && f.day <= 4;
+    else if(r==='mwf')     dm = [0,2,4].includes(f.day);
+    else if(r==='tth')     dm = [1,3].includes(f.day);
+    else if(r==='custom')  dm = (ev.customDays||[]).includes(f.day);
+    else dm = day === f.day;
+    if(!dm) return false;
+  }
+
+  // Hour / range
+  if(f.hour !== undefined && hour !== f.hour) return false;
+  if(f.hourFrom !== undefined && hour < f.hourFrom) return false;
+  if(f.hourTo   !== undefined && hour > f.hourTo)   return false;
+
+  // Title keyword
+  if(f.title && !ev.title?.toLowerCase().includes(f.title)) return false;
+
+  return true;
+}
+
 function heuristicParse(text){
+  // Check for clear/delete commands first
+  const clearAction = parseClearCommand(text);
+  if(clearAction) return [clearAction];
+
   const norm = normAmPm(text);
   const globalDay = parseDay(norm);
 
@@ -387,7 +470,7 @@ function BottomNav({active, setActive}){
 function Sidebar({collapsed, setCollapsed, active, setActive}){
   const items = [
     {id:'schedule', label:'Schedule', icon:IconCalendar},
-    {id:'assignments', label:'Assignments', icon:IconKanban},
+    {id:'assignments', label:'Tasks', icon:IconKanban},
     {id:'gym', label:'Gym', icon:IconDumbbell},
     {id:'social', label:'Social', icon:IconUsers},
     {id:'notes', label:'Notes', icon:IconNotes},
@@ -1050,76 +1133,552 @@ function EventModal({modal, onClose, onSave}){
   );
 }
 
-/* -------------------- Assignments Panel -------------------- */
-function AssignmentsPanel({data, setData, toasts}){
-  const columns = ['To Do','In Progress','Review','Done'];
-  const [showAdd, setShowAdd] = useState(false);
-  const addCard = (card)=>{ setData(d=> ({ ...d, assignments:[...(d.assignments||[]), {...card, id:uid()}] })); toasts.push('Card added'); };
+/* -------------------- Shared TTS hook -------------------- */
+function useSpeaker(){
+  const [speaking, setSpeaking] = useState(false);
+  const audioRef = useRef(null);
+  const genRef   = useRef(0);
 
-  const grouped = columns.reduce((acc,c)=>{ acc[c]= (data.assignments||[]).filter(a=>a.status===c); return acc; },{});
+  const strip = (txt) => txt
+    .replace(/#{1,6}\s*/g,'').replace(/\*\*\*(.+?)\*\*\*/g,'$1').replace(/\*\*(.+?)\*\*/g,'$1')
+    .replace(/\*(.+?)\*/g,'$1').replace(/__(.+?)__/g,'$1').replace(/_(.+?)_/g,'$1')
+    .replace(/`{1,3}[^`]*`{1,3}/g,'').replace(/\[(.+?)\]\(.+?\)/g,'$1')
+    .replace(/^>\s*/gm,'').replace(/^[-*+]\s+/gm,'').replace(/^\d+\.\s+/gm,'')
+    .replace(/^-{3,}$/gm,'').replace(/→|←|↑|↓|▶|►/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+
+  const chunks = (txt) => {
+    const raw = txt.match(/[^.!?]+[.!?]+(\s|$)?/g) || [txt];
+    const out = []; let buf = '';
+    for(const s of raw){ buf+=s; if(buf.length>=180){out.push(buf.trim());buf='';} }
+    if(buf.trim()) out.push(buf.trim());
+    return out.length ? out : [txt];
+  };
+
+  const fetchUrl = async (text, s) => {
+    if(s.ttsProvider==='elevenlabs' && s.elevenLabsKey){
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${s.elevenLabsVoice||'21m00Tcm4TlvDq8ikWAM'}`,{
+        method:'POST', headers:{'xi-api-key':s.elevenLabsKey,'Content-Type':'application/json'},
+        body:JSON.stringify({text,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.45,similarity_boost:0.75,style:0.3}})
+      });
+      if(!r.ok) throw new Error('EL '+r.status);
+      return URL.createObjectURL(await r.blob());
+    }
+    if(s.ttsProvider==='openai' && s.openaiTtsKey){
+      const r = await fetch('https://api.openai.com/v1/audio/speech',{
+        method:'POST', headers:{'Authorization':'Bearer '+s.openaiTtsKey,'Content-Type':'application/json'},
+        body:JSON.stringify({model:'tts-1',voice:s.openaiTtsVoice||'nova',input:text,speed:1.25})
+      });
+      if(!r.ok) throw new Error('OAI '+r.status);
+      return URL.createObjectURL(await r.blob());
+    }
+    return null;
+  };
+
+  const playUrl = (url, gen) => new Promise(res=>{
+    if(genRef.current!==gen){URL.revokeObjectURL(url);res();return;}
+    const a = new Audio(url); audioRef.current=a;
+    const done=()=>{URL.revokeObjectURL(url);audioRef.current=null;res();};
+    a.onended=done; a.onerror=done; a.play().catch(done);
+  });
+
+  const speak = async (txt) => {
+    const gen = ++genRef.current;
+    const clean = strip(txt);
+    const s = ls('magverse:v1')?.settings || {};
+    if(audioRef.current){audioRef.current.pause();audioRef.current=null;}
+    window.speechSynthesis?.cancel();
+    setSpeaking(true);
+    try{
+      if((s.ttsProvider==='elevenlabs'&&s.elevenLabsKey)||(s.ttsProvider==='openai'&&s.openaiTtsKey)){
+        const parts = chunks(clean);
+        let nextFetch = fetchUrl(parts[0], s);
+        const prefetch = parts.length>1 ? fetchUrl(parts[1], s) : null;
+        for(let i=0;i<parts.length;i++){
+          if(genRef.current!==gen) break;
+          const url = await (i===0 ? nextFetch : nextFetch);
+          nextFetch = i===0 && prefetch ? prefetch : (i+2<parts.length ? fetchUrl(parts[i+2],s) : null);
+          await playUrl(url, gen);
+        }
+        if(genRef.current===gen) setSpeaking(false);
+        return;
+      }
+    }catch(e){ console.warn('TTS fallback',e.message); }
+    if(genRef.current!==gen){setSpeaking(false);return;}
+    if(!window.speechSynthesis){setSpeaking(false);return;}
+    const doSpeak=()=>{
+      if(genRef.current!==gen) return;
+      const voices=window.speechSynthesis.getVoices();
+      const sv=s.ttsVoice||'';
+      const ranked=[v=>sv&&v.name===sv,v=>v.name==='Samantha',v=>v.name==='Karen',
+        v=>v.name.includes('Aria')&&v.name.includes('Natural'),v=>v.name.includes('Jenny')&&v.name.includes('Natural'),
+        v=>v.name.includes('Microsoft Aria'),v=>v.name.includes('Microsoft Jenny'),
+        v=>v.lang==='en-US'&&!v.localService,v=>v.lang==='en-US',v=>v.lang.startsWith('en')];
+      let voice=null; for(const t of ranked){voice=voices.find(t);if(voice)break;}
+      const u=new SpeechSynthesisUtterance(clean);
+      if(voice)u.voice=voice; u.rate=0.9;u.pitch=1;u.volume=1;
+      u.onstart=()=>setSpeaking(true);u.onend=()=>setSpeaking(false);u.onerror=()=>setSpeaking(false);
+      window.speechSynthesis.speak(u);
+    };
+    window.speechSynthesis.getVoices().length===0
+      ? window.speechSynthesis.addEventListener('voiceschanged',doSpeak,{once:true})
+      : doSpeak();
+  };
+
+  const cancel=()=>{
+    genRef.current++;
+    if(audioRef.current){audioRef.current.pause();audioRef.current=null;}
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+  };
+
+  return {speaking, speak, cancel};
+}
+
+/* -------------------- Tasks Panel -------------------- */
+const TASK_CATEGORIES = [
+  { id:'classroom',      label:'Classroom Tasks',      color:'#6366f1', bg:'rgba(99,102,241,0.12)',  dot:'#818cf8' },
+  { id:'extracurricular',label:'Extracurricular Tasks', color:'#10b981', bg:'rgba(16,185,129,0.12)', dot:'#34d399' },
+  { id:'personal',       label:'Personal Tasks',        color:'#f59e0b', bg:'rgba(245,158,11,0.12)', dot:'#fbbf24' },
+];
+const PRIORITY_META = {
+  High: { label:'High', color:'#f87171', bg:'rgba(248,113,113,0.15)' },
+  Med:  { label:'Med',  color:'#fbbf24', bg:'rgba(251,191,36,0.15)'  },
+  Low:  { label:'Low',  color:'#94a3b8', bg:'rgba(148,163,184,0.12)' },
+};
+
+function taskUrgencyScore(task){
+  if(task.status==='Done') return 1e9;
+  const p = {High:3, Med:2, Low:1}[task.priority] || 1;
+  const now = Date.now();
+  const due = task.dueDate ? new Date(task.dueDate).getTime() : null;
+  if(!due) return 10000 - p * 10;
+  const days = (due - now) / 86400000;
+  if(days < 0)   return -1000 + days - p * 100; // overdue first
+  if(days < 1)   return days - p * 50;
+  if(days < 3)   return days - p * 20;
+  if(days < 7)   return days - p * 5;
+  return days - p;
+}
+
+function formatDue(dateStr){
+  if(!dateStr) return null;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = Math.round((dd - today) / 86400000);
+  if(diff < 0) return { text: `${Math.abs(diff)}d overdue`, overdue: true };
+  if(diff === 0) return { text: 'Due today', urgent: true };
+  if(diff === 1) return { text: 'Due tomorrow', urgent: true };
+  if(diff <= 7)  return { text: `Due in ${diff}d`, urgent: false };
+  return { text: d.toLocaleDateString('en-US',{month:'short',day:'numeric'}), urgent: false };
+}
+
+function AssignmentsPanel({data, setData, toasts}){
+  const [modalCat, setModalCat] = useState(null); // category to add to
+  const [editTask, setEditTask] = useState(null);
+  const [sort, setSort] = useState('smart');
+  const [filter, setFilter] = useState('active'); // active | all | done
+  const [collapsed, setCollapsed] = useState({});
+
+  const tasks = data.assignments || [];
+
+  const addTask = (task) => {
+    setData(d=>({...d, assignments:[...(d.assignments||[]), {...task, id:uid(), createdAt:new Date().toISOString()}]}));
+    toasts.push('Task added');
+  };
+  const updateTask = (id, patch) => {
+    setData(d=>({...d, assignments:(d.assignments||[]).map(t=>t.id===id?{...t,...patch}:t)}));
+  };
+  const deleteTask = (id) => {
+    setData(d=>({...d, assignments:(d.assignments||[]).filter(t=>t.id!==id)}));
+    toasts.push('Task removed');
+  };
+  const toggleDone = (task) => {
+    updateTask(task.id, {status: task.status==='Done' ? 'To Do' : 'Done', doneAt: task.status!=='Done' ? new Date().toISOString() : null});
+  };
+
+  const sortTasks = (arr) => {
+    const a = [...arr];
+    if(sort==='smart')    return a.sort((x,y)=>taskUrgencyScore(x)-taskUrgencyScore(y));
+    if(sort==='due')      return a.sort((x,y)=>{ const xd=x.dueDate?new Date(x.dueDate):new Date('9999'); const yd=y.dueDate?new Date(y.dueDate):new Date('9999'); return xd-yd; });
+    if(sort==='priority') return a.sort((x,y)=>({High:0,Med:1,Low:2}[x.priority]||1)-({High:0,Med:1,Low:2}[y.priority]||1));
+    return a;
+  };
+
+  const visibleTasks = (cat) => {
+    let t = tasks.filter(t=>t.category===cat);
+    if(filter==='active') t = t.filter(t=>t.status!=='Done');
+    if(filter==='done')   t = t.filter(t=>t.status==='Done');
+    return sortTasks(t);
+  };
+
+  const totalActive = tasks.filter(t=>t.status!=='Done').length;
+  const totalOverdue = tasks.filter(t=>t.status!=='Done' && t.dueDate && new Date(t.dueDate)<new Date()).length;
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Assignments</h2>
+    <div className="max-w-3xl">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
-          <button className="px-3 py-1 rounded bg-indigo-600" onClick={()=>setShowAdd(true)}>New Assignment</button>
+          <h2 className="text-xl font-semibold">Tasks</h2>
+          <div className="text-xs mt-0.5" style={{color:'#475569'}}>
+            {totalActive} active{totalOverdue>0 && <span style={{color:'#f87171'}}> · {totalOverdue} overdue</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Filter */}
+          <div className="flex rounded overflow-hidden border" style={{borderColor:'rgba(255,255,255,0.07)'}}>
+            {['active','all','done'].map(f=>(
+              <button key={f} onClick={()=>setFilter(f)}
+                className="px-3 py-1 text-xs capitalize transition-all"
+                style={{background:filter===f?'rgba(99,102,241,0.3)':'transparent', color:filter===f?'#a5b4fc':'#64748b'}}>
+                {f}
+              </button>
+            ))}
+          </div>
+          {/* Sort */}
+          <select className="px-2 py-1 rounded text-xs border bg-transparent"
+            style={{borderColor:'rgba(255,255,255,0.07)',color:'#94a3b8'}}
+            value={sort} onChange={e=>setSort(e.target.value)}>
+            <option value="smart">Smart sort</option>
+            <option value="due">By due date</option>
+            <option value="priority">By priority</option>
+          </select>
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
-        {columns.map(col=> (
-          <div key={col} className="glass p-3 rounded border-subtle min-h-[200px]">
-            <div className="font-semibold mb-2">{col}</div>
-            <div className="flex flex-col gap-2">
-              {(grouped[col]||[]).map(card=> (
-                <div key={card.id} className={`p-2 rounded ${card.dueDate && new Date(card.dueDate) < new Date() ? 'bg-red-700':'bg-white/3'}`}>
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium">{card.title}</div>
-                    <div className="text-xs opacity-80">{card.priority||'Med'}</div>
-                  </div>
-                  <div className="text-xs opacity-70">{card.subject} {card.dueDate && <span className="ml-2 text-xs">• due {new Date(card.dueDate).toLocaleDateString()}</span>}</div>
+      {/* Category sections */}
+      <div className="space-y-4">
+        {TASK_CATEGORIES.map(cat=>{
+          const catTasks = visibleTasks(cat.id);
+          const allCatTasks = tasks.filter(t=>t.category===cat.id);
+          const doneCount = allCatTasks.filter(t=>t.status==='Done').length;
+          const isCollapsed = collapsed[cat.id];
+          return (
+            <div key={cat.id} className="glass rounded border-subtle overflow-hidden">
+              {/* Section header */}
+              <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
+                style={{borderBottom: isCollapsed?'none':'1px solid rgba(255,255,255,0.05)'}}
+                onClick={()=>setCollapsed(c=>({...c,[cat.id]:!c[cat.id]}))}>
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full" style={{background:cat.dot}}/>
+                  <span className="font-semibold text-sm">{cat.label}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:cat.bg, color:cat.color}}>
+                    {allCatTasks.filter(t=>t.status!=='Done').length} left
+                  </span>
+                  {doneCount>0 && <span className="text-xs" style={{color:'#334155'}}>{doneCount} done</span>}
                 </div>
-              ))}
+                <div className="flex items-center gap-2">
+                  <button className="text-xs px-2 py-1 rounded transition-all"
+                    style={{background:cat.bg, color:cat.color}}
+                    onClick={e=>{ e.stopPropagation(); setModalCat(cat.id); }}>
+                    + Add
+                  </button>
+                  <span style={{color:'#475569',fontSize:'10px'}}>{isCollapsed?'▶':'▼'}</span>
+                </div>
+              </div>
+
+              {/* Tasks list */}
+              {!isCollapsed && (
+                <div className="divide-y" style={{borderColor:'rgba(255,255,255,0.04)'}}>
+                  {catTasks.length===0 && (
+                    <div className="px-4 py-5 text-xs text-center" style={{color:'#334155'}}>
+                      {filter==='done' ? 'No completed tasks' : 'No tasks — click + Add to get started'}
+                    </div>
+                  )}
+                  {catTasks.map(task=>{
+                    const due = formatDue(task.dueDate);
+                    const pm = PRIORITY_META[task.priority] || PRIORITY_META.Med;
+                    const isDone = task.status==='Done';
+                    return (
+                      <div key={task.id} className="group flex items-start gap-3 px-4 py-3 transition-all hover:bg-white/[0.02]">
+                        {/* Checkbox */}
+                        <button onClick={()=>toggleDone(task)}
+                          className="mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-all"
+                          style={{borderColor: isDone ? cat.color : 'rgba(255,255,255,0.15)', background: isDone ? cat.bg : 'transparent'}}>
+                          {isDone && <span style={{color:cat.color, fontSize:'9px'}}>✓</span>}
+                        </button>
+
+                        {/* Content */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="text-sm font-medium leading-snug" style={{textDecoration:isDone?'line-through':'none', color:isDone?'#475569':'#e2e8f0'}}>
+                              {task.title}
+                            </span>
+                            {/* Priority chip */}
+                            <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0 font-medium"
+                              style={{background:pm.bg, color:pm.color}}>
+                              {pm.label}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 flex-wrap">
+                            {task.subject && <span className="text-xs" style={{color:'#475569'}}>{task.subject}</span>}
+                            {due && (
+                              <span className="text-xs font-medium"
+                                style={{color: due.overdue?'#f87171': due.urgent?'#fbbf24':'#64748b'}}>
+                                {due.overdue && '⚠ '}{due.text}
+                              </span>
+                            )}
+                            {task.notes && <span className="text-xs italic truncate max-w-[200px]" style={{color:'#334155'}}>{task.notes}</span>}
+                          </div>
+                        </div>
+
+                        {/* Edit / Delete on hover */}
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                          <button onClick={()=>setEditTask(task)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-white/10" style={{color:'#64748b'}}>✎</button>
+                          <button onClick={()=>deleteTask(task.id)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-red-500/20" style={{color:'#64748b'}}>×</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {showAdd && <AssignmentModal onClose={()=>setShowAdd(false)} onSave={(c)=>{ addCard(c); setShowAdd(false); }} />}
+      {(modalCat||editTask) && (
+        <TaskModal
+          initialCat={editTask?.category || modalCat}
+          task={editTask}
+          onClose={()=>{ setModalCat(null); setEditTask(null); }}
+          onSave={(t)=>{
+            if(editTask){ updateTask(editTask.id, t); toasts.push('Task updated'); }
+            else addTask(t);
+            setModalCat(null); setEditTask(null);
+          }}
+        />
+      )}
+
+      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} />
     </div>
   );
 }
 
-function AssignmentModal({onClose, onSave}){
-  const [title, setTitle] = useState('');
-  const [subject, setSubject] = useState('Other');
-  const [priority, setPriority] = useState('Med');
+function TaskModal({initialCat, task, onClose, onSave}){
+  const [title,    setTitle]    = useState(task?.title    || '');
+  const [category, setCategory] = useState(task?.category || initialCat || 'classroom');
+  const [subject,  setSubject]  = useState(task?.subject  || '');
+  const [priority, setPriority] = useState(task?.priority || 'Med');
+  const [dueDate,  setDueDate]  = useState(task?.dueDate  || '');
+  const [status,   setStatus]   = useState(task?.status   || 'To Do');
+  const [notes,    setNotes]    = useState(task?.notes    || '');
+
+  const subjectLabel = category==='classroom' ? 'Class / Course' : category==='extracurricular' ? 'Activity / Club' : 'Area of Life';
+
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose}></div>
-      <div className="glass p-4 rounded z-50 w-96">
-        <h3 className="font-semibold mb-2">New Assignment</h3>
-        <input className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" placeholder="Title" value={title} onChange={e=>setTitle(e.target.value)} />
-        <div className="flex gap-2 mb-2">
-          <select className="flex-1 p-2 bg-transparent border border-white/5 rounded" value={subject} onChange={e=>setSubject(e.target.value)}>
-            <option>Accounting</option>
-            <option>Engineering</option>
-            <option>Finance</option>
-            <option>CS</option>
-            <option>Other</option>
-          </select>
-          <select className="w-28 p-2 bg-transparent border border-white/5 rounded" value={priority} onChange={e=>setPriority(e.target.value)}>
-            <option>High</option>
-            <option>Med</option>
-            <option>Low</option>
-          </select>
+    <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose}/>
+      <div className="glass rounded-xl z-50 w-full max-w-md p-5 space-y-4" style={{border:'1px solid rgba(255,255,255,0.08)'}}>
+        <h3 className="font-semibold">{task ? 'Edit Task' : 'New Task'}</h3>
+
+        <input className="w-full p-2.5 bg-transparent border border-white/5 rounded-lg text-sm focus:outline-none focus:border-indigo-500/50"
+          placeholder="Task title" value={title} onChange={e=>setTitle(e.target.value)}
+          onKeyDown={e=>{ if(e.key==='Enter' && title.trim()) onSave({title,category,subject,priority,dueDate,status,notes}); }} autoFocus />
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs mb-1" style={{color:'#64748b'}}>Category</label>
+            <select className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm"
+              value={category} onChange={e=>setCategory(e.target.value)}>
+              {TASK_CATEGORIES.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{color:'#64748b'}}>Priority</label>
+            <select className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm"
+              value={priority} onChange={e=>setPriority(e.target.value)}>
+              <option value="High">High</option>
+              <option value="Med">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{color:'#64748b'}}>{subjectLabel}</label>
+            <input className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm"
+              placeholder="Optional" value={subject} onChange={e=>setSubject(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{color:'#64748b'}}>Due Date</label>
+            <input type="date" className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm"
+              style={{colorScheme:'dark'}} value={dueDate} onChange={e=>setDueDate(e.target.value)} />
+          </div>
+          {task && (
+            <div className="col-span-2">
+              <label className="block text-xs mb-1" style={{color:'#64748b'}}>Status</label>
+              <select className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm"
+                value={status} onChange={e=>setStatus(e.target.value)}>
+                <option>To Do</option>
+                <option>In Progress</option>
+                <option>Done</option>
+              </select>
+            </div>
+          )}
+          <div className="col-span-2">
+            <label className="block text-xs mb-1" style={{color:'#64748b'}}>Notes</label>
+            <textarea className="w-full p-2 bg-transparent border border-white/5 rounded-lg text-sm resize-none"
+              rows={2} placeholder="Optional notes…" value={notes} onChange={e=>setNotes(e.target.value)} />
+          </div>
         </div>
-        <div className="flex justify-end gap-2">
-          <button className="px-3 py-1 rounded" onClick={onClose}>Cancel</button>
-          <button className="px-3 py-1 rounded bg-indigo-600" onClick={()=>onSave({title,subject,priority,status:'To Do'})}>Save</button>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button className="px-3 py-1.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)'}} onClick={onClose}>Cancel</button>
+          <button className="px-4 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white"
+            onClick={()=>{ if(title.trim()) onSave({title,category,subject,priority,dueDate,status,notes}); }}>
+            {task ? 'Save Changes' : 'Add Task'}
+          </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* -------------------- Tasks Voice Assistant -------------------- */
+function TasksAssistant({tasks, sort, setSort, filter, setFilter}){
+  const [open, setOpen] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [lastCmd, setLastCmd] = useState('');
+  const {speaking, speak, cancel} = useSpeaker();
+  const isMobile = useIsMobile();
+
+  const dueLabelFor = (task) => {
+    const d = formatDue(task.dueDate);
+    return d ? d.text : 'no due date';
+  };
+
+  const readList = (taskList, intro) => {
+    if(!taskList.length){ speak(intro+' No tasks found.'); return; }
+    const sorted = [...taskList].sort((a,b)=>taskUrgencyScore(a)-taskUrgencyScore(b));
+    const lines = sorted.map((t,i)=>{
+      const parts = [`${t.title}`];
+      if(t.subject) parts.push(t.subject);
+      parts.push(`${(t.priority||'Med').toLowerCase()} priority`);
+      if(t.dueDate) parts.push(dueLabelFor(t));
+      return parts.join(', ');
+    });
+    speak(`${intro} ${sorted.length} task${sorted.length>1?'s':''}. ${lines.join('. ')}.`);
+  };
+
+  const processCommand = (raw) => {
+    setLastCmd(raw);
+    const t = raw.toLowerCase();
+    const active = tasks.filter(x=>x.status!=='Done');
+    const now = new Date();
+
+    // Sort
+    if(/sort.*(priority|important)/.test(t))   { setSort('priority'); speak('Sorted by priority.'); return; }
+    if(/sort.*(due|date|deadline)/.test(t))     { setSort('due');      speak('Sorted by due date.'); return; }
+    if(/smart sort|sort smart|best order/.test(t)){ setSort('smart');  speak('Using smart sort.'); return; }
+
+    // Filter
+    if(/show.*(done|complete|finish)/.test(t))  { setFilter('done');   speak('Showing completed tasks.'); return; }
+    if(/show.*(active|pending|todo|open)/.test(t)){ setFilter('active'); speak('Showing active tasks.'); return; }
+    if(/show all/.test(t))                      { setFilter('all');    speak('Showing all tasks.'); return; }
+
+    // Overdue
+    if(/overdue|late|past due|behind/.test(t)){
+      const od = active.filter(x=>x.dueDate && new Date(x.dueDate)<now);
+      readList(od, od.length===0 ? '' : 'You have');
+      if(!od.length) speak('No overdue tasks. You\'re all caught up.');
+      return;
+    }
+
+    // Due today
+    if(/today|due today/.test(t)){
+      const todayEnd = new Date(now); todayEnd.setHours(23,59,59);
+      const todayStart = new Date(now); todayStart.setHours(0,0,0);
+      const tod = active.filter(x=>x.dueDate&&new Date(x.dueDate)>=todayStart&&new Date(x.dueDate)<=todayEnd);
+      readList(tod, tod.length===0 ? '' : 'Due today:');
+      if(!tod.length) speak('Nothing due today.');
+      return;
+    }
+
+    // Due this week
+    if(/this week|week/.test(t)){
+      const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate()+7);
+      const week = active.filter(x=>x.dueDate&&new Date(x.dueDate)<=weekEnd&&new Date(x.dueDate)>=now);
+      readList(week, `Due this week:`);
+      return;
+    }
+
+    // High priority
+    if(/high priority|urgent|important/.test(t)){
+      readList(active.filter(x=>x.priority==='High'), 'High priority tasks:');
+      return;
+    }
+
+    // Category reads
+    if(/classroom|class|school|course|homework|assignment/.test(t)){
+      readList(active.filter(x=>x.category==='classroom'), 'Classroom tasks:'); return;
+    }
+    if(/extracurricular|club|activity|sport|extra/.test(t)){
+      readList(active.filter(x=>x.category==='extracurricular'), 'Extracurricular tasks:'); return;
+    }
+    if(/personal|life|errand|habit/.test(t)){
+      readList(active.filter(x=>x.category==='personal'), 'Personal tasks:'); return;
+    }
+
+    // Summary / read all
+    if(/read|list|what|summary|how many|tell me|tasks/.test(t)){
+      if(!active.length){ speak('You have no active tasks right now.'); return; }
+      const od = active.filter(x=>x.dueDate&&new Date(x.dueDate)<now).length;
+      const bycat = TASK_CATEGORIES.map(c=>{
+        const n = active.filter(x=>x.category===c.id).length;
+        return n ? `${n} ${c.id}` : '';
+      }).filter(Boolean).join(', ');
+      const most = [...active].sort((a,b)=>taskUrgencyScore(a)-taskUrgencyScore(b))[0];
+      let msg = `You have ${active.length} active task${active.length>1?'s':''}: ${bycat}. `;
+      if(od) msg += `${od} are overdue. `;
+      if(most) msg += `Most urgent is ${most.title}${most.dueDate?', '+dueLabelFor(most):''}. `;
+      speak(msg);
+      return;
+    }
+
+    speak('Try saying: read my tasks, read classroom tasks, what\'s overdue, due today, sort by priority, or show done.');
+  };
+
+  const dict = useDictation((transcript)=>{ setListening(false); processCommand(transcript); });
+  const startListening = ()=>{ cancel(); dict.start(); setListening(true); };
+
+  return (
+    <div className="fixed z-40 flex flex-col items-end gap-2" style={{bottom: isMobile?'90px':'24px', right:'24px'}}>
+      {open && (
+        <div className="glass rounded-xl p-4 mb-1" style={{width:'280px',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 8px 32px rgba(0,0,0,0.5)'}}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="font-semibold text-sm">Task Assistant</span>
+            <button onClick={()=>setOpen(false)} style={{color:'#64748b',fontSize:'18px',lineHeight:1}}>×</button>
+          </div>
+          {lastCmd && (
+            <div className="text-xs px-2 py-1.5 rounded mb-3 italic" style={{background:'rgba(255,255,255,0.04)',color:'#64748b'}}>
+              "{lastCmd}"
+            </div>
+          )}
+          <div className="text-xs mb-3 leading-relaxed" style={{color:'#475569'}}>
+            Say: <span style={{color:'#818cf8'}}>"read my tasks"</span>, <span style={{color:'#818cf8'}}>"what's overdue"</span>, <span style={{color:'#818cf8'}}>"read classroom tasks"</span>, <span style={{color:'#818cf8'}}>"sort by priority"</span>
+          </div>
+          {speaking ? (
+            <button onClick={cancel} className="w-full py-2 rounded-lg text-sm font-medium"
+              style={{background:'rgba(248,113,113,0.15)',color:'#f87171',border:'1px solid rgba(248,113,113,0.3)'}}>
+              ■ Stop speaking
+            </button>
+          ) : (
+            <button onClick={startListening} className="w-full py-2 rounded-lg text-sm font-medium transition-all"
+              style={{background:listening?'rgba(99,102,241,0.3)':'rgba(99,102,241,0.15)',
+                      color:listening?'#c7d2fe':'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+              {listening ? '● Listening…' : '🎤 Speak a command'}
+            </button>
+          )}
+        </div>
+      )}
+      <button onClick={()=>setOpen(o=>!o)}
+        className="w-12 h-12 rounded-full flex items-center justify-center text-lg shadow-lg transition-all"
+        style={{background: open?'rgba(99,102,241,0.4)':'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                border:'1px solid rgba(99,102,241,0.4)',boxShadow:'0 4px 20px rgba(99,102,241,0.35)',
+                fontSize:'20px'}}>
+        {open ? '×' : '🎤'}
+      </button>
     </div>
   );
 }
@@ -1748,73 +2307,143 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
   const bottomRef = useRef(null);
+  const audioRef = useRef(null);
+  const speakGenRef = useRef(0);
   const isMobile = useIsMobile();
 
   useEffect(()=>{ ls(historyKey, messages); }, [messages]);
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages, typing]);
 
-  const speak = (txt) => {
-    if(!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
+  const stripMarkdown = (txt) => txt
+    .replace(/#{1,6}\s*/g,'')
+    .replace(/\*\*\*(.+?)\*\*\*/g,'$1').replace(/\*\*(.+?)\*\*/g,'$1').replace(/\*(.+?)\*/g,'$1')
+    .replace(/__(.+?)__/g,'$1').replace(/_(.+?)_/g,'$1').replace(/~~(.+?)~~/g,'$1')
+    .replace(/`{1,3}[^`]*`{1,3}/g,'').replace(/\[(.+?)\]\(.+?\)/g,'$1')
+    .replace(/^>\s*/gm,'').replace(/^[-*+]\s+/gm,'').replace(/^\d+\.\s+/gm,'')
+    .replace(/^-{3,}$/gm,'').replace(/→|←|↑|↓|▶|►/g,' ').replace(/\n{3,}/g,'\n\n').trim();
 
-    // Strip all markdown so it reads naturally out loud
-    const clean = txt
-      .replace(/#{1,6}\s*/g,'')           // headers
-      .replace(/\*\*\*(.+?)\*\*\*/g,'$1') // bold+italic
-      .replace(/\*\*(.+?)\*\*/g,'$1')     // bold
-      .replace(/\*(.+?)\*/g,'$1')         // italic
-      .replace(/__(.+?)__/g,'$1')         // bold underscore
-      .replace(/_(.+?)_/g,'$1')           // italic underscore
-      .replace(/~~(.+?)~~/g,'$1')         // strikethrough
-      .replace(/`{1,3}[^`]*`{1,3}/g,'')  // code
-      .replace(/\[(.+?)\]\(.+?\)/g,'$1') // links
-      .replace(/^>\s*/gm,'')             // blockquotes
-      .replace(/^[-*+]\s+/gm,'')        // unordered bullets
-      .replace(/^\d+\.\s+/gm,'')        // numbered lists
-      .replace(/^-{3,}$/gm,'')          // horizontal rules ---
-      .replace(/→|←|↑|↓|▶|►/g,' ')     // arrows
-      .replace(/\n{3,}/g,'\n\n')        // excess newlines
-      .trim();
+  // Split text into sentence-sized chunks (~200 chars max, break on sentence boundaries)
+  const splitSentences = (txt) => {
+    const raw = txt.match(/[^.!?]+[.!?]+(\s|$)?/g) || [txt];
+    const chunks = [];
+    let buf = '';
+    for(const s of raw){
+      buf += s;
+      if(buf.length >= 180){ chunks.push(buf.trim()); buf = ''; }
+    }
+    if(buf.trim()) chunks.push(buf.trim());
+    return chunks.length ? chunks : [txt];
+  };
 
+  const fetchTtsUrl = async (text, settings) => {
+    const provider = settings.ttsProvider || 'browser';
+    if(provider === 'elevenlabs' && settings.elevenLabsKey){
+      const voiceId = settings.elevenLabsVoice || '21m00Tcm4TlvDq8ikWAM';
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method:'POST',
+        headers:{'xi-api-key':settings.elevenLabsKey,'Content-Type':'application/json'},
+        body:JSON.stringify({text,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.45,similarity_boost:0.75,style:0.3}})
+      });
+      if(!res.ok) throw new Error('ElevenLabs error '+res.status);
+      return URL.createObjectURL(await res.blob());
+    }
+    if(provider === 'openai' && settings.openaiTtsKey){
+      const res = await fetch('https://api.openai.com/v1/audio/speech',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+settings.openaiTtsKey,'Content-Type':'application/json'},
+        body:JSON.stringify({model:'tts-1',voice:settings.openaiTtsVoice||'nova',input:text,speed:1.25})
+      });
+      if(!res.ok) throw new Error('OpenAI TTS error '+res.status);
+      return URL.createObjectURL(await res.blob());
+    }
+    return null;
+  };
+
+  const playUrl = (url, gen) => new Promise(resolve=>{
+    if(speakGenRef.current !== gen){ URL.revokeObjectURL(url); resolve(); return; }
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    const done = ()=>{ URL.revokeObjectURL(url); audioRef.current = null; resolve(); };
+    audio.onended = done; audio.onerror = done;
+    audio.play().catch(done);
+  });
+
+  const speak = async (txt) => {
+    const gen = ++speakGenRef.current;
+    const clean = stripMarkdown(txt);
+    const settings = ls('magverse:v1')?.settings || {};
+    const provider = settings.ttsProvider || 'browser';
+
+    if(audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
+    window.speechSynthesis?.cancel();
+    setSpeaking(true);
+
+    try {
+      if((provider==='elevenlabs' && settings.elevenLabsKey) || (provider==='openai' && settings.openaiTtsKey)){
+        const chunks = splitSentences(clean);
+        // Pre-fetch first two chunks in parallel, then pipeline the rest
+        let nextFetchPromise = fetchTtsUrl(chunks[0], settings);
+        if(chunks.length > 1) {
+          let prefetch = fetchTtsUrl(chunks[1], settings);
+          for(let i = 0; i < chunks.length; i++){
+            if(speakGenRef.current !== gen) break;
+            const url = await nextFetchPromise;
+            nextFetchPromise = (i+2 < chunks.length) ? fetchTtsUrl(chunks[i+2], settings) : null;
+            // Swap in the already-fetching next chunk
+            if(i === 0) nextFetchPromise = prefetch;
+            else if(i+2 < chunks.length) nextFetchPromise = fetchTtsUrl(chunks[i+2], settings);
+            await playUrl(url, gen);
+          }
+        } else {
+          const url = await nextFetchPromise;
+          await playUrl(url, gen);
+        }
+        if(speakGenRef.current === gen) setSpeaking(false);
+        return;
+      }
+    } catch(e){
+      console.warn('TTS API failed, falling back to browser TTS:', e.message);
+    }
+
+    // Browser TTS fallback
+    if(speakGenRef.current !== gen){ setSpeaking(false); return; }
+    if(!window.speechSynthesis){ setSpeaking(false); return; }
     const doSpeak = () => {
+      if(speakGenRef.current !== gen) return;
       const voices = window.speechSynthesis.getVoices();
-      // Priority: best natural/neural voices first
-      const savedVoiceName = ls('magverse:v1')?.settings?.ttsVoice || '';
+      const savedVoiceName = settings.ttsVoice || '';
       const ranked = [
         v => savedVoiceName && v.name === savedVoiceName,
-        v => v.name === 'Samantha',
-        v => v.name === 'Karen',
-        v => v.name === 'Daniel',
+        v => v.name === 'Samantha', v => v.name === 'Karen', v => v.name === 'Daniel',
         v => v.name.includes('Aria') && v.name.includes('Natural'),
         v => v.name.includes('Jenny') && v.name.includes('Natural'),
         v => v.name.includes('Guy') && v.name.includes('Natural'),
-        v => v.name.includes('Microsoft Aria'),
-        v => v.name.includes('Microsoft Jenny'),
+        v => v.name.includes('Microsoft Aria'), v => v.name.includes('Microsoft Jenny'),
         v => v.name.includes('Google US English'),
         v => v.lang==='en-US' && v.localService===false,
-        v => v.lang==='en-US',
-        v => v.lang.startsWith('en'),
+        v => v.lang==='en-US', v => v.lang.startsWith('en'),
       ];
       let voice = null;
       for(const test of ranked){ voice = voices.find(test); if(voice) break; }
-
       const utt = new SpeechSynthesisUtterance(clean);
       if(voice) utt.voice = voice;
-      utt.rate = 0.90; utt.pitch = 1.0; utt.volume = 1.0;
+      utt.rate = 1.15; utt.pitch = 1.0; utt.volume = 1.0;
       utt.onstart = ()=>setSpeaking(true);
       utt.onend = ()=>setSpeaking(false);
       utt.onerror = ()=>setSpeaking(false);
       window.speechSynthesis.speak(utt);
     };
-
     if(window.speechSynthesis.getVoices().length === 0){
       window.speechSynthesis.addEventListener('voiceschanged', doSpeak, {once:true});
-    } else {
-      doSpeak();
-    }
+    } else { doSpeak(); }
   };
 
-  const cancelSpeak = () => { window.speechSynthesis?.cancel(); setSpeaking(false); };
+  const cancelSpeak = () => {
+    speakGenRef.current++;
+    if(audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+  };
 
   const sendMsg = async (msgText) => {
     const content = (msgText||text).trim();
@@ -1822,19 +2451,24 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
     const userMsg = {id:uid(), role:'user', text:content, at:new Date().toISOString()};
     setMessages(m=>[...m, userMsg]); setText(''); setTyping(true);
     try{
-      const apiKey = (ls('magverse:v1')?.settings?.apiKey) || '';
+      const savedSettings = ls('magverse:v1')?.settings || {};
+      const apiKey = savedSettings.apiKey || '';
       if(!apiKey){
         await new Promise(r=>setTimeout(r,600));
         const reply = 'Add your Anthropic API key in Settings to enable real AI responses.';
         setMessages(m=>[...m, {id:uid(), role:'ai', text:reply, at:new Date().toISOString()}]);
         setTyping(false); return;
       }
-      // Build conversation history — append plain-text reminder to every user turn
+
       const PLAIN_REMINDER = ' (Reply in plain spoken sentences only. Absolutely no markdown, no asterisks, no bullet points, no headers, no arrows, no bold, no numbered lists.)';
       const history = [...messages, userMsg].map(m=>({
         role: m.role==='user' ? 'user' : 'assistant',
         content: m.role==='user' ? m.text + PLAIN_REMINDER : m.text,
       }));
+
+      const useApiTts = (savedSettings.ttsProvider==='openai' && savedSettings.openaiTtsKey) ||
+                        (savedSettings.ttsProvider==='elevenlabs' && savedSettings.elevenLabsKey);
+
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method:'POST',
         headers:{
@@ -1846,24 +2480,89 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 1024,
+          ...(useApiTts && {stream: true}),
           system: hub.system,
           messages: history,
         })
       });
-      const j = await resp.json();
-      if(j.error) throw new Error(j.error.message || 'API error');
-      const raw = j?.content?.[0]?.text || '(no response)';
-      // Strip any residual markdown from display too
-      const out = raw
+
+      if(!resp.ok){ const j=await resp.json(); throw new Error(j.error?.message||'API error'); }
+
+      const cleanText = (raw) => raw
         .replace(/#{1,6}\s*/g,'').replace(/\*\*\*(.+?)\*\*\*/g,'$1').replace(/\*\*(.+?)\*\*/g,'$1')
         .replace(/\*(.+?)\*/g,'$1').replace(/__(.+?)__/g,'$1').replace(/_(.+?)_/g,'$1')
         .replace(/`{1,3}[^`]*`{1,3}/g,'').replace(/\[(.+?)\]\(.+?\)/g,'$1')
         .replace(/^>\s*/gm,'').replace(/^[-*+]\s+/gm,'').replace(/^\d+\.\s+/gm,'')
         .replace(/^-{3,}$/gm,'').replace(/→|←|↑|↓/g,'').replace(/\|.+\|/g,'')
         .replace(/\n{3,}/g,'\n\n').trim();
-      const bot = {id:uid(), role:'ai', text:out, at:new Date().toISOString()};
-      setMessages(m=>[...m, bot]);
-      speak(out);
+
+      if(useApiTts){
+        // ── Streaming path: pipe sentences to TTS as Claude generates them ──
+        const gen = ++speakGenRef.current;
+        if(audioRef.current){ audioRef.current.pause(); audioRef.current = null; }
+        setSpeaking(true);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let fullRaw = '';
+        let sentenceBuf = '';
+        let playChain = Promise.resolve(); // sequential playback promise chain
+        const botId = uid();
+        setTyping(false);
+        setMessages(m=>[...m, {id:botId, role:'ai', text:'…', at:new Date().toISOString()}]);
+
+        const enqueueSentence = (sentence) => {
+          const s = sentence.trim();
+          if(!s || speakGenRef.current !== gen) return;
+          const urlPromise = fetchTtsUrl(s, savedSettings);
+          playChain = playChain.then(async ()=>{
+            if(speakGenRef.current !== gen) return;
+            try{ const url = await urlPromise; await playUrl(url, gen); } catch(e){}
+          });
+        };
+
+        try{
+          while(true){
+            const {done, value} = await reader.read();
+            if(done) break;
+            const lines = decoder.decode(value).split('\n');
+            for(const line of lines){
+              if(!line.startsWith('data: ')) continue;
+              const data = line.slice(6).trim();
+              if(data==='[DONE]') break;
+              try{
+                const ev = JSON.parse(data);
+                if(ev.type==='content_block_delta' && ev.delta?.type==='text_delta'){
+                  const token = ev.delta.text;
+                  fullRaw += token;
+                  sentenceBuf += token;
+                  // Fire TTS as soon as we hit a sentence boundary
+                  const m = sentenceBuf.match(/^([\s\S]*[.!?])\s+([\s\S]*)$/);
+                  if(m){ enqueueSentence(m[1]); sentenceBuf = m[2]; }
+                  // Update displayed text live
+                  const live = cleanText(fullRaw);
+                  setMessages(msgs => msgs.map(x => x.id===botId ? {...x, text: live||'…'} : x));
+                }
+              }catch(e){}
+            }
+          }
+        }finally{ reader.cancel?.(); }
+
+        if(sentenceBuf.trim()) enqueueSentence(sentenceBuf);
+        const finalOut = cleanText(fullRaw) || '(no response)';
+        setMessages(msgs => msgs.map(x => x.id===botId ? {...x, text: finalOut} : x));
+        playChain.then(()=>{ if(speakGenRef.current===gen) setSpeaking(false); });
+
+      } else {
+        // ── Non-streaming path (browser TTS or no TTS provider) ──
+        const j = await resp.json();
+        if(j.error) throw new Error(j.error.message||'API error');
+        const out = cleanText(j?.content?.[0]?.text || '(no response)');
+        setMessages(m=>[...m, {id:uid(), role:'ai', text:out, at:new Date().toISOString()}]);
+        setTyping(false);
+        speak(out);
+        return;
+      }
     }catch(e){
       const errMsg = 'Error: '+String(e.message||e);
       setMessages(m=>[...m, {id:uid(), role:'ai', text:errMsg, at:new Date().toISOString()}]);
@@ -1954,12 +2653,31 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
 }
 
 /* -------------------- Settings Panel -------------------- */
+const ELEVENLABS_VOICES = [
+  {id:'21m00Tcm4TlvDq8ikWAM', name:'Rachel (warm, American female)'},
+  {id:'AZnzlk1XvdvUeBnXmlld', name:'Domi (strong, American female)'},
+  {id:'EXAVITQu4vr4xnSDxMaL', name:'Bella (soft, American female)'},
+  {id:'ErXwobaYiN019PkySvjV', name:'Antoni (well-rounded, American male)'},
+  {id:'MF3mGyEYCl7XYWbV9V6O', name:'Elli (emotional, American female)'},
+  {id:'TxGEqnHWrfWFTfGW9XjX', name:'Josh (deep, American male)'},
+  {id:'VR6AewLTigWG4xSOukaG', name:'Arnold (crisp, American male)'},
+  {id:'pNInz6obpgDQGcFmaJgB', name:'Adam (deep, American male)'},
+  {id:'yoZ06aMxZJJ28mfd3POQ', name:'Sam (raspy, American male)'},
+];
+
 function SettingsPanel({data, setData, toasts}){
-  const [apiKey, setApiKey] = useState(data.settings?.apiKey || '');
-  const [accent, setAccent] = useState(data.settings?.accent || 'indigo');
-  const [name, setName] = useState(data.settings?.userName || 'You');
-  const [ttsVoice, setTtsVoice] = useState(data.settings?.ttsVoice || '');
+  const s = data.settings || {};
+  const [apiKey, setApiKey] = useState(s.apiKey || '');
+  const [accent, setAccent] = useState(s.accent || 'indigo');
+  const [name, setName] = useState(s.userName || 'You');
+  const [ttsProvider, setTtsProvider] = useState(s.ttsProvider || 'browser');
+  const [ttsVoice, setTtsVoice] = useState(s.ttsVoice || '');
+  const [elevenLabsKey, setElevenLabsKey] = useState(s.elevenLabsKey || '');
+  const [elevenLabsVoice, setElevenLabsVoice] = useState(s.elevenLabsVoice || '21m00Tcm4TlvDq8ikWAM');
+  const [openaiTtsKey, setOpenaiTtsKey] = useState(s.openaiTtsKey || '');
+  const [openaiTtsVoice, setOpenaiTtsVoice] = useState(s.openaiTtsVoice || 'nova');
   const [availableVoices, setAvailableVoices] = useState([]);
+  const [testLoading, setTestLoading] = useState(false);
 
   useEffect(()=>{
     const load = ()=>{
@@ -1971,65 +2689,153 @@ function SettingsPanel({data, setData, toasts}){
     return ()=>window.speechSynthesis?.removeEventListener('voiceschanged', load);
   },[]);
 
-  const testVoice = ()=>{
-    if(!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance("Hey, this is what I sound like. Pretty natural, right?");
-    const voice = availableVoices.find(v=>v.name===ttsVoice);
-    if(voice) utt.voice = voice;
-    utt.rate = 0.90; utt.pitch = 1.0;
-    window.speechSynthesis.speak(utt);
+  const testVoice = async ()=>{
+    const testText = "Hey, this is what I sound like. Pretty natural, right?";
+    setTestLoading(true);
+    try {
+      if(ttsProvider === 'elevenlabs' && elevenLabsKey){
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoice}`, {
+          method:'POST',
+          headers:{'xi-api-key':elevenLabsKey,'Content-Type':'application/json'},
+          body:JSON.stringify({text:testText,model_id:'eleven_turbo_v2_5',voice_settings:{stability:0.45,similarity_boost:0.75,style:0.3}})
+        });
+        if(!res.ok) throw new Error('ElevenLabs error '+res.status);
+        const blob = await res.blob();
+        new Audio(URL.createObjectURL(blob)).play();
+      } else if(ttsProvider === 'openai' && openaiTtsKey){
+        const res = await fetch('https://api.openai.com/v1/audio/speech',{
+          method:'POST',
+          headers:{'Authorization':'Bearer '+openaiTtsKey,'Content-Type':'application/json'},
+          body:JSON.stringify({model:'tts-1-hd',voice:openaiTtsVoice,input:testText})
+        });
+        if(!res.ok) throw new Error('OpenAI TTS error '+res.status);
+        const blob = await res.blob();
+        new Audio(URL.createObjectURL(blob)).play();
+      } else {
+        if(!window.speechSynthesis) return;
+        window.speechSynthesis.cancel();
+        const utt = new SpeechSynthesisUtterance(testText);
+        const voice = availableVoices.find(v=>v.name===ttsVoice);
+        if(voice) utt.voice = voice;
+        utt.rate = 1.15; utt.pitch = 1.0;
+        window.speechSynthesis.speak(utt);
+      }
+    } catch(e){ toasts.push('Test failed: '+e.message); }
+    setTestLoading(false);
   };
 
-  const save = ()=>{ setData(d=>({...d, settings:{...d.settings, apiKey,accent,userName:name,avatarInitial:(name[0]||'Y').toUpperCase(),ttsVoice}})); toasts.push('Settings saved'); };
+  const save = ()=>{
+    setData(d=>({...d, settings:{...d.settings, apiKey, accent, userName:name, avatarInitial:(name[0]||'Y').toUpperCase(),
+      ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice}}));
+    toasts.push('Settings saved');
+  };
   const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='magverse-export.json'; a.click(); URL.revokeObjectURL(url); };
   const clearAll = ()=>{ if(!confirm('Clear all data? This cannot be undone.')) return; localStorage.clear(); location.reload(); };
   const resetHubs = ()=>{ if(!confirm('Reset all hub prompts to defaults? Custom edits will be lost.')) return; setData(d=>({...d, hubs:DEFAULT_HUBS()})); toasts.push('Hub prompts reset'); };
   return (
-    <div className="glass p-4 rounded border-subtle w-full max-w-2xl">
-      <h2 className="text-xl font-semibold mb-4">Settings</h2>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs opacity-80">Anthropic API Key</label>
-          <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-..." />
-        </div>
-        <div>
-          <label className="block text-xs opacity-80">Accent Preset</label>
-          <select className="w-full p-2 bg-transparent border border-white/5 rounded" value={accent} onChange={e=>setAccent(e.target.value)}>
-            <option value="indigo">Indigo</option>
-            <option value="violet">Violet</option>
-            <option value="cyan">Cyan</option>
-            <option value="rose">Rose</option>
-            <option value="amber">Amber</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs opacity-80">Name</label>
-          <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={name} onChange={e=>setName(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-xs opacity-80">Avatar Initial</label>
-          <div className="w-12 h-12 rounded bg-white/5 flex items-center justify-center">{(name[0]||'Y').toUpperCase()}</div>
-        </div>
-        <div className="col-span-2">
-          <label className="block text-xs opacity-80 mb-1">Voice for AI Responses</label>
-          <div className="flex gap-2">
-            <select className="flex-1 p-2 bg-transparent border border-white/5 rounded text-sm" value={ttsVoice} onChange={e=>setTtsVoice(e.target.value)}>
-              <option value="">(Auto — best available)</option>
-              {availableVoices.map(v=>(
-                <option key={v.name} value={v.name}>{v.name} {v.localService?'':'🌐'}</option>
-              ))}
-            </select>
-            <button onClick={testVoice} className="px-3 py-1 rounded text-sm" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>▶ Test</button>
+    <div className="glass p-4 rounded border-subtle w-full max-w-2xl space-y-5">
+      <h2 className="text-xl font-semibold">Settings</h2>
+
+      {/* General */}
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>General</div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Anthropic API Key</label>
+            <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-..." />
           </div>
-          <p className="text-xs mt-1" style={{color:'#334155'}}>🌐 = online (higher quality) · For best results on Windows, install Microsoft Neural voices in System Settings → Speech</p>
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Accent Preset</label>
+            <select className="w-full p-2 bg-transparent border border-white/5 rounded" value={accent} onChange={e=>setAccent(e.target.value)}>
+              <option value="indigo">Indigo</option><option value="violet">Violet</option>
+              <option value="cyan">Cyan</option><option value="rose">Rose</option><option value="amber">Amber</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Name</label>
+            <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={name} onChange={e=>setName(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Avatar Initial</label>
+            <div className="w-12 h-12 rounded bg-white/5 flex items-center justify-center">{(name[0]||'Y').toUpperCase()}</div>
+          </div>
         </div>
       </div>
-      <div className="flex gap-2 mt-4">
-        <button className="px-3 py-1 rounded bg-indigo-600" onClick={save}>Save</button>
-        <button className="px-3 py-1 rounded" onClick={exportAll}>Export JSON</button>
-        <button className="px-3 py-1 rounded" onClick={resetHubs} style={{background:'rgba(99,102,241,0.3)',color:'#a5b4fc'}}>Reset Hub Prompts</button>
-        <button className="px-3 py-1 rounded bg-red-600" onClick={clearAll}>Clear All Data</button>
+
+      {/* TTS */}
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Voice for AI Responses</div>
+        <div className="mb-3">
+          <label className="block text-xs opacity-80 mb-1">Provider</label>
+          <select className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" value={ttsProvider} onChange={e=>setTtsProvider(e.target.value)}>
+            <option value="browser">Browser TTS (built-in, free)</option>
+            <option value="elevenlabs">ElevenLabs (most natural — requires API key)</option>
+            <option value="openai">OpenAI TTS (very natural — requires API key)</option>
+          </select>
+        </div>
+
+        {ttsProvider === 'browser' && (
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Browser Voice</label>
+            <div className="flex gap-2">
+              <select className="flex-1 p-2 bg-transparent border border-white/5 rounded text-sm" value={ttsVoice} onChange={e=>setTtsVoice(e.target.value)}>
+                <option value="">(Auto — best available)</option>
+                {availableVoices.map(v=><option key={v.name} value={v.name}>{v.name} {v.localService?'':'🌐'}</option>)}
+              </select>
+            </div>
+            <p className="text-xs mt-1" style={{color:'#334155'}}>On Windows: install Microsoft Neural voices in System Settings → Time & Language → Speech for best quality.</p>
+          </div>
+        )}
+
+        {ttsProvider === 'elevenlabs' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs opacity-80 mb-1">ElevenLabs API Key</label>
+              <input className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" value={elevenLabsKey} onChange={e=>setElevenLabsKey(e.target.value)} placeholder="Free tier: 10k chars/month · elevenlabs.io" />
+            </div>
+            <div>
+              <label className="block text-xs opacity-80 mb-1">Voice</label>
+              <select className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" value={elevenLabsVoice} onChange={e=>setElevenLabsVoice(e.target.value)}>
+                {ELEVENLABS_VOICES.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {ttsProvider === 'openai' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs opacity-80 mb-1">OpenAI API Key</label>
+              <input className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" value={openaiTtsKey} onChange={e=>setOpenaiTtsKey(e.target.value)} placeholder="sk-..." />
+            </div>
+            <div>
+              <label className="block text-xs opacity-80 mb-1">Voice</label>
+              <select className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" value={openaiTtsVoice} onChange={e=>setOpenaiTtsVoice(e.target.value)}>
+                <option value="nova">Nova (upbeat, female — recommended)</option>
+                <option value="shimmer">Shimmer (expressive, female)</option>
+                <option value="alloy">Alloy (neutral)</option>
+                <option value="echo">Echo (smooth, male)</option>
+                <option value="fable">Fable (expressive, British male)</option>
+                <option value="onyx">Onyx (deep, male)</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3">
+          <button onClick={testVoice} disabled={testLoading}
+            className="px-3 py-1.5 rounded text-sm font-medium"
+            style={{background:'rgba(99,102,241,0.2)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+            {testLoading ? 'Loading…' : '▶ Test Voice'}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 pt-2 border-t" style={{borderColor:'rgba(255,255,255,0.05)'}}>
+        <button className="px-3 py-1 rounded bg-indigo-600 text-white text-sm font-medium" onClick={save}>Save Settings</button>
+        <button className="px-3 py-1 rounded text-sm" style={{background:'rgba(255,255,255,0.05)'}} onClick={exportAll}>Export JSON</button>
+        <button className="px-3 py-1 rounded text-sm" onClick={resetHubs} style={{background:'rgba(99,102,241,0.2)',color:'#a5b4fc'}}>Reset Hub Prompts</button>
+        <button className="px-3 py-1 rounded bg-red-600 text-white text-sm" onClick={clearAll}>Clear All Data</button>
       </div>
     </div>
   );
