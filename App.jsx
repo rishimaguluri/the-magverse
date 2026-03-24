@@ -34,7 +34,8 @@ const defaultState = () => ({
   journals: [],
   habits: [],
   social: [],
-  hubs: DEFAULT_HUBS()
+  hubs: DEFAULT_HUBS(),
+  career: { contacts: [], questions: [], applications: [] }
 });
 
 function useLocalState(key, initial) {
@@ -97,6 +98,7 @@ function App(){
             {active==='notes' && <NotesPanel data={data} setData={setData} toasts={toasts} />}
             {active==='chathubs' && <ChatHubsPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='settings' && <SettingsPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='career' && <CareerPanel data={data} setData={setData} toasts={toasts} />}
           </div>
         </main>
       </div>
@@ -588,6 +590,7 @@ function BottomNav({active, setActive}){
   const items = [
     {id:'schedule',     label:'Schedule', icon:IconCalendar},
     {id:'assignments',  label:'Tasks',    icon:IconKanban},
+    {id:'career',       label:'Career',   icon:IconBriefcase},
     {id:'gym',          label:'Gym',      icon:IconDumbbell},
     {id:'social',       label:'Social',   icon:IconUsers},
     {id:'notes',        label:'Notes',    icon:IconNotes},
@@ -613,6 +616,7 @@ function Sidebar({collapsed, setCollapsed, active, setActive}){
   const items = [
     {id:'schedule', label:'Schedule', icon:IconCalendar},
     {id:'assignments', label:'Tasks', icon:IconKanban},
+    {id:'career', label:'Career', icon:IconBriefcase},
     {id:'gym', label:'Gym', icon:IconDumbbell},
     {id:'social', label:'Social', icon:IconUsers},
     {id:'notes', label:'Notes', icon:IconNotes},
@@ -3247,6 +3251,554 @@ function IconChat(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="n
 function IconGear(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 0 1 2.27 17.9l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L4.21 4.9A2 2 0 0 1 7 2.27l.06.06a1.65 1.65 0 0 0 1.82.33h.09A1.65 1.65 0 0 0 10 2.27V2a2 2 0 0 1 4 0v.09c.15.37.44.7.82.92h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06A2 2 0 0 1 19.73 6l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09c.22.38.56.69.92.82H20a2 2 0 0 1 0 4h-.09c-.37.15-.7.44-.92.82v.09z" /></svg> }
 function IconMic(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 1v11" /><path d="M19 11v1a7 7 0 0 1-14 0v-1" /><path d="M8 21h8" /></svg> }
 function IconNotes(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> }
+function IconBriefcase(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/><path d="M2 12h20"/></svg> }
+
+/* -------------------- Career Panel -------------------- */
+
+const KANBAN_COLS = [
+  {id:'wishlist',     label:'Wishlist',      color:'#6366f1'},
+  {id:'applied',      label:'Applied',       color:'#3b82f6'},
+  {id:'phone_screen', label:'Phone Screen',  color:'#8b5cf6'},
+  {id:'interview',    label:'Interview',     color:'#f59e0b'},
+  {id:'offer',        label:'Offer',         color:'#10b981'},
+  {id:'rejected',     label:'Rejected',      color:'#ef4444'},
+];
+
+const Q_CATEGORIES = ['Leadership','Teamwork','Conflict','Problem Solving','Communication','Initiative','Adaptability','Other'];
+
+const DEFAULT_QUESTIONS = [
+  {id:'dq1', question:'Tell me about a time you led a team through a challenge.', category:'Leadership', situation:'', task:'', action:'', result:'', practiced:false},
+  {id:'dq2', question:'Describe a conflict with a coworker and how you resolved it.', category:'Conflict', situation:'', task:'', action:'', result:'', practiced:false},
+  {id:'dq3', question:'Give an example of a time you had to learn something quickly.', category:'Adaptability', situation:'', task:'', action:'', result:'', practiced:false},
+  {id:'dq4', question:'Tell me about a project you led from start to finish.', category:'Leadership', situation:'', task:'', action:'', result:'', practiced:false},
+  {id:'dq5', question:'Describe a time when you worked with a difficult team member.', category:'Teamwork', situation:'', task:'', action:'', result:'', practiced:false},
+];
+
+function followUpStatus(lastContacted, followUpDays=14){
+  if(!lastContacted) return {color:'#64748b', label:'Never contacted', urgent:false};
+  const days = Math.floor((Date.now()-new Date(lastContacted).getTime())/86400000);
+  if(days > followUpDays)         return {color:'#ef4444', label:`${days}d ago — overdue`, urgent:true};
+  if(days > followUpDays * 0.6)   return {color:'#f59e0b', label:`${days}d ago — follow up soon`, urgent:false};
+  return {color:'#10b981', label:`${days}d ago`, urgent:false};
+}
+
+function CareerPanel({data, setData, toasts}){
+  const [tab, setTab] = useState('overview');
+  const career = data.career || {contacts:[], questions:DEFAULT_QUESTIONS, applications:[]};
+
+  const setCareer = (updater) => {
+    setData(d => {
+      const cur = d.career || {contacts:[], questions:DEFAULT_QUESTIONS, applications:[]};
+      const next = typeof updater === 'function' ? updater(cur) : updater;
+      return {...d, career: next};
+    });
+  };
+
+  const addContact = (c) => { setCareer(cr=>({...cr, contacts:[...cr.contacts,{...c,id:uid()}]})); toasts.push('Contact added'); };
+  const updateContact = (id, patch) => setCareer(cr=>({...cr, contacts:cr.contacts.map(c=>c.id===id?{...c,...patch}:c)}));
+  const deleteContact = (id) => { setCareer(cr=>({...cr, contacts:cr.contacts.filter(c=>c.id!==id)})); toasts.push('Contact removed'); };
+
+  const addApp = (a) => { setCareer(cr=>({...cr, applications:[...cr.applications,{...a,id:uid()}]})); toasts.push('Application added'); };
+  const updateApp = (id, patch) => setCareer(cr=>({...cr, applications:cr.applications.map(a=>a.id===id?{...a,...patch}:a)}));
+  const deleteApp = (id) => { setCareer(cr=>({...cr, applications:cr.applications.filter(a=>a.id!==id)})); toasts.push('Application removed'); };
+
+  const addQ = (q) => setCareer(cr=>({...cr, questions:[...(cr.questions||[]),{...q,id:uid()}]}));
+  const updateQ = (id, patch) => setCareer(cr=>({...cr, questions:(cr.questions||[]).map(q=>q.id===id?{...q,...patch}:q)}));
+  const deleteQ = (id) => setCareer(cr=>({...cr, questions:(cr.questions||[]).filter(q=>q.id!==id)}));
+
+  const TABS = [{id:'overview',label:'Overview'},{id:'network',label:'Network'},{id:'applications',label:'Applications'},{id:'prep',label:'Interview Prep'}];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Internship & Career</h2>
+          <p className="text-xs mt-0.5" style={{color:'var(--muted)'}}>Track applications, network, and prep</p>
+        </div>
+      </div>
+      <div className="flex gap-1 p-1 rounded-xl mb-6" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',overflowX:'auto',width:'fit-content',maxWidth:'100%'}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap"
+            style={tab===t.id?{background:'rgba(255,255,255,0.1)',color:'#e2e8f0'}:{color:'#64748b'}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab==='overview'     && <CareerOverview career={career} />}
+      {tab==='network'      && <NetworkTracker contacts={career.contacts||[]} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
+      {tab==='applications' && <AppPipeline applications={career.applications||[]} addApp={addApp} updateApp={updateApp} deleteApp={deleteApp} />}
+      {tab==='prep'         && <InterviewPrep questions={career.questions||DEFAULT_QUESTIONS} addQ={addQ} updateQ={updateQ} deleteQ={deleteQ} />}
+    </div>
+  );
+}
+
+/* ---- Career Overview ---- */
+function CareerOverview({career}){
+  const apps = career.applications||[];
+  const contacts = career.contacts||[];
+  const now = Date.now();
+  const total = apps.length;
+  const applied = apps.filter(a=>a.status!=='wishlist').length;
+  const responses = apps.filter(a=>['phone_screen','interview','offer'].includes(a.status)).length;
+  const interviews = apps.filter(a=>a.status==='interview').length;
+  const offers = apps.filter(a=>a.status==='offer').length;
+  const responseRate = applied>0?Math.round(responses/applied*100):0;
+  const overdueContacts = contacts.filter(c=>{
+    if(!c.lastContacted) return false;
+    return Math.floor((now-new Date(c.lastContacted).getTime())/86400000)>(c.followUpDays||14);
+  });
+  const neverContacted = contacts.filter(c=>!c.lastContacted);
+  const reminders = [...overdueContacts, ...neverContacted].slice(0,5);
+  const stats = [
+    {label:'Total Applications',value:total,color:'#6366f1'},
+    {label:'Response Rate',value:`${responseRate}%`,color:'#3b82f6'},
+    {label:'Interviews',value:interviews,color:'#f59e0b'},
+    {label:'Offers',value:offers,color:'#10b981'},
+  ];
+  return (
+    <div className="space-y-6">
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:'12px'}}>
+        {stats.map(s=>(
+          <div key={s.label} className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-3xl font-bold mb-1" style={{color:s.color}}>{s.value}</div>
+            <div className="text-xs" style={{color:'#64748b'}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      {reminders.length>0 && (
+        <div className="rounded-xl p-4" style={{background:'rgba(239,68,68,0.07)',border:'1px solid rgba(239,68,68,0.2)'}}>
+          <div className="text-sm font-semibold mb-3" style={{color:'#fca5a5'}}>⚠ Follow-up Reminders ({reminders.length})</div>
+          <div className="space-y-2">
+            {reminders.map(c=>{
+              const st=followUpStatus(c.lastContacted,c.followUpDays);
+              return (
+                <div key={c.id} className="flex items-center justify-between text-sm">
+                  <div><span className="font-medium" style={{color:'#e2e8f0'}}>{c.name}</span><span style={{color:'#64748b'}}> · {c.company}</span></div>
+                  <span className="text-xs px-2 py-0.5 rounded-full" style={{background:`${st.color}22`,color:st.color}}>{st.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)',background:'rgba(255,255,255,0.02)'}}>
+        <div className="text-sm font-semibold mb-3">Application Pipeline</div>
+        <div className="space-y-2">
+          {KANBAN_COLS.map(col=>{
+            const count=apps.filter(a=>a.status===col.id).length;
+            const pct=total>0?(count/total*100):0;
+            return (
+              <div key={col.id} className="flex items-center gap-3">
+                <div className="text-xs flex-shrink-0" style={{color:'#64748b',width:'96px'}}>{col.label}</div>
+                <div className="flex-1 h-2 rounded-full" style={{background:'rgba(255,255,255,0.05)'}}>
+                  <div className="h-2 rounded-full transition-all" style={{width:`${pct}%`,background:col.color}}/>
+                </div>
+                <div className="text-xs w-5 text-right" style={{color:'#64748b'}}>{count}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Network Tracker ---- */
+function NetworkTracker({contacts, addContact, updateContact, deleteContact}){
+  const [search, setSearch] = useState('');
+  const [filterOverdue, setFilterOverdue] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({name:'',company:'',role:'',howMet:'',linkedIn:'',lastContacted:'',followUpDays:14,notes:''});
+  const isMobile = useIsMobile();
+
+  const filtered = contacts.filter(c=>{
+    const q = search.toLowerCase();
+    if(q && !c.name.toLowerCase().includes(q) && !(c.company||'').toLowerCase().includes(q)) return false;
+    if(filterOverdue){
+      const st = followUpStatus(c.lastContacted, c.followUpDays);
+      return st.urgent || !c.lastContacted;
+    }
+    return true;
+  });
+
+  const openAdd = () => { setForm({name:'',company:'',role:'',howMet:'',linkedIn:'',lastContacted:'',followUpDays:14,notes:''}); setEditId(null); setShowModal(true); };
+  const openEdit = (c) => { setForm({...c}); setEditId(c.id); setShowModal(true); };
+  const save = () => {
+    if(!form.name.trim()) return;
+    if(editId) updateContact(editId, form); else addContact(form);
+    setShowModal(false);
+  };
+
+  return (
+    <div>
+      <div className={`flex ${isMobile?'flex-col gap-2':'items-center gap-3'} mb-5`}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or company…"
+          className="flex-1 px-3 py-2 rounded-lg text-sm bg-transparent"
+          style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+        <button onClick={()=>setFilterOverdue(f=>!f)}
+          className="px-3 py-2 rounded-lg text-sm font-medium transition-all"
+          style={filterOverdue?{background:'rgba(239,68,68,0.15)',color:'#fca5a5',border:'1px solid rgba(239,68,68,0.3)'}:{color:'#64748b',border:'1px solid rgba(255,255,255,0.08)'}}>
+          {filterOverdue?'⚠ Overdue only':'Show overdue'}
+        </button>
+        <button onClick={openAdd} className="px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap"
+          style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>+ Add Contact</button>
+      </div>
+      <div className="space-y-3">
+        {filtered.length===0 && <div className="text-sm text-center py-12" style={{color:'#334155'}}>{contacts.length===0?'No contacts yet — add your first networking connection.':'No contacts match your search.'}</div>}
+        {filtered.map(c=>{
+          const st=followUpStatus(c.lastContacted,c.followUpDays);
+          const isExp=expanded===c.id;
+          return (
+            <div key={c.id} className="rounded-xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.06)',background:'rgba(255,255,255,0.02)'}}>
+              <div className={`flex items-start gap-3 p-4 ${isMobile?'flex-wrap':''}`}>
+                <div className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm"
+                  style={{background:'rgba(99,102,241,0.18)',color:'#818cf8'}}>
+                  {(c.name||'?').charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm">{c.name}</div>
+                  <div className="text-xs" style={{color:'#64748b'}}>{[c.role,c.company].filter(Boolean).join(' · ')}</div>
+                  {c.howMet&&<div className="text-xs mt-0.5" style={{color:'#475569'}}>Met via {c.howMet}</div>}
+                </div>
+                <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                  <span className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap" style={{background:`${st.color}22`,color:st.color}}>{st.label}</span>
+                  <div className="flex flex-wrap gap-1 justify-end">
+                    {c.linkedIn&&<a href={c.linkedIn} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded" style={{background:'rgba(14,118,168,0.18)',color:'#38bdf8'}}>LinkedIn</a>}
+                    <button onClick={()=>setExpanded(isExp?null:c.id)} className="text-xs px-2 py-0.5 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>{isExp?'Hide':'Notes'}</button>
+                    <button onClick={()=>openEdit(c)} className="text-xs px-2 py-0.5 rounded" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>Edit</button>
+                    <button onClick={()=>deleteContact(c.id)} className="text-xs px-2 py-0.5 rounded" style={{color:'#ef4444',background:'rgba(239,68,68,0.08)'}}>✕</button>
+                  </div>
+                </div>
+              </div>
+              {isExp&&(
+                <div className="px-4 pb-4 border-t" style={{borderColor:'rgba(255,255,255,0.04)'}}>
+                  <div className="text-xs font-semibold mt-3 mb-2" style={{color:'#475569'}}>Meeting Notes</div>
+                  <textarea value={c.notes||''} onChange={e=>updateContact(c.id,{notes:e.target.value})}
+                    placeholder="Notes from your coffee chat, call, or meeting…" rows={3}
+                    className="w-full p-2 rounded-lg text-sm bg-transparent resize-none"
+                    style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0',outline:'none'}} />
+                  <button onClick={()=>updateContact(c.id,{lastContacted:new Date().toISOString().split('T')[0]})}
+                    className="mt-2 text-xs px-3 py-1.5 rounded-lg font-medium"
+                    style={{background:'rgba(16,185,129,0.12)',color:'#34d399',border:'1px solid rgba(16,185,129,0.22)'}}>
+                    ✓ Mark as contacted today
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {showModal&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{background:'rgba(0,0,0,0.7)'}}>
+          <div className="glass rounded-2xl p-6 w-full max-w-md" style={{border:'1px solid rgba(255,255,255,0.1)',maxHeight:'90vh',overflowY:'auto'}}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold">{editId?'Edit Contact':'Add Contact'}</h3>
+              <button onClick={()=>setShowModal(false)} style={{color:'#64748b',fontSize:'20px'}}>×</button>
+            </div>
+            <div className="space-y-3">
+              {[['name','Name *'],['company','Company'],['role','Role / Title'],['howMet','How you met'],['linkedIn','LinkedIn URL']].map(([k,l])=>(
+                <div key={k}>
+                  <label className="block text-xs mb-1" style={{color:'#64748b'}}>{l}</label>
+                  <input value={form[k]||''} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))}
+                    className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                    style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+                </div>
+              ))}
+              <div>
+                <label className="block text-xs mb-1" style={{color:'#64748b'}}>Last contacted</label>
+                <input type="date" value={form.lastContacted||''} onChange={e=>setForm(f=>({...f,lastContacted:e.target.value}))}
+                  className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                  style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',colorScheme:'dark'}} />
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{color:'#64748b'}}>Follow-up reminder after (days)</label>
+                <input type="number" min={1} max={90} value={form.followUpDays||14} onChange={e=>setForm(f=>({...f,followUpDays:parseInt(e.target.value,10)||14}))}
+                  className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                  style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={save} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>{editId?'Save Changes':'Add Contact'}</button>
+              <button onClick={()=>setShowModal(false)} className="px-4 py-2 rounded-xl text-sm" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---- Application Pipeline (Kanban) ---- */
+function AppPipeline({applications, addApp, updateApp, deleteApp}){
+  const [dragId, setDragId] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({company:'',role:'',type:'internship',status:'wishlist',dateApplied:'',deadline:'',salaryRange:'',notes:'',url:''});
+  const isMobile = useIsMobile();
+
+  const openAdd = () => { setForm({company:'',role:'',type:'internship',status:'wishlist',dateApplied:'',deadline:'',salaryRange:'',notes:'',url:''}); setEditId(null); setShowModal(true); };
+  const openEdit = (a) => { setForm({...a}); setEditId(a.id); setShowModal(true); };
+  const save = () => { if(!form.company.trim()) return; if(editId) updateApp(editId,form); else addApp(form); setShowModal(false); };
+  const moveApp = (id, status) => updateApp(id,{status});
+
+  return (
+    <div>
+      <div className="flex justify-end mb-4">
+        <button onClick={openAdd} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>+ Add Application</button>
+      </div>
+      {isMobile ? (
+        <div className="space-y-5">
+          {KANBAN_COLS.map(col=>{
+            const colApps=applications.filter(a=>a.status===col.id);
+            if(!colApps.length) return null;
+            return (
+              <div key={col.id}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full" style={{background:col.color}}/>
+                  <span className="text-sm font-semibold">{col.label}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:`${col.color}22`,color:col.color}}>{colApps.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {colApps.map(a=><AppCard key={a.id} app={a} col={col} onEdit={openEdit} onDelete={deleteApp} onMove={moveApp} mobile />)}
+                </div>
+              </div>
+            );
+          })}
+          {applications.length===0&&<div className="text-sm text-center py-12" style={{color:'#334155'}}>No applications yet.</div>}
+        </div>
+      ) : (
+        <div style={{display:'grid',gridTemplateColumns:`repeat(6,minmax(155px,1fr))`,gap:'10px',overflowX:'auto',paddingBottom:'8px'}}>
+          {KANBAN_COLS.map(col=>{
+            const colApps=applications.filter(a=>a.status===col.id);
+            const isOver=dragOver===col.id;
+            return (
+              <div key={col.id} className="rounded-xl p-3" style={{background:isOver?'rgba(99,102,241,0.06)':'rgba(255,255,255,0.02)',border:`1px solid ${isOver?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.06)'}`,minHeight:'120px',transition:'background .15s,border .15s'}}
+                onDragOver={e=>{e.preventDefault();setDragOver(col.id);}}
+                onDragLeave={()=>setDragOver(null)}
+                onDrop={()=>{if(dragId)moveApp(dragId,col.id);setDragId(null);setDragOver(null);}}>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:col.color}}/>
+                  <span className="text-xs font-semibold">{col.label}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full ml-auto" style={{background:`${col.color}22`,color:col.color}}>{colApps.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {colApps.map(a=><AppCard key={a.id} app={a} col={col} onEdit={openEdit} onDelete={deleteApp} onMove={moveApp} draggable onDragStart={()=>setDragId(a.id)} />)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showModal&&<AppFormModal form={form} setForm={setForm} editId={editId} save={save} onClose={()=>setShowModal(false)} />}
+    </div>
+  );
+}
+
+function AppCard({app, col, onEdit, onDelete, onMove, draggable:isDrag, onDragStart, mobile}){
+  const [showMove, setShowMove] = useState(false);
+  const tc = app.type==='full-time'?'#f59e0b':'#6366f1';
+  const deadline = app.deadline ? new Date(app.deadline+'T12:00:00') : null;
+  const dlSoon = deadline&&(deadline-Date.now())<3*86400000&&deadline>Date.now();
+  const dlPast = deadline&&deadline<Date.now();
+  return (
+    <div className="rounded-lg p-3 select-none" draggable={isDrag} onDragStart={onDragStart}
+      style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',cursor:isDrag?'grab':'default'}}>
+      <div className="flex items-start justify-between gap-1 mb-1">
+        <div className="font-semibold text-xs leading-tight">{app.company}</div>
+        <span className="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0" style={{background:`${tc}22`,color:tc,fontSize:'9px'}}>{app.type==='full-time'?'FT':'INT'}</span>
+      </div>
+      {app.role&&<div className="text-xs mb-1.5" style={{color:'#64748b'}}>{app.role}</div>}
+      {app.salaryRange&&<div className="text-xs mb-1" style={{color:'#94a3b8'}}>💵 {app.salaryRange}</div>}
+      {deadline&&<div className="text-xs mb-1" style={{color:dlPast?'#ef4444':dlSoon?'#f59e0b':'#475569'}}>{dlPast?'⚠ Past deadline':'⏰ '}{deadline.toLocaleDateString('en',{month:'short',day:'numeric'})}</div>}
+      {app.notes&&<div className="text-xs mt-1 mb-1.5 leading-relaxed" style={{color:'#475569',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>{app.notes}</div>}
+      <div className="flex gap-1 mt-2 flex-wrap">
+        <button onClick={()=>onEdit(app)} className="text-xs px-1.5 py-0.5 rounded" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>Edit</button>
+        {mobile&&(
+          <div style={{position:'relative'}}>
+            <button onClick={()=>setShowMove(m=>!m)} className="text-xs px-1.5 py-0.5 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>Move ▾</button>
+            {showMove&&(
+              <div className="absolute left-0 top-full mt-1 z-20 rounded-lg overflow-hidden shadow-xl" style={{background:'#1a1a24',border:'1px solid rgba(255,255,255,0.1)',minWidth:'140px'}}>
+                {KANBAN_COLS.filter(c=>c.id!==app.status).map(c=>(
+                  <button key={c.id} className="w-full text-left text-xs px-3 py-2" style={{color:c.color}} onClick={()=>{onMove(app.id,c.id);setShowMove(false);}}>→ {c.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <button onClick={()=>onDelete(app.id)} className="text-xs px-1.5 py-0.5 rounded ml-auto" style={{color:'#ef4444',background:'rgba(239,68,68,0.08)'}}>✕</button>
+      </div>
+    </div>
+  );
+}
+
+function AppFormModal({form, setForm, editId, save, onClose}){
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{background:'rgba(0,0,0,0.7)'}}>
+      <div className="glass rounded-2xl p-6 w-full max-w-md" style={{border:'1px solid rgba(255,255,255,0.1)',maxHeight:'90vh',overflowY:'auto'}}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">{editId?'Edit Application':'Add Application'}</h3>
+          <button onClick={onClose} style={{color:'#64748b',fontSize:'20px'}}>×</button>
+        </div>
+        <div className="space-y-3">
+          {[['company','Company *'],['role','Role / Position'],['url','Application URL'],['salaryRange','Salary / Stipend Range']].map(([k,l])=>(
+            <div key={k}><label className="block text-xs mb-1" style={{color:'#64748b'}}>{l}</label>
+            <input value={form[k]||''} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} /></div>
+          ))}
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Type</label>
+            <select value={form.type||'internship'} onChange={e=>setForm(f=>({...f,type:e.target.value}))} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}>
+              <option value="internship">Internship</option><option value="full-time">Full-time</option>
+            </select></div>
+            <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Status</label>
+            <select value={form.status||'wishlist'} onChange={e=>setForm(f=>({...f,status:e.target.value}))} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}>
+              {KANBAN_COLS.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+            </select></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Date Applied</label>
+            <input type="date" value={form.dateApplied||''} onChange={e=>setForm(f=>({...f,dateApplied:e.target.value}))} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',colorScheme:'dark'}} /></div>
+            <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Deadline</label>
+            <input type="date" value={form.deadline||''} onChange={e=>setForm(f=>({...f,deadline:e.target.value}))} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',colorScheme:'dark'}} /></div>
+          </div>
+          <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Notes</label>
+          <textarea value={form.notes||''} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={3} className="w-full px-3 py-2 rounded-lg text-sm bg-transparent resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} /></div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <button onClick={save} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>{editId?'Save Changes':'Add Application'}</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Interview Prep ---- */
+function InterviewPrep({questions, addQ, updateQ, deleteQ}){
+  const [filterCat, setFilterCat] = useState('All');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [form, setForm] = useState({question:'',category:'Leadership',situation:'',task:'',action:'',result:'',practiced:false});
+  const isMobile = useIsMobile();
+
+  const filtered = questions.filter(q=>{
+    if(filterCat!=='All'&&q.category!==filterCat) return false;
+    if(filterStatus==='practiced'&&!q.practiced) return false;
+    if(filterStatus==='needs_work'&&q.practiced) return false;
+    if(search&&!q.question.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const openEdit = (q) => { setForm({...q}); setShowModal(true); };
+  const save = () => {
+    if(!form.question.trim()) return;
+    if(form.id) updateQ(form.id,form); else addQ({...form});
+    setShowModal(false);
+    setForm({question:'',category:'Leadership',situation:'',task:'',action:'',result:'',practiced:false});
+  };
+
+  return (
+    <div>
+      <div className={`flex ${isMobile?'flex-col gap-2':'flex-wrap items-center gap-3'} mb-5`}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search questions…"
+          className="px-3 py-2 rounded-lg text-sm bg-transparent"
+          style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',flex:'1',minWidth:'140px'}} />
+        <div className="flex flex-wrap gap-1">
+          {['All',...Q_CATEGORIES].map(c=>(
+            <button key={c} onClick={()=>setFilterCat(c)} className="px-2.5 py-1 rounded-lg text-xs font-medium transition-all"
+              style={filterCat===c?{background:'rgba(99,102,241,0.22)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.35)'}:{color:'#475569',border:'1px solid rgba(255,255,255,0.06)'}}>
+              {c}
+            </button>
+          ))}
+        </div>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}
+          className="px-3 py-2 rounded-lg text-sm bg-transparent"
+          style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}>
+          <option value="all">All</option>
+          <option value="practiced">Practiced</option>
+          <option value="needs_work">Needs work</option>
+        </select>
+        <button onClick={()=>{setForm({question:'',category:'Leadership',situation:'',task:'',action:'',result:'',practiced:false});setShowModal(true);}}
+          className="px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap"
+          style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>+ Add Question</button>
+      </div>
+      <div className="space-y-3">
+        {filtered.length===0&&<div className="text-sm text-center py-12" style={{color:'#334155'}}>No questions match.</div>}
+        {filtered.map(q=>{
+          const isExp=expanded===q.id;
+          const hasStar=q.situation||q.task||q.action||q.result;
+          return (
+            <div key={q.id} className="rounded-xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.06)',background:'rgba(255,255,255,0.02)'}}>
+              <div className="flex items-start gap-3 p-4">
+                <button onClick={()=>updateQ(q.id,{practiced:!q.practiced})}
+                  className="w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center mt-0.5 transition-all"
+                  style={{background:q.practiced?'rgba(16,185,129,0.18)':'rgba(255,255,255,0.05)',border:`1px solid ${q.practiced?'#10b981':'rgba(255,255,255,0.1)'}`,color:q.practiced?'#10b981':'transparent',fontSize:'10px'}}>
+                  ✓
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium leading-snug mb-1.5">{q.question}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8'}}>{q.category}</span>
+                    <span className="text-xs" style={{color:q.practiced?'#10b981':'#64748b'}}>{q.practiced?'✓ Practiced':'Needs work'}</span>
+                    {hasStar&&<span className="text-xs" style={{color:'#475569'}}>· STAR saved</span>}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={()=>setExpanded(isExp?null:q.id)} className="text-xs px-2 py-1 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>{isExp?'Hide':'STAR'}</button>
+                  <button onClick={()=>openEdit(q)} className="text-xs px-2 py-1 rounded" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>Edit</button>
+                  <button onClick={()=>deleteQ(q.id)} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',background:'rgba(239,68,68,0.08)'}}>✕</button>
+                </div>
+              </div>
+              {isExp&&(
+                <div className="px-4 pb-4 space-y-3 border-t" style={{borderColor:'rgba(255,255,255,0.04)'}}>
+                  {[['situation','S — Situation','What was the context?'],['task','T — Task','What was your responsibility?'],['action','A — Action','What did you do specifically?'],['result','R — Result','What was the outcome?']].map(([k,label,ph])=>(
+                    <div key={k} className="mt-3">
+                      <label className="block text-xs font-bold mb-1.5" style={{color:'#6366f1'}}>{label}</label>
+                      <textarea value={q[k]||''} onChange={e=>updateQ(q.id,{[k]:e.target.value})}
+                        placeholder={ph} rows={2} className="w-full p-2.5 rounded-lg text-sm bg-transparent resize-none"
+                        style={{border:'1px solid rgba(255,255,255,0.07)',color:'#e2e8f0',outline:'none'}} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {showModal&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{background:'rgba(0,0,0,0.7)'}}>
+          <div className="glass rounded-2xl p-6 w-full max-w-md" style={{border:'1px solid rgba(255,255,255,0.1)',maxHeight:'90vh',overflowY:'auto'}}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold">{form.id?'Edit Question':'Add Question'}</h3>
+              <button onClick={()=>setShowModal(false)} style={{color:'#64748b',fontSize:'20px'}}>×</button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Question *</label>
+              <textarea value={form.question} onChange={e=>setForm(f=>({...f,question:e.target.value}))} rows={3}
+                className="w-full px-3 py-2 rounded-lg text-sm bg-transparent resize-none"
+                style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} /></div>
+              <div><label className="block text-xs mb-1" style={{color:'#64748b'}}>Category</label>
+              <select value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}
+                className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}>
+                {Q_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+              </select></div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={save} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>{form.id?'Save Changes':'Add Question'}</button>
+              <button onClick={()=>setShowModal(false)} className="px-4 py-2 rounded-xl text-sm" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* -------------------- Render -------------------- */
 const root = ReactDOM.createRoot(document.getElementById('root'));
