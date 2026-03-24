@@ -162,7 +162,53 @@ function MainAssistant({data, setData, toasts, isMobile}){
     setText('');
   }
 
-  if(isMobile) return null;
+  if(isMobile){
+    // Mobile: floating mic button at bottom-left
+    return (
+      <div className="fixed z-50" style={{bottom:'90px', left:'16px'}}>
+        {open && (
+          <div className="glass rounded-xl p-4 mb-2" style={{width:'260px',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 8px 32px rgba(0,0,0,0.5)'}}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-semibold text-sm">Schedule Assistant</span>
+              <button onClick={()=>setOpen(false)} style={{color:'#64748b',fontSize:'18px',lineHeight:1}}>×</button>
+            </div>
+            <div className="text-xs mb-3" style={{color:'#475569'}}>
+              Say: <span style={{color:'#818cf8'}}>"gym at 7am monday"</span>, <span style={{color:'#818cf8'}}>"from 9:30 to 11 read and meditate"</span>
+            </div>
+            {text ? (
+              <div className="text-xs px-2 py-1.5 rounded mb-2 italic" style={{background:'rgba(255,255,255,0.04)',color:'#94a3b8'}}>
+                "{text}"
+              </div>
+            ) : null}
+            <button
+              onClick={()=>{ if(listening){ dict.stop(); setListening(false); } else { dict.start(); setListening(true); } }}
+              className="w-full py-2 rounded-lg text-sm font-medium transition-all"
+              style={{background:listening?'rgba(239,68,68,0.2)':'rgba(99,102,241,0.15)',
+                      color:listening?'#fca5a5':'#818cf8',
+                      border:listening?'1px solid rgba(239,68,68,0.5)':'1px solid rgba(99,102,241,0.3)',
+                      boxShadow:listening?'0 0 0 3px rgba(239,68,68,0.15)':'none'}}>
+              {listening ? '● Listening…' : '🎤 Speak a command'}
+            </button>
+          </div>
+        )}
+        <div style={{position:'relative'}}>
+          {listening && (
+            <span style={{position:'absolute',inset:0,borderRadius:'50%',background:'rgba(239,68,68,0.35)',
+              animation:'pulse 1s ease-in-out infinite',pointerEvents:'none'}}/>
+          )}
+          <button
+            onClick={()=>setOpen(o=>!o)}
+            className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-all"
+            style={{background: listening?'rgba(239,68,68,0.85)':open?'rgba(99,102,241,0.4)':'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                    border:listening?'1px solid rgba(239,68,68,0.6)':'1px solid rgba(99,102,241,0.4)',
+                    boxShadow:listening?'0 4px 20px rgba(239,68,68,0.45)':'0 4px 20px rgba(99,102,241,0.35)',
+                    fontSize:'20px',position:'relative',zIndex:1}}>
+            {listening ? '●' : open ? '×' : '✦'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed left-6 bottom-6 z-50">
@@ -175,7 +221,13 @@ function MainAssistant({data, setData, toasts, isMobile}){
           <textarea className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" rows={3} value={text} onChange={e=>setText(e.target.value)} placeholder="Tell me your plan (or use voice)..." />
           <div className="flex gap-2">
             <button className="px-3 py-1 rounded bg-indigo-600" onClick={()=>handleSend(text)}>Send</button>
-            <button className="px-3 py-1 rounded" onClick={()=>{ if(listening){ dict.stop(); setListening(false); } else { dict.start(); setListening(true); } }}>{listening? 'Stop' : 'Voice'}</button>
+            <button className="px-3 py-1 rounded"
+              style={{background:listening?'rgba(239,68,68,0.2)':'rgba(99,102,241,0.15)',
+                      color:listening?'#fca5a5':'#818cf8',
+                      border:listening?'1px solid rgba(239,68,68,0.5)':'1px solid rgba(99,102,241,0.3)'}}
+              onClick={()=>{ if(listening){ dict.stop(); setListening(false); } else { dict.start(); setListening(true); } }}>
+              {listening ? '● Stop' : '🎤 Voice'}
+            </button>
             <button className="px-3 py-1 rounded" onClick={()=>setOpen(false)}>Hide</button>
           </div>
         </div>
