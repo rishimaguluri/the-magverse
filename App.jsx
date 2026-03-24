@@ -1276,6 +1276,19 @@ function EventModal({modal, onClose, onSave}){
 
   const toggleCustomDay = (i) => setCustomDays(cd => cd.includes(i) ? cd.filter(d=>d!==i) : [...cd,i].sort((a,b)=>a-b));
 
+  // Convert decimal hour (e.g. 8.5 = 8:30) ↔ "HH:MM" for <input type="time">
+  const decToTime = (dec) => {
+    if(dec===''||dec===undefined) return '';
+    const h = Math.floor(Number(dec));
+    const m = Math.round((Number(dec)-h)*60);
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  };
+  const timeToDec = (str) => {
+    if(!str) return '';
+    const [h,m] = str.split(':').map(Number);
+    return String(h + m/60);
+  };
+
   const save = () => {
     if(!title.trim()) return;
     const when = (day!==''||hour!=='') ? {day:day!==''?Number(day):undefined, hour:hour!==''?Number(hour):undefined, endHour:endHour!==''?Number(endHour):undefined} : undefined;
@@ -1322,19 +1335,29 @@ function EventModal({modal, onClose, onSave}){
           </div>
           <div>
             <label className="block text-xs mb-1" style={{color:'#475569'}}>Start Time</label>
-            <select className="w-full p-2 rounded-xl text-sm focus:outline-none" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-              value={hour} onChange={e=>{setHour(e.target.value); if(endHour&&Number(e.target.value)>=Number(endHour)) setEndHour('');}}>
-              <option value="">No time</option>
-              {Array.from({length:18*4},(_,i)=>6+i*0.25).map(h=><option key={h} value={h}>{fmtHour(h)}</option>)}
-            </select>
+            <input type="time" className="w-full p-2 rounded-xl text-sm focus:outline-none"
+              style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',colorScheme:'dark'}}
+              onFocus={e=>e.target.style.borderColor='rgba(99,102,241,0.5)'}
+              onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.08)'}
+              value={decToTime(hour)}
+              onChange={e=>{
+                const v=timeToDec(e.target.value);
+                setHour(v);
+                if(endHour!==''&&v!==''&&Number(v)>=Number(endHour)) setEndHour('');
+              }}
+            />
+            {hour!=='' && <button className="text-xs mt-0.5 transition-all hover:opacity-80" style={{color:'#475569'}} onClick={()=>setHour('')}>clear</button>}
           </div>
           <div>
             <label className="block text-xs mb-1" style={{color:'#475569'}}>End Time</label>
-            <select className="w-full p-2 rounded-xl text-sm focus:outline-none" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-              value={endHour} onChange={e=>setEndHour(e.target.value)}>
-              <option value="">No end</option>
-              {Array.from({length:18*4},(_,i)=>6+i*0.25).filter(h=>hour===''||h>Number(hour)+0.001).map(h=><option key={h} value={h}>{fmtHour(h)}</option>)}
-            </select>
+            <input type="time" className="w-full p-2 rounded-xl text-sm focus:outline-none"
+              style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',colorScheme:'dark'}}
+              onFocus={e=>e.target.style.borderColor='rgba(99,102,241,0.5)'}
+              onBlur={e=>e.target.style.borderColor='rgba(255,255,255,0.08)'}
+              value={decToTime(endHour)}
+              onChange={e=>setEndHour(timeToDec(e.target.value))}
+            />
+            {endHour!=='' && <button className="text-xs mt-0.5 transition-all hover:opacity-80" style={{color:'#475569'}} onClick={()=>setEndHour('')}>clear</button>}
           </div>
         </div>
         {/* Type picker */}
