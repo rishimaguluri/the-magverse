@@ -2407,74 +2407,129 @@ function HabitsSubtab({data, setData, toasts}){
 }
 
 /* -------------------- Stock Picks Widget -------------------- */
-const STOCK_PICKS = [
+const STOCK_POOL = [
   {
     ticker:'NVDA', name:'NVIDIA Corporation', sector:'Semiconductors', tags:['AI Infrastructure','High Growth'],
     summary:'Near-monopoly on AI training hardware at the epicenter of the largest infrastructure buildout in tech history.',
-    thesis:`NVIDIA's H100 and Blackwell GPU architectures are backlogged 12+ months, with Microsoft, Google, Amazon, and Meta collectively committing hundreds of billions in AI capex through 2026. The data center segment now represents over 85% of revenue, growing triple-digits year-over-year. CUDA's decade-long developer ecosystem creates a software moat that AMD and Intel are years behind replicating — switching costs are enormous because models, toolchains, and entire research workflows are built on CUDA.\n\nThe upcoming Blackwell Ultra and Rubin architectures suggest NVIDIA is pulling 2–3 years ahead of competitors on performance-per-watt. Sovereign AI spending (governments building national AI infrastructure) adds an entirely new demand vector beyond hyperscalers. Risks include US export restrictions on advanced chips to China, customer concentration among a handful of hyperscalers, and valuation compression if AI capex sentiment reverses.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/NVDA'},
-      {label:'Recent News',url:'https://news.google.com/search?q=NVIDIA+NVDA+stock+AI+chips'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/NVDA'},
-      {label:'Investor Relations',url:'https://investor.nvidia.com/'},
-    ]
+    thesis:`NVIDIA's H100 and Blackwell GPU architectures are backlogged 12+ months, with Microsoft, Google, Amazon, and Meta collectively committing hundreds of billions in AI capex through 2026. The data center segment now represents over 85% of revenue, growing triple-digits year-over-year. CUDA's decade-long developer ecosystem creates a software moat that AMD and Intel are years behind replicating.\n\nThe Blackwell Ultra and Rubin architectures suggest NVIDIA is pulling 2–3 years ahead of competitors on performance-per-watt. Sovereign AI spending (governments building national AI infrastructure) adds an entirely new demand vector beyond hyperscalers. Risks include US export restrictions on advanced chips to China, customer concentration, and valuation compression if AI capex sentiment reverses.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/NVDA'},{label:'Recent News',url:'https://news.google.com/search?q=NVIDIA+NVDA+stock+AI+chips'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/NVDA'},{label:'Investor Relations',url:'https://investor.nvidia.com/'}]
   },
   {
     ticker:'MSFT', name:'Microsoft Corporation', sector:'Cloud / Software', tags:['Cloud','AI','Defensive'],
     summary:'Azure cloud growth plus deep OpenAI integration makes Microsoft the enterprise AI stack of record.',
-    thesis:`Microsoft's $13B OpenAI investment gives it exclusive access to GPT-4 and future models baked directly into Azure, Office 365, GitHub Copilot, and Dynamics. The result is an AI-first enterprise suite with switching costs so high that most Fortune 500 companies effectively cannot leave. Azure is the #2 cloud provider globally and gaining share in the AI workload category where margins are highest.\n\nCopilot is being rolled out at $30/seat/month on top of existing M365 subscriptions — for a company with 400M+ commercial seats, even 10% penetration represents ~$14B in incremental annual revenue. The gaming division (via Activision) adds a consumer entertainment optionality layer. Risks include antitrust scrutiny of the OpenAI relationship, Azure growth deceleration, and the possibility that open-source models commoditize the AI layer.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/MSFT'},
-      {label:'Recent News',url:'https://news.google.com/search?q=Microsoft+MSFT+Azure+Copilot+earnings'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/MSFT'},
-      {label:'Investor Relations',url:'https://www.microsoft.com/en-us/investor'},
-    ]
+    thesis:`Microsoft's $13B OpenAI investment gives it exclusive access to frontier models baked directly into Azure, Office 365, GitHub Copilot, and Dynamics. The result is an AI-first enterprise suite with switching costs so high that most Fortune 500 companies effectively cannot leave. Azure is the #2 cloud provider globally and gaining share in AI workloads.\n\nCopilot at $30/seat/month on top of existing M365 subscriptions — for a company with 400M+ commercial seats, even 10% penetration represents ~$14B in incremental annual revenue. Risks include antitrust scrutiny of the OpenAI relationship and the possibility that open-source models commoditize the AI layer.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/MSFT'},{label:'Recent News',url:'https://news.google.com/search?q=Microsoft+MSFT+Azure+Copilot+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/MSFT'},{label:'Investor Relations',url:'https://www.microsoft.com/en-us/investor'}]
   },
   {
     ticker:'BRK-B', name:'Berkshire Hathaway B', sector:'Conglomerate', tags:['Value','Defensive','Dividend'],
     summary:'Buffett\'s all-weather conglomerate with $330B+ in cash reserves and a 60-year track record of capital allocation.',
-    thesis:`Berkshire's $330B+ cash pile — the largest in corporate history — gives it unmatched optionality to deploy capital into a recession, market crash, or transformative acquisition. The insurance float (~$170B) is effectively free leverage that Buffett has compounded at 20%+ annually for decades. Core holdings like BNSF Railroad, Berkshire Hathaway Energy, and GEICO provide durable cash flows uncorrelated with tech cycles.\n\nIn an environment of elevated valuations, BRK-B acts as a capital-preservation vehicle with equity-like upside. The conglomerate structure means it is implicitly diversified across industrials, energy, financials, and consumer brands. Risks include succession uncertainty post-Buffett/Munger, the challenge of deploying capital at scale, and underperformance in a sustained bull market where concentrated growth bets outperform.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/BRK-B'},
-      {label:'Recent News',url:'https://news.google.com/search?q=Berkshire+Hathaway+Buffett+BRK'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/BRK.B'},
-      {label:'Annual Letters',url:'https://www.berkshirehathaway.com/letters/letters.html'},
-    ]
+    thesis:`Berkshire's $330B+ cash pile — the largest in corporate history — gives it unmatched optionality to deploy capital into a recession or transformative acquisition. The insurance float (~$170B) is effectively free leverage compounded at 20%+ annually for decades. Core holdings like BNSF Railroad, Berkshire Hathaway Energy, and GEICO provide durable cash flows uncorrelated with tech cycles.\n\nIn an environment of elevated valuations, BRK-B acts as a capital-preservation vehicle with equity-like upside. Risks include succession uncertainty post-Buffett, the challenge of deploying capital at scale, and underperformance in sustained bull markets.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/BRK-B'},{label:'Recent News',url:'https://news.google.com/search?q=Berkshire+Hathaway+Buffett+BRK'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/BRK.B'},{label:'Annual Letters',url:'https://www.berkshirehathaway.com/letters/letters.html'}]
   },
   {
     ticker:'META', name:'Meta Platforms', sector:'Digital Advertising', tags:['AI','Advertising','Social'],
     summary:'Dominant ad duopoly with Instagram Reels monetization accelerating and Ray-Ban AI glasses as the next hardware platform.',
-    thesis:`Meta controls roughly 20% of global digital advertising spend across Facebook, Instagram, and WhatsApp — a reach of 3.3 billion daily active users. After a painful 2022 reset, the company has emerged leaner: headcount cut by 20%+, AI-driven ad targeting (Advantage+) driving click-through rates 30–50% above prior baselines, and Reels monetization now matching Stories.\n\nThe hardware optionality is underappreciated: Ray-Ban Meta AI glasses sold out repeatedly in 2024 and represent the leading contender to be the first mass-market AI wearable. WhatsApp Business (1B+ business users) is barely monetized — a massive revenue unlock as Meta rolls out commerce and payment features across emerging markets. Risks include regulatory pressure in the EU, advertiser concentration, and Reality Labs burning ~$15B/year with no clear near-term monetization path.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/META'},
-      {label:'Recent News',url:'https://news.google.com/search?q=Meta+Platforms+META+stock+AI+advertising'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/META'},
-      {label:'Investor Relations',url:'https://investor.fb.com/'},
-    ]
+    thesis:`Meta controls roughly 20% of global digital advertising spend across Facebook, Instagram, and WhatsApp — a reach of 3.3 billion daily active users. AI-driven ad targeting (Advantage+) is driving click-through rates 30–50% above prior baselines, and Reels monetization now matches Stories.\n\nRay-Ban Meta AI glasses sold out repeatedly and represent the leading contender for the first mass-market AI wearable. WhatsApp Business (1B+ business users) is barely monetized — a massive revenue unlock as Meta rolls out commerce features. Risks include EU regulatory pressure and Reality Labs burning ~$15B/year.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/META'},{label:'Recent News',url:'https://news.google.com/search?q=Meta+Platforms+META+stock+AI+advertising'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/META'},{label:'Investor Relations',url:'https://investor.fb.com/'}]
   },
   {
     ticker:'PLTR', name:'Palantir Technologies', sector:'AI Software', tags:['AI','Government','Enterprise'],
-    summary:'First pure-play AI software company to achieve GAAP profitability, with a growing commercial AIP platform alongside its government moat.',
-    thesis:`Palantir's AI Platform (AIP) bridges the gap between foundation models and real enterprise operations — it's not just a chatbot layer but a system that connects AI to live data pipelines, compliance workflows, and decision-making processes. The US government business (defense, intelligence) provides a high-margin, sticky revenue floor that private-sector competitors can't access. Commercial revenue is now the growth engine, up 55%+ YoY in the US.\n\nThe AIP "bootcamp" sales model — intensive 5-day workshops where clients build working AI applications — has become a flywheel for contract conversion. As one of the few software companies that built its architecture around secure, auditable AI from day one, Palantir is well-positioned for the regulated industries (defense, healthcare, finance) where most AI vendors struggle. Risks include high valuation multiples, customer concentration, and dependence on government contract cycles.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/PLTR'},
-      {label:'Recent News',url:'https://news.google.com/search?q=Palantir+PLTR+AIP+stock+earnings'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/PLTR'},
-      {label:'Investor Relations',url:'https://investors.palantir.com/'},
-    ]
+    summary:'First pure-play AI software company to achieve GAAP profitability, with AIP bridging foundation models to real enterprise operations.',
+    thesis:`Palantir's AI Platform (AIP) connects foundation models to live data pipelines, compliance workflows, and decision systems — not just a chatbot layer. The US government business (defense, intelligence) provides a high-margin, sticky revenue floor. Commercial revenue is now the growth engine, up 55%+ YoY in the US.\n\nThe AIP "bootcamp" sales model — 5-day workshops where clients build working AI applications — has become a flywheel for contract conversion. Palantir is uniquely positioned for regulated industries where most AI vendors struggle. Risks include high valuation multiples and dependence on government contract cycles.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/PLTR'},{label:'Recent News',url:'https://news.google.com/search?q=Palantir+PLTR+AIP+stock+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/PLTR'},{label:'Investor Relations',url:'https://investors.palantir.com/'}]
   },
   {
     ticker:'AMZN', name:'Amazon.com Inc.', sector:'Cloud / E-Commerce', tags:['Cloud','Advertising','Logistics'],
     summary:'AWS margin expansion and a rapidly growing advertising business are transforming Amazon into a high-margin cash machine.',
-    thesis:`Amazon Web Services generates ~60% of total operating income on ~17% of total revenue — and its operating margin is expanding as AI workloads (higher margin) displace legacy compute. The advertising business ($50B+ run rate) is the most underappreciated division: it sits on top of the highest-intent shopping data in the world, making it structurally superior to most other ad platforms.\n\nPrime's logistics network is a 15-year, $300B+ capital investment that no competitor can replicate. Same-day and next-day delivery is now available to 65%+ of US customers, creating a retention flywheel. Internationally, Amazon is still sub-scale in Southeast Asia, India, and Latin America — these markets represent the next decade of growth. Risks include AWS competition from Azure and Google Cloud, antitrust regulation of the marketplace, and the capital intensity of logistics infrastructure.`,
-    links:[
-      {label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/AMZN'},
-      {label:'Recent News',url:'https://news.google.com/search?q=Amazon+AMZN+AWS+stock+earnings'},
-      {label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/AMZN'},
-      {label:'Investor Relations',url:'https://ir.aboutamazon.com/'},
-    ]
+    thesis:`AWS generates ~60% of total operating income on ~17% of revenue — and margin is expanding as AI workloads displace legacy compute. The advertising business ($50B+ run rate) sits on top of the highest-intent shopping data in the world, making it structurally superior to most ad platforms.\n\nPrime's logistics network is a 15-year, $300B+ capital investment no competitor can replicate. Same-day delivery is now available to 65%+ of US customers. Internationally, Amazon is still sub-scale in SE Asia, India, and Latin America — the next decade of growth. Risks include AWS competition from Azure and regulatory pressure on the marketplace.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/AMZN'},{label:'Recent News',url:'https://news.google.com/search?q=Amazon+AMZN+AWS+stock+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/AMZN'},{label:'Investor Relations',url:'https://ir.aboutamazon.com/'}]
+  },
+  {
+    ticker:'GOOGL', name:'Alphabet Inc.', sector:'Search / Cloud / AI', tags:['AI','Search','Cloud','Advertising'],
+    summary:'Search monopoly with Gemini AI integration, YouTube dominance, and Google Cloud accelerating — a diversified AI powerhouse at a reasonable multiple.',
+    thesis:`Google processes 8.5 billion searches per day and monetizes every one — a distribution advantage that no AI startup can replicate. Gemini integration across Search, Workspace, and Android lets Google layer AI on top of its existing usage without disrupting the ad flywheel. Google Cloud is the #3 provider but growing the fastest in AI workloads thanks to TPU hardware and Vertex AI.\n\nYouTube (2.7B monthly users) is the world's largest video platform and its ad revenue is still undermonetized relative to engagement. Waymo is a wildcard with fully autonomous robotaxi rides expanding in major US cities. Risks include AI search disrupting its own ad model, antitrust breakup risk, and regulatory headwinds in the EU.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/GOOGL'},{label:'Recent News',url:'https://news.google.com/search?q=Alphabet+Google+GOOGL+AI+Gemini+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/GOOGL'},{label:'Investor Relations',url:'https://abc.xyz/investor/'}]
+  },
+  {
+    ticker:'TSLA', name:'Tesla Inc.', sector:'EV / AI / Energy', tags:['AI','Robotics','Energy','EV'],
+    summary:'The only vertically integrated EV + AI + energy company in the world, with Full Self-Driving and Optimus as long-term optionality.',
+    thesis:`Tesla is simultaneously an EV manufacturer, AI company, energy storage business, and robotics pioneer — making traditional valuation frameworks largely insufficient. The Supercharger network (now the US standard after Ford and GM adoptions) is a durable infrastructure moat. Energy storage (Megapack) is growing faster than automotive and at higher margins.\n\nFull Self-Driving subscriber revenue is nascent but could scale dramatically with a robotaxi launch. Optimus (humanoid robot) production is ramping with the goal of millions of units — potentially the largest revenue opportunity in company history. Risks include competition from BYD in China, margin pressure from price cuts, and execution risk on FSD and Optimus timelines.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/TSLA'},{label:'Recent News',url:'https://news.google.com/search?q=Tesla+TSLA+FSD+Optimus+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/TSLA'},{label:'Investor Relations',url:'https://ir.tesla.com/'}]
+  },
+  {
+    ticker:'AAPL', name:'Apple Inc.', sector:'Consumer Tech / Services', tags:['Services','Hardware','AI','Ecosystem'],
+    summary:'The world\'s most profitable consumer brand, transitioning from hardware cycles to a high-margin recurring services business.',
+    thesis:`Apple's 2.2 billion active device install base is the most valuable consumer ecosystem in the world. Services (App Store, Apple TV+, iCloud, Apple Pay, Apple Card) generate 75%+ gross margins and are growing 15%+ annually — transforming Apple from a hardware cyclical into a software compounder. Apple Intelligence (on-device AI) differentiates hardware in ways that competitors cannot quickly replicate.\n\nThe Vision Pro headset and a potential Apple Car represent hardware optionality bets. Apple Pay and financial services (Apple Card, Apple Savings) are early-stage but growing rapidly. Risks include China revenue concentration (~20% of revenue), antitrust pressure on App Store fees, and the challenge of sustaining premium pricing in a maturing smartphone market.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/AAPL'},{label:'Recent News',url:'https://news.google.com/search?q=Apple+AAPL+services+AI+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/AAPL'},{label:'Investor Relations',url:'https://investor.apple.com/'}]
+  },
+  {
+    ticker:'AMD', name:'Advanced Micro Devices', sector:'Semiconductors', tags:['AI','Chips','Data Center'],
+    summary:'The best-positioned NVIDIA alternative for AI compute, with MI300X GPUs gaining traction and x86 CPU market share continuing to grow.',
+    thesis:`AMD's MI300X GPU is the only chip competitive with NVIDIA's H100 for certain AI inference workloads, and Microsoft, Meta, and Google are actively deploying it at scale to reduce NVDA dependency. The x86 CPU business (Ryzen, EPYC) continues taking market share from Intel, which is structurally disadvantaged on manufacturing. EPYC server CPUs are now the preferred choice for most major hyperscalers.\n\nThe combination of CPU + GPU gives AMD a unique cross-sell opportunity in the data center. AMD is 2–3 years behind NVIDIA on the software ecosystem (ROCm vs. CUDA), but hyperscalers are investing heavily to close that gap. Risks include CUDA moat, China export restrictions, and execution risk on future GPU roadmap.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/AMD'},{label:'Recent News',url:'https://news.google.com/search?q=AMD+Advanced+Micro+Devices+MI300+GPU+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/AMD'},{label:'Investor Relations',url:'https://ir.amd.com/'}]
+  },
+  {
+    ticker:'ASML', name:'ASML Holding', sector:'Semiconductor Equipment', tags:['Monopoly','Semiconductors','Deep Tech'],
+    summary:'The only company in the world that makes EUV lithography machines — the indispensable tool for making every advanced chip on the planet.',
+    thesis:`ASML holds a literal monopoly on extreme ultraviolet (EUV) lithography — the machines required to manufacture chips at 7nm and below. Every advanced chip from TSMC, Samsung, and Intel is made on ASML equipment. The technology took 30+ years and billions in R&D to develop; no other company is close. This creates a durable, sovereign-grade competitive moat.\n\nNext-generation High-NA EUV machines (priced at $380M each) extend ASML's lead by enabling the next decade of Moore's Law progress. As AI infrastructure investment surges, semiconductor capital expenditures rise with it — and ASML captures a cut of every new fab built globally. Risks include US-Dutch export restrictions on sales to China and customer concentration at TSMC.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/ASML'},{label:'Recent News',url:'https://news.google.com/search?q=ASML+EUV+lithography+semiconductor+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/ASML'},{label:'Investor Relations',url:'https://www.asml.com/en/investors'}]
+  },
+  {
+    ticker:'TSM', name:'Taiwan Semiconductor Mfg.', sector:'Chip Foundry', tags:['Monopoly','AI','Semiconductors'],
+    summary:'Manufactures ~90% of the world\'s most advanced chips — Apple, NVIDIA, AMD, Qualcomm all depend on TSMC\'s fabs.',
+    thesis:`TSMC's 3nm and 2nm process nodes are 2–3 generations ahead of Samsung Foundry and 5+ years ahead of Intel Foundry. Every company designing AI chips (NVIDIA, AMD, Google TPU, Apple) relies on TSMC to actually manufacture them. This makes TSMC the picks-and-shovels play on AI hardware without the product cycle risk of any individual chip designer.\n\nThe Arizona fab construction (with $6.6B in US CHIPS Act subsidies) reduces geopolitical concentration risk. Pricing power is structural — customers have no credible alternative at advanced nodes. Risks include Taiwan geopolitical risk (China), customer concentration, and the enormous capital requirements of leading-edge fabs.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/TSM'},{label:'Recent News',url:'https://news.google.com/search?q=TSMC+TSM+semiconductor+AI+foundry+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/TSM'},{label:'Investor Relations',url:'https://investor.tsmc.com/'}]
+  },
+  {
+    ticker:'CRWD', name:'CrowdStrike Holdings', sector:'Cybersecurity', tags:['AI','Cybersecurity','SaaS'],
+    summary:'The AI-native cybersecurity platform winning enterprise endpoint and cloud security at the expense of legacy players.',
+    thesis:`CrowdStrike's Falcon platform is the only cybersecurity solution built cloud-native and AI-first from day one — giving it a structural advantage over legacy vendors like Symantec and McAfee that retrofitted AI onto aging architectures. The platform now covers endpoints, cloud workloads, identity, and SIEM/SOC — a security data lake that gets more powerful with each new module added.\n\nNet retention rates above 120% indicate customers consistently expand their CrowdStrike footprint once deployed. The ARR consolidation story (replacing 5–10 vendors with a single platform) is a massive TAM expansion opportunity. Risks include enterprise cybersecurity spend slowdowns, the July 2024 incident damaging near-term sales cycles, and competition from Microsoft Defender.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/CRWD'},{label:'Recent News',url:'https://news.google.com/search?q=CrowdStrike+CRWD+Falcon+cybersecurity+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/CRWD'},{label:'Investor Relations',url:'https://ir.crowdstrike.com/'}]
+  },
+  {
+    ticker:'APP', name:'AppLovin Corporation', sector:'Mobile Advertising', tags:['AI','Advertising','Mobile'],
+    summary:'AI-powered mobile advertising platform that is quietly compounding at triple digits, flying under most investors\' radars.',
+    thesis:`AppLovin's AXON AI advertising engine has driven revenue growth from $2.8B to $4.7B in a single year — a rate that puts it among the fastest-growing large-cap companies in the US. The platform connects mobile game developers with advertisers through an AI matching system that outperforms Meta's ad network for gaming verticals.\n\nThe e-commerce ad expansion (moving from mobile gaming to all app categories) is the next growth vector, potentially doubling the addressable market. Software segment gross margins exceed 70% and are climbing. Risks include algorithmic ad platform volatility, competition from Meta and Google, and concentration of revenue in the mobile gaming category.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/APP'},{label:'Recent News',url:'https://news.google.com/search?q=AppLovin+APP+AXON+advertising+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/APP'},{label:'Investor Relations',url:'https://ir.applovin.com/'}]
+  },
+  {
+    ticker:'LLY', name:'Eli Lilly and Company', sector:'Pharmaceuticals', tags:['GLP-1','Biotech','Obesity'],
+    summary:'Owns two of the three most important drugs in the world right now — Mounjaro and Zepbound — in the obesity treatment revolution.',
+    thesis:`Eli Lilly's GLP-1 drugs (tirzepatide) for diabetes and obesity are among the fastest-adopted pharmaceuticals in history. Mounjaro (diabetes) and Zepbound (obesity) generated $5B+ in combined quarterly revenue and are still supply-constrained — Lilly is spending $18B+ on manufacturing expansion to meet demand. The obesity market alone is estimated to reach $100B+ annually within a decade.\n\nBeyond GLP-1, Lilly has a deep pipeline in Alzheimer's (donanemab), cancer, and immune diseases. The company's oncology pipeline includes multiple Phase 3 assets that could become multi-billion-dollar franchises. Risks include GLP-1 patent cliffs, manufacturing execution, competitive pressure from Novo Nordisk's Ozempic/Wegovy, and pricing pressure from US drug price negotiation.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/LLY'},{label:'Recent News',url:'https://news.google.com/search?q=Eli+Lilly+LLY+GLP-1+Mounjaro+obesity+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/LLY'},{label:'Investor Relations',url:'https://investor.lilly.com/'}]
+  },
+  {
+    ticker:'NVO', name:'Novo Nordisk A/S', sector:'Pharmaceuticals', tags:['GLP-1','Biotech','Obesity'],
+    summary:'The Danish pharma giant that created the GLP-1 category and still commands 60%+ market share with Ozempic and Wegovy.',
+    thesis:`Novo Nordisk pioneered GLP-1 receptor agonists and remains the dominant market leader with Ozempic (diabetes) and Wegovy (obesity). The company generates ~60% of its revenue from GLP-1 medications, and global demand is still far exceeding supply. New formulations (once-monthly injections, oral pills) could expand the addressable market dramatically by removing injection barriers.\n\nNovo is investing in cardiovascular disease, NASH, and rare disease pipelines that reduce dependence on GLP-1 long-term. Denmark's largest company by far, Novo trades at a discount to Lilly despite comparable GLP-1 exposure. Risks include Lilly's tirzepatide competition, next-generation GLP-1 from AstraZeneca and Roche, and European drug pricing regulation.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/NVO'},{label:'Recent News',url:'https://news.google.com/search?q=Novo+Nordisk+NVO+Ozempic+Wegovy+GLP-1+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/NVO'},{label:'Investor Relations',url:'https://www.novonordisk.com/investors.html'}]
+  },
+  {
+    ticker:'COIN', name:'Coinbase Global', sector:'Crypto Infrastructure', tags:['Crypto','Fintech','Regulated'],
+    summary:'The dominant regulated crypto exchange in the US — structured to win regardless of which cryptocurrencies ultimately win.',
+    thesis:`Coinbase is the infrastructure layer of the US crypto economy — earning transaction fees, custody fees, and interest income regardless of whether Bitcoin, Ethereum, or another asset wins. The regulatory clarity from Bitcoin ETF approvals and a more crypto-friendly US administration has materially de-risked the business model that dominated bearish sentiment for years.\n\nBase (Coinbase's Ethereum L2 chain) is growing rapidly and represents an early stake in the on-chain economy. Institutional custody is expanding as traditional finance adopts crypto infrastructure. Risks include crypto market cyclicality (revenue is highly correlated to BTC price), regulatory reversals, and competition from Kraken and Binance globally.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/COIN'},{label:'Recent News',url:'https://news.google.com/search?q=Coinbase+COIN+crypto+Bitcoin+ETF+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/COIN'},{label:'Investor Relations',url:'https://investor.coinbase.com/'}]
+  },
+  {
+    ticker:'SHOP', name:'Shopify Inc.', sector:'E-Commerce Infrastructure', tags:['E-Commerce','Fintech','AI'],
+    summary:'The operating system for independent commerce — powering 10%+ of US e-commerce with embedded payments, logistics, and AI tooling.',
+    thesis:`Shopify is the platform that enables any business to sell online — from solo entrepreneurs to enterprise brands like Gymshark, Heinz, and Kylie Cosmetics. The payments business (Shopify Payments, Shopify Capital) is growing faster than the subscription software business and at higher margins, following the SaaS-to-fintech evolution that made Square's ecosystem so durable.\n\nMerchant Solutions (payments, lending, fulfillment) now represent 73%+ of total revenue and are expanding internationally. The partnership with Amazon to integrate Shopify's buy button natively into Amazon is a distribution breakthrough. Risks include macroeconomic sensitivity of small business spending, competition from BigCommerce and WooCommerce, and margin compression during the fulfillment network build-out.`,
+    links:[{label:'Yahoo Finance',url:'https://finance.yahoo.com/quote/SHOP'},{label:'Recent News',url:'https://news.google.com/search?q=Shopify+SHOP+e-commerce+payments+earnings'},{label:'Seeking Alpha',url:'https://seekingalpha.com/symbol/SHOP'},{label:'Investor Relations',url:'https://investors.shopify.com/'}]
   },
 ];
+
+// Seeded daily rotation — deterministic per UTC day, changes every 24h
+function getDailyStocks(count=6){
+  const dayIdx = Math.floor(Date.now() / 86400000);
+  const arr = [...STOCK_POOL];
+  let s = (dayIdx ^ 0xdeadbeef) >>> 0;
+  for(let i=arr.length-1;i>0;i--){
+    s = (Math.imul(s,1664525)+1013904223)>>>0;
+    const j=s%(i+1);
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr.slice(0,count);
+}
 
 const QUOTES_CACHE_KEY = 'magverse:stockquotes:v2';
 const QUOTES_CACHE_TTL = 8 * 60 * 60 * 1000; // 8 hours
@@ -2530,10 +2585,13 @@ async function fetchAllQuotes(tickers){
 }
 
 function useStockQuotes(){
-  const tickers = STOCK_PICKS.map(s=>s.ticker);
+  const dayIdx = Math.floor(Date.now() / 86400000);
+  const picks = getDailyStocks();
+  const tickers = picks.map(s=>s.ticker);
+  const cacheKey = `${QUOTES_CACHE_KEY}:${dayIdx}`;
   const [quotes, setQuotes] = useState(()=>{
     try{
-      const c = JSON.parse(localStorage.getItem(QUOTES_CACHE_KEY));
+      const c = JSON.parse(localStorage.getItem(cacheKey));
       if(c && Date.now()-c.ts < QUOTES_CACHE_TTL) return c.data;
     }catch(e){}
     return {};
@@ -2545,7 +2603,7 @@ function useStockQuotes(){
   const load = async (force=false)=>{
     if(!force){
       try{
-        const c = JSON.parse(localStorage.getItem(QUOTES_CACHE_KEY));
+        const c = JSON.parse(localStorage.getItem(cacheKey));
         if(c && Date.now()-c.ts < QUOTES_CACHE_TTL){ setFetchedAt(new Date(c.ts)); return; }
       }catch(e){}
     }
@@ -2554,7 +2612,7 @@ function useStockQuotes(){
       const result = await fetchAllQuotes(tickers);
       setQuotes(result);
       const now = Date.now();
-      localStorage.setItem(QUOTES_CACHE_KEY, JSON.stringify({ts:now, data:result}));
+      localStorage.setItem(cacheKey, JSON.stringify({ts:now, data:result}));
       setFetchedAt(new Date(now));
     }catch(e){
       setError(true);
@@ -2565,7 +2623,7 @@ function useStockQuotes(){
 
   useEffect(()=>{ load(); },[]);
 
-  return {quotes, fetchedAt, loading, error, refetch:()=>load(true)};
+  return {picks, quotes, fetchedAt, loading, error, refetch:()=>load(true)};
 }
 
 function StockCard({pick, quote}){
@@ -2634,12 +2692,16 @@ function StockCard({pick, quote}){
 }
 
 function StockPicker({isMobile}){
-  const {quotes, fetchedAt, loading, error, refetch} = useStockQuotes();
+  const {picks, quotes, fetchedAt, loading, error, refetch} = useStockQuotes();
+  const todayLabel = new Date().toLocaleDateString([], {month:'short', day:'numeric'});
 
   return (
     <div className="mb-10">
       <div className={`flex ${isMobile?'flex-col gap-1':'items-center justify-between'} mb-4`}>
-        <h3 className="text-base font-bold tracking-tight">Stock Picks</h3>
+        <div>
+          <h3 className="text-base font-bold tracking-tight">Today's Picks</h3>
+          <div className="text-xs mt-0.5" style={{color:'#475569'}}>{todayLabel} · rotates daily</div>
+        </div>
         <div className="text-xs flex items-center gap-2" style={{color:'#475569'}}>
           {loading && <span style={{color:'#818cf8'}}>Fetching prices…</span>}
           {fetchedAt && !loading && <span>Updated {fetchedAt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>}
@@ -2652,7 +2714,7 @@ function StockPicker({isMobile}){
         </div>
       </div>
       <div className={`grid ${isMobile?'grid-cols-1':'grid-cols-2'} gap-4`}>
-        {STOCK_PICKS.map(pick=>(
+        {picks.map(pick=>(
           <StockCard key={pick.ticker} pick={pick} quote={quotes[pick.ticker]}/>
         ))}
       </div>
