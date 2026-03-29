@@ -2745,6 +2745,285 @@ function StockPicker({isMobile}){
   );
 }
 
+/* -------------------- Philosophy Quiz -------------------- */
+const PHILOSOPHY_QUESTIONS = [
+  "Is free will compatible with determinism? Can you truly be the author of your actions if every choice is the result of prior causes?",
+  "What makes an action morally right — its consequences, the intention behind it, or something else entirely?",
+  "Can we ever truly know anything with certainty, or is all knowledge ultimately based on assumptions we cannot prove?",
+  "What gives life meaning? Is meaning discovered or created, and does it require an audience?",
+  "Is morality objective — something that exists independently of human opinion — or is it constructed by culture and society?",
+  "What is the self? If your body and memories gradually change over decades, are you the same person you were as a child?",
+  "Is it ever morally justified to lie? Does the duty to tell the truth hold even when honesty causes serious harm?",
+  "What is justice? Is a just society one that maximizes overall happiness, or one that protects individual rights regardless of outcomes?",
+  "Do animals have moral rights? If so, how should we weigh their interests against human interests?",
+  "Is death something to be feared? Epicurus argued that death cannot harm us — do you agree?",
+  "What is beauty? Is aesthetic judgment purely subjective, or are there objective standards we converge on?",
+  "What obligations do we have to future generations who do not yet exist and cannot advocate for themselves?",
+  "Does technology expand or diminish human freedom? Can a tool change what it means to be free?",
+  "Is democracy the best form of government, or merely the least bad option? What would a truly just political system look like?",
+  "What is the relationship between language and thought? Can we think clearly about something we lack words for?",
+  "Can science answer all meaningful questions, or are there genuine limits to what empirical inquiry can tell us?",
+  "Is it rational to believe in God? What standard of evidence should apply to metaphysical claims?",
+  "Do wealthy nations have a moral obligation to help poorer ones, even at real cost to their own citizens?",
+  "Is civil disobedience ever morally justified? Under what conditions does breaking the law become a duty?",
+  "What is the relationship between happiness and the good life? Can someone live well while being mostly unhappy?",
+];
+
+function getPhilosophyQuestion(offset = 0) {
+  const dayIdx = Math.floor(Date.now() / 86400000);
+  return PHILOSOPHY_QUESTIONS[(dayIdx + offset) % PHILOSOPHY_QUESTIONS.length];
+}
+
+function PhilosophyQuiz({ onClose, data }) {
+  const isMobile = useIsMobile();
+  const [qOffset, setQOffset] = useState(0);
+  const question = getPhilosophyQuestion(qOffset);
+  // phase: 'prompt' | 'recording' | 'review' | 'grading' | 'result'
+  const [phase, setPhase] = useState('prompt');
+  const [transcript, setTranscript] = useState('');
+  const [liveText, setLiveText] = useState('');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const recogRef = useRef(null);
+
+  const startRecording = () => {
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!R) { setError('Speech recognition not supported in this browser.'); return; }
+    const r = new R();
+    r.lang = 'en-US';
+    r.interimResults = true;
+    r.continuous = true;
+    r.maxAlternatives = 1;
+    let accumulated = '';
+    r.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) accumulated += t + ' ';
+        else interim = t;
+      }
+      setLiveText(accumulated + interim);
+    };
+    r.onerror = (e) => {
+      if (e.error !== 'no-speech') setError('Mic error: ' + e.error);
+      setPhase('prompt');
+    };
+    r.onend = () => {
+      const final = accumulated.trim();
+      if (final) { setTranscript(final); setPhase('review'); }
+      else setPhase('prompt');
+    };
+    recogRef.current = r;
+    r.start();
+    setLiveText('');
+    setPhase('recording');
+  };
+
+  const stopRecording = () => {
+    recogRef.current?.stop();
+  };
+
+  const grade = async () => {
+    setPhase('grading');
+    setError('');
+    const savedSettings = ls('magverse:v1')?.settings || {};
+    const apiKey = savedSettings.apiKey || '';
+    if (!apiKey) {
+      setError('Add your Anthropic API key in Settings to enable grading.');
+      setPhase('review');
+      return;
+    }
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 600,
+          system: `You are a demanding but fair philosophy professor grading a student's spoken answer to a philosophy question. Evaluate the answer on: clarity of argument, philosophical depth, use of relevant concepts, and intellectual honesty. Return ONLY valid JSON in exactly this shape, no extra text:
+{"score":7,"grade":"B","summary":"One sentence summary of overall quality.","strengths":"What they got right — 1-2 sentences.","improvements":"What they missed or could deepen — 1-2 sentences."}
+Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`,
+          messages: [{
+            role: 'user',
+            content: `Question: ${question}\n\nStudent's answer: ${transcript}`,
+          }],
+        }),
+      });
+      if (!resp.ok) { const j = await resp.json(); throw new Error(j.error?.message || 'API error'); }
+      const j = await resp.json();
+      const raw = j.content[0].text.trim();
+      const parsed = JSON.parse(raw);
+      setResult(parsed);
+      setPhase('result');
+    } catch (e) {
+      setError('Grading failed: ' + e.message);
+      setPhase('review');
+    }
+  };
+
+  const reset = (newQ = false) => {
+    if (newQ) setQOffset(o => o + 1);
+    setTranscript('');
+    setLiveText('');
+    setResult(null);
+    setError('');
+    setPhase('prompt');
+  };
+
+  const gradeColor = (g) => {
+    if (g === 'A') return '#6ee7b7';
+    if (g === 'B') return '#93c5fd';
+    if (g === 'C') return '#fcd34d';
+    if (g === 'D') return '#fb923c';
+    return '#f87171';
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center">
+      <div className="absolute inset-0" style={{background:'rgba(0,0,0,0.7)',backdropFilter:'blur(5px)'}} onClick={onClose}/>
+      <div className={`relative z-50 flex flex-col ${isMobile?'w-full rounded-t-3xl':'rounded-2xl w-[540px] mb-8'}`}
+        style={{background:'#12121c',border:'1px solid rgba(255,255,255,0.08)',boxShadow:'0 -8px 40px rgba(0,0,0,0.8)',maxHeight:'92vh',overflowY:'auto'}}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 pb-3" style={{borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🏛️</span>
+            <div>
+              <div className="font-bold text-base">Philosophy</div>
+              <div className="text-xs" style={{color:'#475569'}}>Daily Question</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{color:'#475569',fontSize:'20px',lineHeight:1}}>✕</button>
+        </div>
+
+        <div className="p-5 flex flex-col gap-4">
+          {/* Question card */}
+          <div className="rounded-2xl p-4" style={{background:'rgba(99,102,241,0.1)',border:'1px solid rgba(99,102,241,0.25)'}}>
+            <div className="text-xs mb-2 font-semibold tracking-wide" style={{color:'#818cf8'}}>TODAY'S QUESTION</div>
+            <div className="text-sm leading-relaxed" style={{color:'#e2e8f0'}}>{question}</div>
+          </div>
+
+          {error && <div className="text-xs rounded-xl p-3" style={{background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',color:'#f87171'}}>{error}</div>}
+
+          {/* Phase: prompt */}
+          {phase === 'prompt' && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <p className="text-sm text-center" style={{color:'#64748b'}}>Press the mic and speak your answer — aim for 30–90 seconds.</p>
+              <button onClick={startRecording}
+                className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all"
+                style={{background:'rgba(99,102,241,0.2)',border:'2px solid rgba(99,102,241,0.5)',color:'#a5b4fc'}}>
+                🎤
+              </button>
+              <button onClick={()=>reset(true)} className="text-xs transition-all hover:opacity-80" style={{color:'#475569'}}>
+                Skip · get new question →
+              </button>
+            </div>
+          )}
+
+          {/* Phase: recording */}
+          {phase === 'recording' && (
+            <div className="flex flex-col items-center gap-3 py-4">
+              <p className="text-sm font-semibold" style={{color:'#f87171'}}>Recording… speak your answer</p>
+              <div className="relative">
+                <span style={{position:'absolute',inset:0,borderRadius:'50%',background:'rgba(239,68,68,0.25)',animation:'pulse 1s ease-in-out infinite'}}/>
+                <button onClick={stopRecording}
+                  className="relative w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all"
+                  style={{background:'rgba(239,68,68,0.8)',border:'2px solid rgba(239,68,68,0.6)',color:'#fff'}}>
+                  ■
+                </button>
+              </div>
+              {liveText && (
+                <div className="w-full rounded-xl p-3 text-sm italic" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#94a3b8',minHeight:'60px'}}>
+                  {liveText}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Phase: review */}
+          {phase === 'review' && (
+            <div className="flex flex-col gap-3">
+              <div>
+                <div className="text-xs mb-1 font-semibold" style={{color:'#475569'}}>YOUR ANSWER</div>
+                <div className="rounded-xl p-3 text-sm leading-relaxed" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}>
+                  {transcript}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={grade}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                  style={{background:'rgba(99,102,241,0.2)',border:'1px solid rgba(99,102,241,0.5)',color:'#a5b4fc'}}>
+                  Grade my answer
+                </button>
+                <button onClick={()=>reset(false)}
+                  className="px-4 py-2.5 rounded-xl text-sm transition-all"
+                  style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b'}}>
+                  Redo
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Phase: grading */}
+          {phase === 'grading' && (
+            <div className="flex flex-col items-center gap-3 py-6">
+              <div className="text-2xl" style={{animation:'pulse 1s ease-in-out infinite'}}>⚖️</div>
+              <p className="text-sm" style={{color:'#64748b'}}>Grading your answer…</p>
+            </div>
+          )}
+
+          {/* Phase: result */}
+          {phase === 'result' && result && (
+            <div className="flex flex-col gap-3">
+              {/* Score card */}
+              <div className="rounded-2xl p-4 flex items-center gap-4" style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${gradeColor(result.grade)}40`}}>
+                <div className="flex flex-col items-center justify-center w-16 h-16 rounded-2xl flex-shrink-0"
+                  style={{background:`${gradeColor(result.grade)}18`,border:`2px solid ${gradeColor(result.grade)}50`}}>
+                  <div className="text-2xl font-black" style={{color:gradeColor(result.grade)}}>{result.grade}</div>
+                  <div className="text-xs" style={{color:`${gradeColor(result.grade)}99`}}>{result.score}/10</div>
+                </div>
+                <div className="text-sm leading-relaxed" style={{color:'#cbd5e1'}}>{result.summary}</div>
+              </div>
+              {/* Strengths */}
+              <div className="rounded-xl p-3" style={{background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.2)'}}>
+                <div className="text-xs font-semibold mb-1" style={{color:'#6ee7b7'}}>STRENGTHS</div>
+                <div className="text-sm" style={{color:'#d1fae5'}}>{result.strengths}</div>
+              </div>
+              {/* Improvements */}
+              <div className="rounded-xl p-3" style={{background:'rgba(251,146,60,0.08)',border:'1px solid rgba(251,146,60,0.2)'}}>
+                <div className="text-xs font-semibold mb-1" style={{color:'#fb923c'}}>TO DEEPEN</div>
+                <div className="text-sm" style={{color:'#fed7aa'}}>{result.improvements}</div>
+              </div>
+              {/* Transcript */}
+              <details className="text-xs" style={{color:'#475569'}}>
+                <summary className="cursor-pointer mb-1">Your answer</summary>
+                <div className="rounded-xl p-2 mt-1" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>{transcript}</div>
+              </details>
+              <div className="flex gap-2 pt-1">
+                <button onClick={()=>reset(false)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                  style={{background:'rgba(99,102,241,0.15)',border:'1px solid rgba(99,102,241,0.4)',color:'#a5b4fc'}}>
+                  Try again
+                </button>
+                <button onClick={()=>reset(true)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                  style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b'}}>
+                  New question
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* -------------------- Learning Hub Panel -------------------- */
 function ChatHubsPanel({data, setData, toasts, isMobile}){
   const [openHub, setOpenHub] = useState(null);
@@ -2764,7 +3043,8 @@ function ChatHubsPanel({data, setData, toasts, isMobile}){
         ))}
       </div>
 
-      {openHub && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} />}
+      {openHub && openHub.id === 'hub1' && <PhilosophyQuiz onClose={()=>setOpenHub(null)} data={data} />}
+      {openHub && openHub.id !== 'hub1' && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} />}
     </div>
   );
 }
