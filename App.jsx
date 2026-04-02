@@ -468,14 +468,15 @@ function heuristicParse(text, _depth=0){
   if(_depth === 0){
     const allTimes = [...norm.matchAll(/\d{1,2}(?::\d{2})?\s*(?:am|pm)/gi)];
     if(allTimes.length >= 3){
-      // Split on newlines and before "then at/from TIME" or "then i have/want"
+   // Split on "then [after that] I/at/from/around" boundaries
       const chunks = norm
-        .split(/\n+|(?:,\s*|\s+(?:and\s+)?)then\s+(?=(?:at|from|i\s+have|i\s+want)\s)/i)
+        .split(/
++|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i))/i)
         .map(s => s
-          .replace(/^(?:then\s+|,\s*)/i,'')
-          .replace(/\s+\b(and|or|but)\s*$/i,'')
+          .replace(/^(?:then\s+|after\s+that\s+|,\s*)/i,'')
+          .replace(/\s+(and|or|but)\s*$/i,'')
           .trim())
-        .filter(s => s.length > 2);
+        .filter(s => s.length > 2);s.length > 2);
       if(chunks.length >= 2){
         const inheritDay = globalDay !== undefined ? globalDay : jsDayToMv(new Date().getDay());
         const allActions = [];
@@ -554,6 +555,16 @@ function heuristicParse(text, _depth=0){
   // For each time T[i], the describing text is between T[i-1].end and T[i].end
   const actions = [];
   for(let i=0; i<timeMatches.length; i++){
+    // "until TIME" → endHour of the previous event, not a new event
+    const before = norm.slice(Math.max(0, timeMatches[i].pos - 20), timeMatches[i].pos);
+    if(/\buntil\s*$/i.test(before)){
+      if(actions.length > 0){
+        const last = actions[actions.length-1];
+        if(last.type==='event' && last.payload.when) last.payload.when = {...last.payload.when, endHour: timeMatches[i].hour};
+      }
+      continue;
+    }
+
     const segStart = i===0 ? 0 : timeMatches[i-1].end;
     const segEnd   = timeMatches[i].end;
     const seg      = norm.slice(segStart, segEnd);
@@ -1774,7 +1785,7 @@ function AssignmentsPanel({data, setData, toasts}){
         />
       )}
 
-      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} onAddTask={addTask} toasts={toasts} />
+      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} onAddTask={addTask} onEditTask={updateTask} onDeleteTask={deleteTask} toasts={toasts} />
     </div>
   );
 }
@@ -1868,9 +1879,18 @@ function parseTaskFromSpeech(raw){
     .trim();
 
   // --- Category ---
+  // Explicit "to personal/classroom/extracurricular tasks" overrides keyword detection
   let category = 'personal';
-  if(/(class|course|homework|assignment|lecture|exam|essay|quiz|problem set|school|study)/i.test(t)) category = 'classroom';
+  if(/(to|in|for)\s+(my\s+)?personal\s+(tasks?|list|to-?do)/i.test(t)) category = 'personal';
+  else if(/(to|in|for)\s+(my\s+)?classroom\s+(tasks?|list|to-?do)/i.test(t)) category = 'classroom';
+  else if(/(to|in|for)\s+(my\s+)?extracurricular\s+(tasks?|list|to-?do)/i.test(t)) category = 'extracurricular';
+  else if(/(class|course|homework|assignment|lecture|exam|essay|quiz|problem set|school|study)/i.test(t)) category = 'classroom';
   else if(/(club|sport|extracurricular|activity|practice|rehearsal|team|meet)/i.test(t)) category = 'extracurricular';
+
+  // Strip "to [category] tasks/list" from title
+  title = title
+    .replace(/\bto\s+(my\s+)?(personal|classroom|extracurricular)\s+(tasks?|list|to-?do)\b/gi,'')
+    .replace(/\s{2,}/g,' ').trim();
 
   // --- Priority ---
   let priority = 'Med';
@@ -1920,7 +1940,7 @@ function parseTaskFromSpeech(raw){
   return { title: title || raw.trim(), category, priority, dueDate, subject, status:'To Do' };
 }
 
-function TasksAssistant({tasks, sort, setSort, filter, setFilter, onAddTask, toasts}){
+function TasksAssistant({tasks, sort, setSort, filter, setFilter, onAddTask, onEditTask, onDeleteTask, toasts}){
   const [open, setOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const [lastCmd, setLastCmd] = useState('');
@@ -2005,6 +2025,37 @@ function TasksAssistant({tasks, sort, setSort, filter, setFilter, onAddTask, toa
     // High priority
     if(/high priority|urgent|important/.test(t)){
       readList(active.filter(x=>x.priority==='High'), 'High priority tasks:');
+      return;
+    }
+
+    // Clear tasks by category (must run before category-read block)
+    if(/\b(clear|delete|remove|wipe)\b.*\b(task|tasks)\b/i.test(t) || /\bclear\s+all\b/i.test(t)){
+      let catFilter = null;
+      if(/personal|life|errand/i.test(t)) catFilter = 'personal';
+      else if(/classroom|class|school|homework|course/i.test(t)) catFilter = 'classroom';
+      else if(/extracurricular|club|activity|sport|extra/i.test(t)) catFilter = 'extracurricular';
+      const toRemove = catFilter ? tasks.filter(x=>x.category===catFilter) : active;
+      if(toRemove.length){
+        toRemove.forEach(x=>onDeleteTask && onDeleteTask(x.id));
+        speak(`Cleared ${toRemove.length} ${catFilter||'active'} task${toRemove.length>1?'s':''}.`);
+      } else {
+        speak(`No ${catFilter||'active'} tasks to clear.`);
+      }
+      return;
+    }
+
+    // Move task to a different category
+    const moveRe = raw.match(/\b(?:move|change|put|transfer|switch)\s+(?:task\s+)?(.+?)\s+to\s+(personal|classroom|extracurricular)\b/i);
+    if(moveRe){
+      const titleFrag = moveRe[1].replace(/^["']|["']$/g,'').trim().toLowerCase();
+      const targetCat = moveRe[2].toLowerCase();
+      const found = tasks.find(x=>x.title.toLowerCase().includes(titleFrag));
+      if(found){
+        onEditTask && onEditTask(found.id, {...found, category: targetCat});
+        speak(`Moved "${found.title}" to ${targetCat} tasks.`);
+      } else {
+        speak(`Couldn't find a task matching "${titleFrag}".`);
+      }
       return;
     }
 
