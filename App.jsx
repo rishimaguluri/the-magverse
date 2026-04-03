@@ -468,15 +468,15 @@ function heuristicParse(text, _depth=0){
   if(_depth === 0){
     const allTimes = [...norm.matchAll(/\d{1,2}(?::\d{2})?\s*(?:am|pm)/gi)];
     if(allTimes.length >= 3){
-   // Split on "then [after that] I/at/from/around" boundaries
+      // Split on "then [after that] I/at/from/around" boundaries
       const chunks = norm
         .split(/
-+|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i))/i)
++|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i)\b)/i)
         .map(s => s
           .replace(/^(?:then\s+|after\s+that\s+|,\s*)/i,'')
-          .replace(/\s+(and|or|but)\s*$/i,'')
+          .replace(/\s+\b(and|or|but)\s*$/i,'')
           .trim())
-        .filter(s => s.length > 2);s.length > 2);
+        .filter(s => s.length > 2);
       if(chunks.length >= 2){
         const inheritDay = globalDay !== undefined ? globalDay : jsDayToMv(new Date().getDay());
         const allActions = [];
