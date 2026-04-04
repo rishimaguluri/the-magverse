@@ -470,8 +470,7 @@ function heuristicParse(text, _depth=0){
     if(allTimes.length >= 3){
       // Split on "then [after that] I/at/from/around" boundaries
       const chunks = norm
-        .split(/
-+|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i)\b)/i)
+        .split(/\n+|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i)\b)/i)
         .map(s => s
           .replace(/^(?:then\s+|after\s+that\s+|,\s*)/i,'')
           .replace(/\s+\b(and|or|but)\s*$/i,'')
