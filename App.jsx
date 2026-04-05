@@ -464,10 +464,11 @@ function heuristicParse(text, _depth=0){
   const norm = normAmPm(text);
   const globalDay = parseDay(norm);
 
-  // Bulk schedule detection: 3+ time expressions → split into individual events
+  // Bulk schedule detection: 3+ time expressions OR 2+ "from…to" ranges → split
   if(_depth === 0){
-    const allTimes = [...norm.matchAll(/\d{1,2}(?::\d{2})?\s*(?:am|pm)/gi)];
-    if(allTimes.length >= 3){
+    const allTimes  = [...norm.matchAll(/\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)/gi)];
+    const allRanges = [...norm.matchAll(/\bfrom\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+to\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi)];
+    if(allTimes.length >= 3 || allRanges.length >= 2){
       // Split on "then [after that] I/at/from/around" boundaries
       const chunks = norm
         .split(/\n+|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i)\b)/i)
@@ -512,9 +513,14 @@ function heuristicParse(text, _depth=0){
     const when = {day, hour: startHour, endHour: endHour > startHour ? endHour : startHour+1};
     const subtaskItems = parseSubtasks(norm);
     const subtasks = subtaskItems ? subtaskItems.map(t=>({id:uid(),title:t.charAt(0).toUpperCase()+t.slice(1),done:false})) : undefined;
-    // Title = everything before "from" minus noise words
+    // Title = text before "from"; if empty/just a day name, use text after the range
     const beforeFrom = norm.slice(0, norm.search(/\bfrom\s+\d/i));
-    const rawTitle = cleanTitle(beforeFrom).trim();
+    let rawTitle = cleanTitle(beforeFrom).trim();
+    const DAY_ONLY = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i;
+    if(rawTitle.length <= 1 || DAY_ONLY.test(rawTitle)){
+      const afterRange = norm.slice(rangeMatch.index + rangeMatch[0].length);
+      rawTitle = cleanTitle(afterRange).trim();
+    }
     const title = rawTitle.length > 1 ? rawTitle.charAt(0).toUpperCase()+rawTitle.slice(1) : 'Task Block';
     const type = detectType(norm);
     return [{type:'event', payload:{title, type, notes:text, when, subtasks}}];
