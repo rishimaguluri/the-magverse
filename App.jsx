@@ -3225,8 +3225,8 @@ function PhilosophyQuiz({ onClose, data }) {
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 600,
-          system: `You are a demanding but fair philosophy professor grading a student's spoken answer to a philosophy question. Evaluate the answer on: clarity of argument, philosophical depth, use of relevant concepts, and intellectual honesty. Return ONLY valid JSON in exactly this shape, no extra text:
-{"score":7,"grade":"B","summary":"One sentence summary of overall quality.","strengths":"What they got right — 1-2 sentences.","improvements":"What they missed or could deepen — 1-2 sentences."}
+          system: `You are a demanding but fair philosophy professor grading a student's spoken answer to a philosophy question. Evaluate on: clarity of argument, philosophical depth, use of relevant concepts, and intellectual honesty. Then write a model answer showing what an excellent response looks like. Return ONLY valid JSON in exactly this shape, no extra text:
+{"score":7,"grade":"B","summary":"One sentence summary of overall quality.","strengths":"What they got right — 1-2 sentences.","improvements":"What they missed or could deepen — 1-2 sentences.","modelAnswer":"A model answer of 3-5 sentences that demonstrates the ideal philosophical response — covering key thinkers, core arguments, and nuances a strong student would address."}
 Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`,
           messages: [{
             role: 'user',
@@ -3379,6 +3379,13 @@ Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`,
                 <div className="text-xs font-semibold mb-1" style={{color:'#fb923c'}}>TO DEEPEN</div>
                 <div className="text-sm" style={{color:'#fed7aa'}}>{result.improvements}</div>
               </div>
+              {/* Model answer */}
+              {result.modelAnswer && (
+                <div className="rounded-xl p-3" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.25)'}}>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#818cf8'}}>MODEL ANSWER</div>
+                  <div className="text-sm leading-relaxed" style={{color:'#c7d2fe'}}>{result.modelAnswer}</div>
+                </div>
+              )}
               {/* Transcript */}
               <details className="text-xs" style={{color:'#475569'}}>
                 <summary className="cursor-pointer mb-1">Your answer</summary>
@@ -3578,12 +3585,20 @@ function DealCard({deal, onChat, onDismiss, live}){
 }
 
 function DealOfDay({data, setData, isMobile}){
-  const deal = getDailyDeal(data.seenDeals || []);
+  const [dealOffset, setDealOffset] = useState(0);
   const { deals: liveDeals, loading: liveLoading } = useLiveDeals();
   const [chatDeal, setChatDeal] = useState(null);
   const seenCount = (data.seenDeals||[]).length;
 
+  // Build pool starting from today's seed so offset 0 is "today's deal"
+  const start = Math.floor(Date.now() / 86400000) % DEAL_POOL.length;
+  const orderedPool = Array.from({length: DEAL_POOL.length}, (_,i) => DEAL_POOL[(start+i) % DEAL_POOL.length]);
+  const deal = orderedPool[dealOffset % DEAL_POOL.length];
+  const total = DEAL_POOL.length;
+
   const markSeen = (id) => setData(d=>({...d, seenDeals:[...new Set([...(d.seenDeals||[]),id])]}));
+  const prev = () => setDealOffset(o => (o - 1 + total) % total);
+  const next = () => setDealOffset(o => (o + 1) % total);
 
   const makeDealHub = (d) => ({
     id: 'deal-hub-'+d.id,
@@ -3598,12 +3613,17 @@ function DealOfDay({data, setData, isMobile}){
         <div>
           <h3 className="text-base font-bold tracking-tight">Deal of the Day</h3>
           <div className="text-xs mt-0.5" style={{color:'#475569'}}>
-            {DEAL_POOL.length - seenCount} unseen in archive · {liveLoading ? 'fetching recent…' : liveDeals.length ? `${liveDeals.length} recent deals loaded` : 'recent deals via Claude'}
+            {liveLoading ? 'fetching recent…' : liveDeals.length ? `${liveDeals.length} recent deals loaded` : 'recent deals via Claude'}
           </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={prev} className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b'}}>‹</button>
+          <span className="text-xs px-1.5" style={{color:'#475569'}}>{dealOffset + 1} / {total}</span>
+          <button onClick={next} className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b'}}>›</button>
         </div>
       </div>
 
-      {/* Today's deal */}
+      {/* Current deal */}
       <DealCard deal={deal} onChat={()=>setChatDeal(deal)} onDismiss={()=>markSeen(deal.id)} />
 
       {/* Live deals */}
