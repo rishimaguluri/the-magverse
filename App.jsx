@@ -2340,55 +2340,378 @@ function NotesSubtab({data, setData, toasts}){
   );
 }
 
-function JournalSubtab({data, setData, toasts}){
-  const journals = data.journals || [];
-  const today = new Date().toISOString().slice(0,10);
-  const [date, setDate] = useState(today);
-  const existing = journals.find(j=>j.date===date);
-  const [body, setBody] = useState(existing?.body || '');
+// ---- Knowledge Graph Helpers ----
+const SIMILARITY_THRESHOLD = 0.28;
 
-  // sync body when date changes
-  useEffect(()=>{ const e = (data.journals||[]).find(j=>j.date===date); setBody(e?.body||''); }, [date]);
+function simpleHash(str){
+  let h=5381;
+  for(let i=0;i<str.length;i++) h=(h*33^str.charCodeAt(i))>>>0;
+  return h.toString(16);
+}
+
+function cosineSim(a,b){
+  let dot=0,na=0,nb=0;
+  for(let i=0;i<a.length;i++){dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
+  return(na&&nb)?dot/Math.sqrt(na*nb):0;
+}
+
+function buildTFIDF(entries){
+  const STOP=new Set(['the','and','for','that','this','with','have','from','but','are','was','were','been','has','had','will','would','could','should','its','their','they','them','then','than','when','what','which','who','how','not','can','all','out','into','our','you','your','about','more','just','also','time','some','like','very','only','even','any','there','one','two']);
+  const tok=t=>t.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>2&&!STOP.has(w));
+  const docs=entries.map(e=>tok(e.body));
+  const N=docs.length;
+  const df={};
+  docs.forEach(d=>{new Set(d).forEach(w=>{df[w]=(df[w]||0)+1;});});
+  const vocab=Object.keys(df).filter(w=>df[w]<N);
+  const vmap={};vocab.forEach((w,i)=>vmap[w]=i);
+  return entries.map((_,ei)=>{
+    const tf={};docs[ei].forEach(w=>{tf[w]=(tf[w]||0)+1;});
+    const n=docs[ei].length||1;
+    const vec=new Array(vocab.length).fill(0);
+    Object.entries(tf).forEach(([w,c])=>{if(vmap[w]!==undefined)vec[vmap[w]]=c/n*Math.log((N+1)/(df[w]||1));});
+    return vec;
+  });
+}
+
+async function fetchVoyageEmbeddings(texts,key){
+  const res=await fetch('https://api.voyageai.com/v1/embeddings',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+    body:JSON.stringify({input:texts,model:'voyage-3'})
+  });
+  if(!res.ok) throw new Error('Voyage error '+res.status);
+  const d=await res.json();
+  return d.data.map(x=>x.embedding);
+}
+
+function computeConnections(entries,threshold){
+  const th=threshold??SIMILARITY_THRESHOLD;
+  const result=entries.map(e=>({...e,connections:[]}));
+  for(let i=0;i<result.length;i++){
+    for(let j=i+1;j<result.length;j++){
+      const ei=result[i],ej=result[j];
+      if(!ei.embedding||!ej.embedding) continue;
+      const s=cosineSim(ei.embedding,ej.embedding);
+      if(s>=th){
+        result[i].connections.push({id:ej.id,sim:s,type:'semantic'});
+        result[j].connections.push({id:ei.id,sim:s,type:'semantic'});
+      }
+    }
+  }
+  result.forEach((ei,i)=>{
+    const ta=ei.tags||[];
+    if(!ta.length) return;
+    result.forEach((ej,j)=>{
+      if(i>=j) return;
+      const shared=ta.filter(t=>(ej.tags||[]).includes(t));
+      if(!shared.length) return;
+      const ai=result[i].connections.find(c=>c.id===ej.id);
+      const aj=result[j].connections.find(c=>c.id===ei.id);
+      if(!ai) result[i].connections.push({id:ej.id,sim:0.5,type:'tag',sharedTags:shared});
+      else ai.sharedTags=shared;
+      if(!aj) result[j].connections.push({id:ei.id,sim:0.5,type:'tag',sharedTags:shared});
+      else aj.sharedTags=shared;
+    });
+  });
+  return result;
+}
+
+// ---- Canvas Force-Graph ----
+function JournalGraph({entries, selectedId, onSelect, onUpdatePositions}){
+  const canvasRef=useRef(null);
+  const stRef=useRef({nodes:[],edges:[],dragIdx:-1,dragging:false,animId:null,dragStartX:0,dragStartY:0});
+
+  function buildSim(canvas){
+    const W=canvas.width,H=canvas.height;
+    const old=stRef.current.nodes;
+    stRef.current.nodes=entries.map(e=>{
+      const prev=old.find(n=>n.id===e.id);
+      return {id:e.id,label:e.date,x:e.position?.x??prev?.x??(W/2+(Math.random()-.5)*220),y:e.position?.y??prev?.y??(H/2+(Math.random()-.5)*180),vx:0,vy:0};
+    });
+    const edges=[];
+    entries.forEach((e,i)=>{
+      (e.connections||[]).forEach(c=>{
+        const j=entries.findIndex(f=>f.id===c.id);
+        if(j>i) edges.push({a:i,b:j,sim:c.sim,type:c.type});
+      });
+    });
+    stRef.current.edges=edges;
+  }
+
+  function redraw(canvas){
+    const ctx=canvas.getContext('2d');
+    const {nodes,edges}=stRef.current;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.setLineDash([]);
+    edges.forEach(({a,b,sim,type})=>{
+      const na=nodes[a],nb=nodes[b];
+      ctx.beginPath();ctx.moveTo(na.x,na.y);ctx.lineTo(nb.x,nb.y);
+      if(type==='tag'){ctx.strokeStyle='rgba(251,191,36,0.4)';ctx.lineWidth=1.5;ctx.setLineDash([4,4]);}
+      else{ctx.strokeStyle=`rgba(99,102,241,${Math.min(0.85,0.15+sim*0.7)})`;ctx.lineWidth=0.5+sim*2;ctx.setLineDash([]);}
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    nodes.forEach(n=>{
+      const sel=n.id===selectedId;
+      const r=20;
+      if(sel){ctx.beginPath();ctx.arc(n.x,n.y,r+7,0,Math.PI*2);ctx.fillStyle='rgba(99,102,241,0.18)';ctx.fill();}
+      ctx.beginPath();ctx.arc(n.x,n.y,r,0,Math.PI*2);
+      const g=ctx.createRadialGradient(n.x-4,n.y-4,2,n.x,n.y,r);
+      if(sel){g.addColorStop(0,'#818cf8');g.addColorStop(1,'#4f46e5');}
+      else{g.addColorStop(0,'#22223a');g.addColorStop(1,'#111118');}
+      ctx.fillStyle=g;ctx.fill();
+      ctx.strokeStyle=sel?'#6366f1':'rgba(255,255,255,0.14)';ctx.lineWidth=sel?2:1;ctx.stroke();
+      ctx.fillStyle='rgba(226,232,240,0.8)';ctx.font='9px Inter,sans-serif';ctx.textAlign='center';
+      ctx.fillText(n.label.slice(5),n.x,n.y+r+13);
+    });
+  }
+
+  function runTick(canvas,iter,maxIter){
+    const {nodes,edges}=stRef.current;
+    const W=canvas.width,H=canvas.height,cx=W/2,cy=H/2;
+    nodes.forEach(n=>{n.fx=0;n.fy=0;});
+    for(let i=0;i<nodes.length;i++){
+      for(let j=i+1;j<nodes.length;j++){
+        const dx=nodes[j].x-nodes[i].x,dy=nodes[j].y-nodes[i].y;
+        const d2=Math.max(dx*dx+dy*dy,1),d=Math.sqrt(d2),f=3200/d2;
+        nodes[i].fx-=f*dx/d;nodes[i].fy-=f*dy/d;
+        nodes[j].fx+=f*dx/d;nodes[j].fy+=f*dy/d;
+      }
+    }
+    edges.forEach(({a,b,sim})=>{
+      const na=nodes[a],nb=nodes[b];
+      const dx=nb.x-na.x,dy=nb.y-na.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const len=70+90*(1-Math.min(sim,1)),f=(d-len)*0.045;
+      na.fx+=f*dx/d;na.fy+=f*dy/d;nb.fx-=f*dx/d;nb.fy-=f*dy/d;
+    });
+    nodes.forEach(n=>{n.fx+=(cx-n.x)*0.012;n.fy+=(cy-n.y)*0.012;});
+    const cool=Math.max(0.25,1-iter/maxIter);
+    nodes.forEach((n,i)=>{
+      if(stRef.current.dragIdx===i) return;
+      n.vx=(n.vx+n.fx)*0.78;n.vy=(n.vy+n.fy)*0.78;
+      n.x=Math.max(28,Math.min(W-28,n.x+n.vx*cool));
+      n.y=Math.max(28,Math.min(H-28,n.y+n.vy*cool));
+    });
+    redraw(canvas);
+  }
+
+  useEffect(()=>{
+    const canvas=canvasRef.current;
+    if(!canvas||!entries.length) return;
+    canvas.width=canvas.offsetWidth||680;canvas.height=canvas.offsetHeight||420;
+    buildSim(canvas);
+    let iter=0;const maxIter=220;
+    function animate(){
+      runTick(canvas,iter,maxIter);iter++;
+      if(iter<maxIter) stRef.current.animId=requestAnimationFrame(animate);
+      else{onUpdatePositions&&onUpdatePositions(stRef.current.nodes.map(n=>({id:n.id,x:n.x,y:n.y})));}
+    }
+    if(stRef.current.animId) cancelAnimationFrame(stRef.current.animId);
+    stRef.current.animId=requestAnimationFrame(animate);
+    return()=>{if(stRef.current.animId)cancelAnimationFrame(stRef.current.animId);};
+  },[entries.length, entries.map(e=>(e.connections||[]).length).join(',')]);
+
+  useEffect(()=>{
+    const canvas=canvasRef.current;
+    if(canvas&&stRef.current.nodes.length) redraw(canvas);
+  },[selectedId]);
+
+  function nodeAt(canvas,cx,cy){
+    const rect=canvas.getBoundingClientRect();
+    const x=cx-rect.left,y=cy-rect.top;
+    const {nodes}=stRef.current;
+    for(let i=nodes.length-1;i>=0;i--){const dx=nodes[i].x-x,dy=nodes[i].y-y;if(dx*dx+dy*dy<=400) return i;}
+    return -1;
+  }
+  function onMD(e){
+    const idx=nodeAt(canvasRef.current,e.clientX,e.clientY);
+    if(idx<0) return;
+    stRef.current.dragIdx=idx;stRef.current.dragging=false;
+    stRef.current.dragStartX=e.clientX;stRef.current.dragStartY=e.clientY;
+  }
+  function onMM(e){
+    const s=stRef.current;
+    if(s.dragIdx<0) return;
+    if(Math.abs(e.clientX-s.dragStartX)+Math.abs(e.clientY-s.dragStartY)>5) s.dragging=true;
+    if(!s.dragging) return;
+    const canvas=canvasRef.current;
+    const rect=canvas.getBoundingClientRect();
+    const n=s.nodes[s.dragIdx];
+    n.x=e.clientX-rect.left;n.y=e.clientY-rect.top;n.vx=0;n.vy=0;
+    redraw(canvas);
+  }
+  function onMU(e){
+    const s=stRef.current,idx=s.dragIdx,drag=s.dragging;
+    s.dragIdx=-1;
+    if(!drag&&idx>=0) onSelect&&onSelect(s.nodes[idx].id);
+    if(drag) onUpdatePositions&&onUpdatePositions(s.nodes.map(n=>({id:n.id,x:n.x,y:n.y})));
+  }
+  function onTS(e){const t=e.touches[0];onMD({clientX:t.clientX,clientY:t.clientY});}
+  function onTM(e){e.preventDefault();const t=e.touches[0];onMM({clientX:t.clientX,clientY:t.clientY});}
+
+  if(!entries.length) return <div className="flex items-center justify-center text-sm opacity-50" style={{height:420}}>No embedded entries yet — click "Build Connections".</div>;
+  return(
+    <canvas ref={canvasRef} className="w-full rounded border-subtle" style={{height:420,background:'rgba(255,255,255,0.01)',cursor:'pointer'}}
+      onMouseDown={onMD} onMouseMove={onMM} onMouseUp={onMU} onMouseLeave={onMU}
+      onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onMU}
+    />
+  );
+}
+
+function JournalSubtab({data, setData, toasts}){
+  const voyageKey=data.settings?.voyageKey||'';
+  const journals=data.journals||[];
+  const today=new Date().toISOString().slice(0,10);
+  const [date,setDate]=useState(today);
+  const existing=journals.find(j=>j.date===date);
+  const [body,setBody]=useState(existing?.body||'');
+  const [tagsInput,setTagsInput]=useState((existing?.tags||[]).join(', '));
+  const [view,setView]=useState('list');
+  const [selectedId,setSelectedId]=useState(null);
+  const [migrating,setMigrating]=useState(false);
+  const [migrateProgress,setMigrateProgress]=useState(0);
+
+  useEffect(()=>{
+    const e=(data.journals||[]).find(j=>j.date===date);
+    setBody(e?.body||'');
+    setTagsInput((e?.tags||[]).join(', '));
+  },[date]);
 
   function save(){
     if(!body.trim()) return;
+    const hash=simpleHash(body);
+    const tags=tagsInput.split(',').map(t=>t.trim()).filter(Boolean);
     if(existing){
-      setData(d=>({...d, journals:(d.journals||[]).map(j=>j.date===date?{...j,body,updatedAt:new Date().toISOString()}:j)}));
+      setData(d=>({...d,journals:(d.journals||[]).map(j=>j.date===date?{...j,body,updatedAt:new Date().toISOString(),tags,contentHash:hash,...(j.contentHash!==hash?{embedding:null,connections:[]}:{})}:j)}));
     } else {
-      setData(d=>({...d, journals:[...(d.journals||[]),{id:uid(),date,body,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}]}));
+      setData(d=>({...d,journals:[...(d.journals||[]),{id:uid(),date,body,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),tags,contentHash:hash}]}));
     }
     toasts.push('Journal entry saved');
   }
 
-  const sorted = [...journals].sort((a,b)=>b.date.localeCompare(a.date));
+  async function runEmbeddings(){
+    const entries=data.journals||[];
+    if(entries.length<2){toasts.push('Need at least 2 entries to map');return;}
+    setMigrating(true);setMigrateProgress(0);
+    try{
+      let updated=[...entries];
+      if(voyageKey){
+        const needsEmbed=entries.filter(e=>!e.embedding||e.contentHash!==simpleHash(e.body));
+        if(needsEmbed.length){
+          const chunks=[];
+          for(let i=0;i<needsEmbed.length;i+=8) chunks.push(needsEmbed.slice(i,i+8));
+          let done=0;
+          for(const chunk of chunks){
+            const embs=await fetchVoyageEmbeddings(chunk.map(e=>e.body),voyageKey);
+            chunk.forEach((e,i)=>{
+              const idx=updated.findIndex(u=>u.id===e.id);
+              if(idx>=0) updated[idx]={...updated[idx],embedding:embs[i],contentHash:simpleHash(e.body)};
+            });
+            done+=chunk.length;setMigrateProgress(Math.round(done/needsEmbed.length*80));
+          }
+        }
+      } else {
+        const vecs=buildTFIDF(updated);
+        updated=updated.map((e,i)=>({...e,embedding:vecs[i],contentHash:simpleHash(e.body)}));
+        setMigrateProgress(80);
+      }
+      updated=computeConnections(updated);
+      setMigrateProgress(100);
+      setData(d=>({...d,journals:updated}));
+      const total=updated.reduce((s,e)=>s+(e.connections||[]).length,0)/2;
+      toasts.push(`Graph built — ${Math.round(total)} connections across ${updated.length} entries`);
+    } catch(err){toasts.push('Failed: '+err.message);}
+    setMigrating(false);
+  }
 
-  return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2 glass p-5 rounded border-subtle flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <input type="date" className="p-2 bg-transparent border border-white/10 rounded text-sm" value={date} onChange={e=>setDate(e.target.value)} />
-          <span className="text-sm opacity-60">{date===today? 'Today' : ''}</span>
-        </div>
-        <textarea
-          className="flex-1 w-full p-3 bg-transparent border border-white/10 rounded text-sm resize-none min-h-[360px]"
-          placeholder="Write your thoughts for the day..."
-          value={body}
-          onChange={e=>setBody(e.target.value)}
-        />
-        <button className="self-end px-4 py-1.5 rounded bg-indigo-600" onClick={save}>Save Entry</button>
+  function handleUpdatePositions(positions){
+    setData(d=>({...d,journals:(d.journals||[]).map(j=>{
+      const p=positions.find(x=>x.id===j.id);
+      return p?{...j,position:{x:p.x,y:p.y}}:j;
+    })}));
+  }
+
+  const sorted=[...journals].sort((a,b)=>b.date.localeCompare(a.date));
+  const graphEntries=journals.filter(j=>j.embedding);
+  const selectedEntry=selectedId?journals.find(j=>j.id===selectedId):null;
+
+  return(
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={()=>setView('list')} className={`px-3 py-1 rounded text-sm ${view==='list'?'bg-indigo-600':'bg-white/5'}`}>List</button>
+        <button onClick={()=>setView('graph')} className={`px-3 py-1 rounded text-sm ${view==='graph'?'bg-indigo-600':'bg-white/5'}`}>Knowledge Graph</button>
+        {view==='graph'&&(
+          <button onClick={runEmbeddings} disabled={migrating} className="ml-auto px-3 py-1 rounded text-sm" style={{background:'rgba(99,102,241,0.2)',color:'#a5b4fc',border:'1px solid rgba(99,102,241,0.3)'}}>
+            {migrating?`Building… ${migrateProgress}%`:`Build Connections${graphEntries.length?` (${graphEntries.length}/${journals.length} mapped)`:''}`}
+          </button>
+        )}
       </div>
-      <div className="glass p-4 rounded border-subtle">
-        <div className="font-semibold mb-3 text-sm">Past Entries</div>
-        {sorted.length===0 && <div className="text-xs opacity-50">No entries yet.</div>}
-        <div className="flex flex-col gap-2">
-          {sorted.map(j=> (
-            <button key={j.id} className={`text-left p-2 rounded hover:bg-white/5 ${j.date===date?'bg-white/10':''}`} onClick={()=>setDate(j.date)}>
-              <div className="text-xs font-medium">{j.date}</div>
-              <div className="text-xs opacity-60 line-clamp-2 mt-0.5">{j.body}</div>
-            </button>
-          ))}
+
+      {view==='list'?(
+        <div className="grid grid-cols-3 gap-6">
+          <div className="col-span-2 glass p-5 rounded border-subtle flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <input type="date" className="p-2 bg-transparent border border-white/10 rounded text-sm" value={date} onChange={e=>setDate(e.target.value)} />
+              <span className="text-sm opacity-60">{date===today?'Today':''}</span>
+            </div>
+            <textarea
+              className="flex-1 w-full p-3 bg-transparent border border-white/10 rounded text-sm resize-none min-h-[300px]"
+              placeholder="Write your thoughts for the day..."
+              value={body} onChange={e=>setBody(e.target.value)}
+            />
+            <input
+              className="w-full p-2 bg-transparent border border-white/10 rounded text-xs"
+              placeholder="Tags: ideas, finance, goals  (comma-separated)"
+              value={tagsInput} onChange={e=>setTagsInput(e.target.value)}
+            />
+            <button className="self-end px-4 py-1.5 rounded bg-indigo-600" onClick={save}>Save Entry</button>
+          </div>
+          <div className="glass p-4 rounded border-subtle">
+            <div className="font-semibold mb-3 text-sm">Past Entries</div>
+            {sorted.length===0&&<div className="text-xs opacity-50">No entries yet.</div>}
+            <div className="flex flex-col gap-2">
+              {sorted.map(j=>(
+                <button key={j.id} className={`text-left p-2 rounded hover:bg-white/5 ${j.date===date?'bg-white/10':''}`} onClick={()=>setDate(j.date)}>
+                  <div className="text-xs font-medium">{j.date}</div>
+                  {(j.tags||[]).length>0&&<div className="text-xs mt-0.5" style={{color:'#818cf8'}}>{(j.tags||[]).join(', ')}</div>}
+                  <div className="text-xs opacity-60 line-clamp-2 mt-0.5">{j.body}</div>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      ):(
+        <div className="flex gap-4">
+          <div className="flex-1 min-w-0 glass p-3 rounded border-subtle">
+            <JournalGraph entries={graphEntries} selectedId={selectedId} onSelect={setSelectedId} onUpdatePositions={handleUpdatePositions} />
+          </div>
+          {selectedEntry&&(
+            <div className="w-64 glass p-4 rounded border-subtle flex flex-col gap-2 text-sm flex-shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold text-sm">{selectedEntry.date}</div>
+                <button onClick={()=>setSelectedId(null)} className="opacity-50 hover:opacity-100 text-xs">✕</button>
+              </div>
+              {(selectedEntry.tags||[]).length>0&&<div className="text-xs" style={{color:'#818cf8'}}>{selectedEntry.tags.join(', ')}</div>}
+              <div className="text-xs opacity-75 leading-relaxed line-clamp-10">{selectedEntry.body}</div>
+              {(selectedEntry.connections||[]).length>0&&(
+                <div className="mt-1">
+                  <div className="text-xs opacity-50 mb-1">Connections:</div>
+                  {selectedEntry.connections.slice(0,6).map(c=>{
+                    const other=journals.find(j=>j.id===c.id);
+                    return other?(
+                      <button key={c.id} onClick={()=>setSelectedId(c.id)} className="block w-full text-left p-1 rounded hover:bg-white/5 text-xs">
+                        <span style={{color:c.type==='tag'?'#fbbf24':'#818cf8'}}>●</span> {other.date} <span className="opacity-40">{Math.round(c.sim*100)}%</span>
+                        {c.sharedTags&&<span className="ml-1 opacity-40">#{c.sharedTags[0]}</span>}
+                      </button>
+                    ):null;
+                  })}
+                </div>
+              )}
+              <button className="mt-auto text-xs text-left" style={{color:'#818cf8'}} onClick={()=>{setView('list');setDate(selectedEntry.date);}}>Open in editor →</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -3694,6 +4017,7 @@ function SettingsPanel({data, setData, toasts}){
   const [elevenLabsVoice, setElevenLabsVoice] = useState(s.elevenLabsVoice || '21m00Tcm4TlvDq8ikWAM');
   const [openaiTtsKey, setOpenaiTtsKey] = useState(s.openaiTtsKey || '');
   const [openaiTtsVoice, setOpenaiTtsVoice] = useState(s.openaiTtsVoice || 'nova');
+  const [voyageKey, setVoyageKey] = useState(s.voyageKey || '');
   const [availableVoices, setAvailableVoices] = useState([]);
   const [testLoading, setTestLoading] = useState(false);
 
@@ -3744,7 +4068,7 @@ function SettingsPanel({data, setData, toasts}){
 
   const save = ()=>{
     setData(d=>({...d, settings:{...d.settings, apiKey, accent, userName:name, avatarInitial:(name[0]||'Y').toUpperCase(),
-      ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice}}));
+      ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice, voyageKey}}));
     toasts.push('Settings saved');
   };
   const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='magverse-export.json'; a.click(); URL.revokeObjectURL(url); };
@@ -3761,6 +4085,10 @@ function SettingsPanel({data, setData, toasts}){
           <div>
             <label className="block text-xs opacity-80 mb-1">Anthropic API Key</label>
             <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-..." />
+          </div>
+          <div>
+            <label className="block text-xs opacity-80 mb-1">Voyage AI Key <span className="opacity-50">(Journal graph — optional)</span></label>
+            <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={voyageKey} onChange={e=>setVoyageKey(e.target.value)} placeholder="pa-... · voyageai.com" />
           </div>
           <div>
             <label className="block text-xs opacity-80 mb-1">Accent Preset</label>
