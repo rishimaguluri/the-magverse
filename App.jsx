@@ -744,6 +744,252 @@ function Topbar({setActive, data, toasts, isMobile}){
   );
 }
 
+/* -------------------- Daily Insights -------------------- */
+const WMO_DESC={0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Foggy',48:'Icy fog',51:'Light drizzle',53:'Drizzle',55:'Dense drizzle',61:'Light rain',63:'Moderate rain',65:'Heavy rain',71:'Light snow',73:'Moderate snow',75:'Heavy snow',77:'Snow grains',80:'Light showers',81:'Showers',82:'Violent showers',85:'Snow showers',86:'Heavy snow showers',95:'Thunderstorm',96:'Thunderstorm+hail',99:'Thunderstorm+heavy hail'};
+
+async function fetchWeatherForDate(dateStr){
+  const today=new Date().toISOString().slice(0,10);
+  const isPast=dateStr<today;
+  let lat=39.96,lon=-82.99;
+  try{
+    const cached=sessionStorage.getItem('magverse:geo');
+    if(cached){const g=JSON.parse(cached);lat=g.lat;lon=g.lon;}
+    else await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(p=>{lat=p.coords.latitude;lon=p.coords.longitude;sessionStorage.setItem('magverse:geo',JSON.stringify({lat,lon}));res();},rej,{timeout:3000}));
+  }catch(e){}
+  const base=isPast?'https://archive-api.open-meteo.com/v1/archive':'https://api.open-meteo.com/v1/forecast';
+  const url=`${base}?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&start_date=${dateStr}&end_date=${dateStr}&timezone=auto&temperature_unit=fahrenheit`;
+  const res=await fetch(url,{signal:AbortSignal.timeout(5000)});
+  if(!res.ok) return null;
+  const d=await res.json();
+  if(!d.daily?.temperature_2m_max?.length) return null;
+  return{maxF:Math.round(d.daily.temperature_2m_max[0]),minF:Math.round(d.daily.temperature_2m_min[0]),precip:d.daily.precipitation_sum[0]||0,code:d.daily.weathercode[0],desc:WMO_DESC[d.daily.weathercode[0]]||'Unknown'};
+}
+
+function extractInsightSections(text){
+  const TAGS=['day_summary','patterns','energy_forecast','recommendations','retrospective'];
+  const out={};
+  TAGS.forEach(tag=>{
+    const si=text.indexOf(`<${tag}>`);
+    if(si===-1) return;
+    const ei=text.indexOf(`</${tag}>`,si);
+    if(ei===-1){out[tag]=text.slice(si+tag.length+2).trim();out[tag+'_partial']=true;}
+    else out[tag]=text.slice(si+tag.length+2,ei).trim();
+  });
+  return out;
+}
+
+function DailyInsightsSubtab({data}){
+  const today=new Date().toISOString().slice(0,10);
+  const [date,setDate]=useState(today);
+  const [sections,setSections]=useState({});
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const [lastGen,setLastGen]=useState(null);
+  const [weather,setWeather]=useState(null);
+  const [wxLoading,setWxLoading]=useState(false);
+
+  const events=data.events||[];
+  const journals=data.journals||[];
+  const apiKey=data.settings?.apiKey||'';
+
+  const targetDate=new Date(date+'T12:00:00');
+  const isToday=date===today;
+  const isPast=date<today;
+  const isFuture=date>today;
+  const targetDow=(targetDate.getDay()+6)%7;
+  const dayName=targetDate.toLocaleDateString('en',{weekday:'long'});
+  const dateLabel=targetDate.toLocaleDateString('en',{month:'long',day:'numeric',year:'numeric'});
+
+  const dayEvents=events.filter(ev=>{
+    if(ev.when?.hour===undefined) return false;
+    const r=ev.recurrence,d=ev.when?.day;
+    if(!r||r==='weekly') return d===targetDow;
+    if(r==='daily') return true;
+    if(r==='weekdays') return targetDow>=0&&targetDow<=4;
+    if(r==='mwf') return [0,2,4].includes(targetDow);
+    return false;
+  });
+
+  const journalEntry=journals.find(j=>j.date===date);
+
+  const pastSimilarDays=[];
+  for(let w=1;w<=12;w++){
+    const d=new Date(targetDate);d.setDate(d.getDate()-w*7);
+    const ds=d.toISOString().slice(0,10);
+    if(ds<today){const j=journals.find(x=>x.date===ds);if(j)pastSimilarDays.push({date:ds,body:j.body});}
+  }
+
+  function computeHash(){
+    return simpleHash(JSON.stringify({date,evs:dayEvents.map(e=>e.title+'@'+e.when?.hour),jrn:journalEntry?.body||'',wx:weather?`${weather.maxF}/${weather.minF}`:''}));
+  }
+
+  const cacheKey=`magverse:insight:${date}`;
+
+  useEffect(()=>{
+    setSections({});setError('');setLastGen(null);
+    const cached=ls(cacheKey);
+    if(!cached) return;
+    const maxAge=isFuture?6*3600000:Infinity;
+    if(Date.now()-(cached.at||0)<maxAge&&cached.hash===computeHash()){setSections(cached.sections||{});setLastGen(cached.at);}
+  },[date]);
+
+  useEffect(()=>{
+    setWeather(null);setWxLoading(true);
+    fetchWeatherForDate(date).then(w=>{setWeather(w);setWxLoading(false);}).catch(()=>setWxLoading(false));
+  },[date]);
+
+  const navigate=dir=>{const d=new Date(date+'T12:00:00');d.setDate(d.getDate()+dir);setDate(d.toISOString().slice(0,10));};
+
+  async function analyze(force=false){
+    if(!apiKey){setError('Add your Anthropic API key in Settings.');return;}
+    if(!force){
+      const cached=ls(cacheKey);
+      if(cached&&cached.hash===computeHash()&&Date.now()-(cached.at||0)<(isFuture?6*3600000:Infinity)){
+        setSections(cached.sections||{});setLastGen(cached.at);return;
+      }
+    }
+    setLoading(true);setError('');setSections({});
+
+    const evText=dayEvents.length>0
+      ?dayEvents.map(e=>`• ${e.title} (${fmtHour(e.when.hour)}${e.when.endHour?'–'+fmtHour(e.when.endHour):''})`).join('\n')
+      :'No scheduled events';
+    const wxText=weather?`${weather.desc}, high ${weather.maxF}°F / low ${weather.minF}°F${weather.precip>0?', '+weather.precip.toFixed(1)+'mm precipitation':''}`:'Weather not available';
+    const jrnText=journalEntry?`Journal entry:\n"${journalEntry.body}"`:'No journal entry for this day.';
+    const pastText=pastSimilarDays.length>0
+      ?pastSimilarDays.slice(0,4).map(p=>`${p.date}: ${p.body.slice(0,200)}`).join('\n\n')
+      :'No journal entries for past similar days.';
+    const mode=isPast?'RETROSPECTIVE':isToday?'TODAY':'FUTURE';
+
+    const system=`You are a personal performance coach doing a ${mode==='RETROSPECTIVE'?'retrospective':'forward-looking'} analysis. Reference the specific events and entries by name — no generic advice. Plain prose only, no markdown, no bullet points.
+
+Output exactly these 5 sections in order, each wrapped in XML tags. 2-4 sentences each.
+
+<day_summary>The overall character, pace, and tone of this day.</day_summary>
+<patterns>What's notable or different vs. typical ${dayName}s or this time of year for this person.</patterns>
+<energy_forecast>${mode==='RETROSPECTIVE'?'How energy and focus likely played out given the schedule and conditions.':'Projected energy arc through the day given schedule density, weather, and past context.'}</energy_forecast>
+<recommendations>${mode==='RETROSPECTIVE'?'What to do differently or carry forward based on this day.':'Specific named actions: what to prep, protect, move, or act on before/during this day.'}</recommendations>
+<retrospective>${mode==='RETROSPECTIVE'?'What went well, what to learn, what to carry into future similar days.':'Risks and energy traps to watch — things that tend to derail days like this.'}</retrospective>`;
+
+    const userMsg=`Date: ${dateLabel} (${dayName})\n\nSCHEDULE:\n${evText}\n\nWEATHER:\n${wxText}\n\n${jrnText}\n\nPAST SIMILAR ${dayName.toUpperCase()}S (last 3 months with journal):\n${pastText}`;
+
+    try{
+      const resp=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1400,stream:true,system,messages:[{role:'user',content:userMsg}]})
+      });
+      if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
+      const reader=resp.body.getReader(),dec=new TextDecoder();
+      let buf='',full='';
+      while(true){
+        const{done,value}=await reader.read();
+        if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n');buf=lines.pop()||'';
+        for(const line of lines){
+          if(!line.startsWith('data:')) continue;
+          const raw=line.slice(5).trim();
+          if(raw==='[DONE]') break;
+          try{const ev=JSON.parse(raw);if(ev.type==='content_block_delta'&&ev.delta?.type==='text_delta'){full+=ev.delta.text;setSections(extractInsightSections(full));}}catch(e){}
+        }
+      }
+      const final=extractInsightSections(full);
+      setSections(final);
+      const at=Date.now();
+      ls(cacheKey,{sections:final,hash:computeHash(),at});
+      setLastGen(at);
+    }catch(e){setError('Analysis failed: '+e.message);}
+    setLoading(false);
+  }
+
+  const SECTION_META=[
+    {key:'day_summary',    label:'Day Summary',       icon:'📋',color:'rgba(99,102,241,0.08)', border:'rgba(99,102,241,0.22)',  hdr:'#818cf8'},
+    {key:'patterns',       label:'Patterns Detected', icon:'🔁',color:'rgba(139,92,246,0.08)', border:'rgba(139,92,246,0.22)',  hdr:'#c4b5fd'},
+    {key:'energy_forecast',label:'Energy & Focus',    icon:'⚡',color:'rgba(245,158,11,0.08)', border:'rgba(245,158,11,0.22)',  hdr:'#fcd34d'},
+    {key:'recommendations',label:'Recommendations',   icon:'🎯',color:'rgba(16,185,129,0.08)', border:'rgba(16,185,129,0.22)',  hdr:'#6ee7b7'},
+    {key:'retrospective',  label:isPast?'Retrospective':'Watch For',icon:isPast?'🔍':'⚠️',color:'rgba(251,146,60,0.08)',border:'rgba(251,146,60,0.22)',hdr:'#fdba74'},
+  ];
+
+  const hasAny=SECTION_META.some(m=>sections[m.key]);
+
+  return(
+    <div>
+      {/* Day picker */}
+      <div className="flex items-center gap-2 mb-5 flex-wrap">
+        <button onClick={()=>navigate(-1)} style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b',fontSize:'18px',width:'32px',height:'32px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>‹</button>
+        <div style={{flex:1,minWidth:0}}>
+          <div className="font-bold text-lg leading-tight">{dateLabel}</div>
+          <div className="text-xs mt-0.5" style={{color:'#475569'}}>
+            {dayName} · <span style={{color:isToday?'#6366f1':isPast?'#64748b':'#10b981'}}>{isToday?'Today':isPast?'Past day':'Upcoming'}</span>
+            {weather&&<span className="ml-2">{weather.desc} · {weather.maxF}°/{weather.minF}°F</span>}
+            {wxLoading&&<span className="ml-2" style={{color:'#334155'}}>Fetching weather…</span>}
+          </div>
+        </div>
+        <button onClick={()=>navigate(1)} style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b',fontSize:'18px',width:'32px',height:'32px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>›</button>
+        {!isToday&&<button onClick={()=>setDate(today)} style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)',borderRadius:'8px',padding:'4px 10px',fontSize:'12px'}}>Today</button>}
+        <div className="flex gap-2 items-center" style={{marginLeft:'auto'}}>
+          {lastGen&&<span className="text-xs" style={{color:'#334155'}}>Updated {new Date(lastGen).toLocaleTimeString('en',{hour:'numeric',minute:'2-digit'})}</span>}
+          {hasAny&&<button onClick={()=>analyze(true)} disabled={loading} style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b',borderRadius:'8px',padding:'6px 10px',fontSize:'12px'}}>Regenerate</button>}
+          <button onClick={()=>analyze(false)} disabled={loading}
+            style={{background:loading?'rgba(99,102,241,0.3)':'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',borderRadius:'12px',padding:'7px 16px',fontSize:'13px',fontWeight:600,boxShadow:loading?'none':'0 0 14px rgba(99,102,241,0.35)',cursor:loading?'default':'pointer'}}>
+            {loading?'Analyzing…':'Analyze this day'}
+          </button>
+        </div>
+      </div>
+
+      {/* Context strip */}
+      <div className="flex gap-2 mb-5 flex-wrap">
+        <div style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:'10px',padding:'6px 12px',fontSize:'12px',color:'#64748b'}}>
+          <span style={{color:'#e2e8f0',fontWeight:600}}>{dayEvents.length}</span> event{dayEvents.length!==1?'s':''}
+        </div>
+        {dayEvents.slice(0,5).map(e=>(
+          <div key={e.id} style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:'10px',padding:'6px 12px',fontSize:'12px',color:'#94a3b8'}}>
+            {fmtHour(e.when.hour)} {e.title}
+          </div>
+        ))}
+        {journalEntry&&<div style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)',borderRadius:'10px',padding:'6px 12px',fontSize:'12px',color:'#818cf8'}}>📓 Journal entry</div>}
+        {pastSimilarDays.length>0&&<div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:'10px',padding:'6px 12px',fontSize:'12px',color:'#475569'}}>{pastSimilarDays.length} past {dayName}s found</div>}
+      </div>
+
+      {error&&<div style={{background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.25)',color:'#f87171',borderRadius:'12px',padding:'12px',fontSize:'13px',marginBottom:'16px'}}>{error}</div>}
+
+      {!hasAny&&!loading&&(
+        <div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.06)',borderRadius:'16px',padding:'48px',textAlign:'center'}}>
+          <div style={{fontSize:'32px',marginBottom:'12px'}}>🔭</div>
+          <div style={{color:'#e2e8f0',fontSize:'14px',marginBottom:'6px'}}>No analysis yet</div>
+          <div style={{color:'#334155',fontSize:'12px'}}>Hit "Analyze this day" to generate AI insights for {isToday?'today':isPast?'this past day':'this upcoming day'}.</div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {SECTION_META.map(({key,label,icon,color,border,hdr})=>{
+          const text=sections[key];
+          const partial=sections[key+'_partial'];
+          if(!text&&!loading) return null;
+          return(
+            <div key={key} style={{background:color,border:`1px solid ${border}`,borderRadius:'16px',padding:'16px',transition:'opacity .3s',animationDelay:'0.05s'}} className="animate-item">
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{fontSize:'16px'}}>{icon}</span>
+                <span style={{fontSize:'11px',fontWeight:'bold',letterSpacing:'0.1em',textTransform:'uppercase',color:hdr}}>{label}</span>
+                {partial&&<span style={{fontSize:'11px',color:'#334155'}}>…</span>}
+              </div>
+              {text?(
+                <div style={{fontSize:'14px',lineHeight:'1.65',color:'#e2e8f0'}}>{text}</div>
+              ):(
+                <div className="space-y-2 py-1">
+                  <div className="skeleton h-3 rounded" style={{width:'100%'}}/>
+                  <div className="skeleton h-3 rounded" style={{width:'80%'}}/>
+                  <div className="skeleton h-3 rounded" style={{width:'60%'}}/>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* -------------------- Schedule Panel -------------------- */
 const TYPE_COLORS = {
   Gym:         { bg:'rgba(16,185,129,0.12)', border:'rgba(16,185,129,0.3)',  text:'#6ee7b7', dot:'#10b981' },
@@ -767,6 +1013,7 @@ function SchedulePanel({data, setData, toasts, isMobile}){
   const [modal, setModal] = useState(null);
   const [expandedEvent, setExpandedEvent] = useState(null);
   const [removingIds, setRemovingIds] = useState([]);
+  const [scheduleSubtab, setScheduleSubtab] = useState('calendar');
   const pendingRef = useRef({});
   const events = data.events || [];
 
@@ -817,6 +1064,20 @@ function SchedulePanel({data, setData, toasts, isMobile}){
 
   return (
     <div>
+      {/* Subtab switcher */}
+      <div className="flex gap-1 mb-5 p-1 rounded-xl w-fit" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>
+        {[['calendar','Calendar'],['insights','Daily Insights']].map(([v,lbl])=>(
+          <button key={v} onClick={()=>setScheduleSubtab(v)}
+            className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all"
+            style={scheduleSubtab===v?{background:'rgba(255,255,255,0.1)',color:'#e2e8f0'}:{color:'#64748b'}}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {scheduleSubtab==='insights' && <DailyInsightsSubtab data={data} />}
+
+      {scheduleSubtab==='calendar' && <>
       {/* Header */}
       <div className={`flex ${isMobile?'flex-col gap-3':'items-center justify-between'} mb-5`}>
         <div>
@@ -882,6 +1143,7 @@ function SchedulePanel({data, setData, toasts, isMobile}){
           })}));
         }}
       />}
+      </>}
     </div>
   );
 }
