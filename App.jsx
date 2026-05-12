@@ -3083,64 +3083,64 @@ Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`,
 
 /* -------------------- Deal of the Day -------------------- */
 const DEAL_POOL = [
-  { id:'d01', title:'Microsoft / Activision Blizzard', year:2023, sector:'Technology · Gaming', value:'$69B', type:'Acquisition',
+  { id:'d01', title:'Microsoft / Activision Blizzard', announced:'Jan 18, 2022', closed:'Oct 13, 2023', sector:'Technology · Gaming', value:'$69B', type:'Acquisition',
     summary:'Microsoft acquired Activision Blizzard to become the third-largest gaming company by revenue. The deal gave Microsoft a massive content library — Call of Duty, World of Warcraft, Candy Crush — and strengthened its Game Pass subscription. It faced an 18-month antitrust battle across the US, EU, and UK before closing.',
     keyFacts:['Largest gaming acquisition in history','Faced CMA block; Microsoft agreed to cloud-gaming licensing concessions to close','Added ~10,000 employees and ~$8B in annual gaming revenue'] },
-  { id:'d02', title:'Elon Musk / Twitter (X)', year:2022, sector:'Technology · Social Media', value:'$44B',type:'LBO / Take-Private',
+  { id:'d02', title:'Elon Musk / Twitter (X)', announced:'Apr 25, 2022', closed:'Oct 27, 2022', sector:'Technology · Social Media', value:'$44B', type:'LBO / Take-Private',
     summary:'Musk took Twitter private at $54.20/share after an erratic public process — offering, then trying to pull out citing bot accounts, then completing under threat of litigation. Funded with $13B of bank debt, $7B from equity co-investors, and $21B personal equity. Post-close, he cut ~80% of staff and rebranded to X.',
     keyFacts:['Debt load of $13B left banks stuck holding leveraged loans at a loss','Twitter/X has never turned an annual profit','Musk\'s stated goal: build an "everything app" modeled on WeChat'] },
-  { id:'d03', title:'Amazon / MGM', year:2022, sector:'Technology · Media', value:'$8.5B', type:'Acquisition',
+  { id:'d03', title:'Amazon / MGM', announced:'May 26, 2021', closed:'Mar 17, 2022', sector:'Technology · Media', value:'$8.5B', type:'Acquisition',
     summary:'Amazon bought MGM primarily for its 4,000-film and 17,000-TV-episode library, including the James Bond franchise, to bulk up Prime Video against Netflix and Disney+. MGM\'s content catalog was seen as dramatically undervalued relative to what streamers were paying per subscriber.',
     keyFacts:['Bond franchise alone valued at ~$2-3B','FTC opposed but ultimately cleared the deal','Amazon\'s third-largest acquisition after Whole Foods and Zappos'] },
-  { id:'d04', title:'Salesforce / Slack', year:2021, sector:'Enterprise Software', value:'$27.7B', type:'Acquisition',
+  { id:'d04', title:'Salesforce / Slack', announced:'Dec 1, 2020', closed:'Jul 21, 2021', sector:'Enterprise Software', value:'$27.7B', type:'Acquisition',
     summary:'Salesforce acquired Slack to compete with Microsoft Teams in the enterprise collaboration market. The deal valued Slack at a 55% premium. The strategic logic: embed Slack as the front-end interface for the entire Salesforce Customer 360 platform and stop Microsoft from owning the daily workflow of every enterprise employee.',
     keyFacts:['Slack had been losing ground to Teams, which was free with Office 365','Largest Salesforce acquisition ever','CEO Marc Benioff called it "the most strategic deal in the history of Salesforce"'] },
-  { id:'d05', title:'Broadcom / VMware', year:2023, sector:'Technology · Enterprise Infrastructure', value:'$69B', type:'Acquisition',
+  { id:'d05', title:'Broadcom / VMware', announced:'May 26, 2022', closed:'Nov 22, 2023', sector:'Technology · Enterprise Infrastructure', value:'$69B', type:'Acquisition',
     summary:'Broadcom acquired VMware to transform from a chip company into a diversified infrastructure software platform. The deal followed Broadcom\'s playbook from its CA Technologies and Symantec acquisitions: buy a mature software business, cut costs aggressively, and convert to subscription pricing to drive recurring revenue.',
     keyFacts:['Broadcom immediately restructured VMware into a subscription-only model, angering enterprise customers','Closed after 18 months of regulatory review across US, EU, and China','CEO Hock Tan expected to achieve $8.5B in annualized EBITDA within three years post-close'] },
-  { id:'d06', title:'Disney / 21st Century Fox', year:2019, sector:'Media & Entertainment', value:'$71B', type:'Acquisition',
+  { id:'d06', title:'Disney / 21st Century Fox', announced:'Dec 14, 2017', closed:'Mar 20, 2019', sector:'Media & Entertainment', value:'$71B', type:'Acquisition',
     summary:'Disney bought Fox\'s entertainment assets (not news or sports) to bulk up its content library for the Disney+ launch. Disney gained X-Men, Deadpool, Avatar, FX, and National Geographic. This was a defining defensive move: Disney chose to build a streaming business rather than slowly lose the cable bundle.',
     keyFacts:['Comcast bid against Disney, driving the price from $52B to $71B','Disney assumed $19.8B of Fox debt','Marvel can now use X-Men and Fantastic Four characters in the MCU'] },
-  { id:'d07', title:'AT&T / Time Warner', year:2018, sector:'Telecom · Media', value:'$85B', type:'Vertical Merger',
+  { id:'d07', title:'AT&T / Time Warner', announced:'Oct 22, 2016', closed:'Jun 14, 2018', sector:'Telecom · Media', value:'$85B', type:'Vertical Merger',
     summary:'AT&T acquired Time Warner (CNN, HBO, Warner Bros.) to combine a content owner with a distribution network. The DOJ tried to block it on antitrust grounds — an unusual vertical-merger challenge — but AT&T won in court. Four years later AT&T reversed course, spinning out WarnerMedia and merging it with Discovery.',
     keyFacts:['First major vertical merger the DOJ litigated in decades','AT&T paid $107/share, a 35% premium','AT&T ultimately wrote off ~$30B on the deal when it unwound it in 2022'] },
-  { id:'d08', title:'AB InBev / SABMiller', year:2016, sector:'Consumer Staples · Beverages', value:'$107B', type:'Acquisition',
+  { id:'d08', title:'AB InBev / SABMiller', announced:'Nov 11, 2015', closed:'Oct 10, 2016', sector:'Consumer Staples · Beverages', value:'$107B', type:'Acquisition',
     summary:'The combination of the world\'s two largest brewers created a company with ~30% global beer market share. To gain regulatory approval AB InBev divested SABMiller\'s US stake in MillerCoors to Molson Coors and sold several other regional brands. The deal was largely synergy-driven: $1.4B in annual cost cuts within four years.',
     keyFacts:['Largest-ever consumer-goods M&A deal at the time','Regulators required divestitures in US, China, Europe, and Africa','AB InBev financed with ~$75B of debt, took years to deleverage'] },
-  { id:'d09', title:'Bayer / Monsanto', year:2018, sector:'Agriculture · Chemicals', value:'$66B', type:'Acquisition',
+  { id:'d09', title:'Bayer / Monsanto', announced:'Sep 14, 2016', closed:'Jun 7, 2018', sector:'Agriculture · Chemicals', value:'$66B', type:'Acquisition',
     summary:'Bayer bought Monsanto to combine crop protection chemicals with seeds and biotech traits, creating an integrated agriculture platform. The deal has been widely considered one of the worst acquisitions in corporate history: Bayer inherited $10B+ in Roundup/glyphosate litigation and the Monsanto brand was so toxic that Bayer retired it immediately.',
     keyFacts:['Bayer\'s share price fell ~40% in the two years after closing','Over 100,000 Roundup cancer lawsuits filed against Bayer post-acquisition','Bayer wrote down the deal by €9.8B in 2019'] },
-  { id:'d10', title:'Dell / EMC', year:2016, sector:'Technology · Enterprise Storage', value:'$67B', type:'Acquisition',
+  { id:'d10', title:'Dell / EMC', announced:'Oct 12, 2015', closed:'Sep 7, 2016', sector:'Technology · Enterprise Storage', value:'$67B', type:'Acquisition',
     summary:'Dell acquired EMC — including an 80% stake in VMware — to transform from a PC company into an enterprise infrastructure giant. Michael Dell took Dell private in 2013 specifically to execute this kind of long-term bet without public-market pressure. The deal was financed with $49.5B of debt.',
     keyFacts:['Largest technology acquisition in history at the time','VMware\'s public market value alone was ~$33B at close — nearly half the deal price','Dell re-listed publicly in 2018 via a controversial tracking stock conversion'] },
-  { id:'d11', title:'CVS Health / Aetna', year:2018, sector:'Healthcare · Insurance', value:'$69B', type:'Vertical Merger',
+  { id:'d11', title:'CVS Health / Aetna', announced:'Dec 3, 2017', closed:'Nov 28, 2018', sector:'Healthcare · Insurance', value:'$69B', type:'Vertical Merger',
     summary:'CVS bought insurer Aetna to create a vertically integrated healthcare company — combining pharmacy benefits, retail clinics, mail-order pharmacy, and insurance. The logic: reduce healthcare costs by keeping patients within the CVS ecosystem and away from expensive hospitals.',
     keyFacts:['Aetna had 22 million medical members at close','DOJ approved with a condition: Aetna divest its Medicare Part D business','CVS subsequently converted thousands of stores into HealthHUB locations'] },
-  { id:'d12', title:'T-Mobile / Sprint', year:2020, sector:'Telecom', value:'$26B', type:'Merger',
+  { id:'d12', title:'T-Mobile / Sprint', announced:'Apr 29, 2018', closed:'Apr 1, 2020', sector:'Telecom', value:'$26B', type:'Merger',
     summary:'After two failed attempts, T-Mobile and Sprint finally merged, reducing US wireless carriers from four to three. T-Mobile paid 0.10256 of its shares per Sprint share. The deal was approved after T-Mobile committed to deploying a nationwide 5G network and divesting prepaid brand Boost Mobile to DISH.',
     keyFacts:['T-Mobile pledged to deploy 5G to 97% of Americans within 3 years','DISH paid $1.4B for Boost and became a nominal fourth carrier','T-Mobile quickly surpassed AT&T in subscriber additions post-merger'] },
-  { id:'d13', title:'Amazon / Whole Foods', year:2017, sector:'Retail · Grocery', value:'$13.7B', type:'Acquisition',
+  { id:'d13', title:'Amazon / Whole Foods', announced:'Jun 16, 2017', closed:'Aug 28, 2017', sector:'Retail · Grocery', value:'$13.7B', type:'Acquisition',
     summary:'Amazon entered physical retail by acquiring upscale grocer Whole Foods. On day one of ownership, Amazon cut prices across Whole Foods and began integrating Prime member discounts. The deal was as much about real estate and last-mile logistics as it was about groceries.',
     keyFacts:['Closed 4 weeks after announcement — unusually fast for a deal of this size','Amazon paid $42/share, a 27% premium','Whole Foods revenue has stagnated since acquisition; critics say it was more about strategic signaling than grocery profits'] },
-  { id:'d14', title:'Dow Chemical / DuPont', year:2017, sector:'Chemicals · Agriculture', value:'$130B', type:'Merger of Equals',
+  { id:'d14', title:'Dow Chemical / DuPont', announced:'Dec 11, 2015', closed:'Sep 1, 2017', sector:'Chemicals · Agriculture', value:'$130B', type:'Merger of Equals',
     summary:'Two legacy industrial chemicals giants merged, then immediately announced plans to split into three separate companies: agriculture (Corteva), materials science (Dow), and specialty products (DuPont). This structure-to-break-up deal was explicitly designed to unlock value by separating businesses with different growth profiles.',
     keyFacts:['Took two years from announcement to close due to regulatory review','Resulted in three separately listed companies by 2019','Cost synergies of $3B targeted; break-up itself was estimated to create $4B of value'] },
-  { id:'d15', title:'Kraft / Heinz (3G Capital & Berkshire Hathaway)', year:2015, sector:'Consumer Staples · Food', value:'$100B combined entity', type:'Merger',
+  { id:'d15', title:'Kraft / Heinz (3G Capital & Berkshire)', announced:'Mar 25, 2015', closed:'Jul 2, 2015', sector:'Consumer Staples · Food', value:'$100B combined entity', type:'Merger',
     summary:'3G Capital and Berkshire Hathaway merged Kraft and Heinz using 3G\'s infamous zero-based budgeting approach — cutting costs to the bone to fund a dividend. The combined company then attempted to buy Unilever for $143B in 2017 (rejected). In 2019, Kraft Heinz took a $15.4B write-down and the model was widely viewed as broken.',
     keyFacts:['3G cut Kraft Heinz headcount by ~13% in the first two years','Kraft Heinz offered $50/share for Unilever in 2017; Unilever refused in 48 hours','Buffett later admitted the Kraft acquisition was a mistake, saying they overpaid'] },
-  { id:'d16', title:'Facebook (Meta) / Instagram', year:2012, sector:'Technology · Social Media', value:'$1B', type:'Acquisition',
+  { id:'d16', title:'Facebook (Meta) / Instagram', announced:'Apr 9, 2012', closed:'Sep 6, 2012', sector:'Technology · Social Media', value:'$1B', type:'Acquisition',
     summary:'Facebook bought the 13-employee photo-sharing app for $1B when it had zero revenue. At the time it was widely mocked as overpriced. By 2018, Instagram was estimated to be worth $100B — 100x what Facebook paid. The deal is now studied as the clearest example of a platform acqui-hire eliminating a competitive threat.',
     keyFacts:['Instagram had 13 employees and $0 revenue at time of acquisition','FTC later tried to unwind the deal in its 2020 antitrust lawsuit against Meta','By 2022, Instagram generated roughly 50% of Meta\'s total advertising revenue'] },
-  { id:'d17', title:'Google / YouTube', year:2006, sector:'Technology · Media', value:'$1.65B', type:'Acquisition',
+  { id:'d17', title:'Google / YouTube', announced:'Oct 9, 2006', closed:'Nov 13, 2006', sector:'Technology · Media', value:'$1.65B', type:'Acquisition',
     summary:'Google paid $1.65B in stock for 18-month-old YouTube, which had 67 employees and no clear revenue model. The risk: massive copyright liability from user-uploaded content. Google resolved this through licensing deals with major labels. YouTube now generates ~$30B/year in ad revenue and is arguably worth $400B+.',
     keyFacts:['YouTube was burning $1M/day in bandwidth costs at acquisition','Google\'s biggest concern was copyright suits — Universal, Sony, and Warner had all threatened action','Chad Hurley and Steve Chen (founders) each became Google millionaires overnight at 28'] },
-  { id:'d18', title:'Nvidia / ARM (terminated)', year:2022, sector:'Technology · Semiconductors', value:'$40B', type:'Acquisition (blocked)',
+  { id:'d18', title:'Nvidia / ARM (terminated)', announced:'Sep 13, 2020', closed:'Feb 8, 2022 (terminated)', sector:'Technology · Semiconductors', value:'$40B', type:'Acquisition (blocked)',
     summary:'Nvidia attempted to buy UK chip designer ARM from SoftBank in the largest semiconductor deal ever. ARM\'s architecture underlies virtually every smartphone chip on earth. The deal was blocked by regulators in the US, UK, and EU on competition grounds — Nvidia is a major ARM licensee and giving it ownership over ARM\'s IP was seen as an existential threat to the entire chip industry.',
     keyFacts:['Blocked by FTC, UK CMA, and EU competition regulators','SoftBank bought ARM for $32B in 2016; ARM IPO\'d in 2023 at a ~$60B valuation','Every major ARM licensee — Apple, Qualcomm, Samsung — opposed the deal'] },
-  { id:'d19', title:'Adobe / Figma (terminated)', year:2023, sector:'Technology · Design Software', value:'$20B', type:'Acquisition (blocked)',
+  { id:'d19', title:'Adobe / Figma (terminated)', announced:'Sep 15, 2022', closed:'Dec 18, 2023 (terminated)', sector:'Technology · Design Software', value:'$20B', type:'Acquisition (blocked)',
     summary:'Adobe attempted to buy collaborative design tool Figma for $20B — the highest price ever for a private software company on a revenue multiple basis (50x ARR). The EU and UK blocked it on competition grounds, finding the deal would eliminate the greatest competitive threat to Adobe\'s Creative Cloud. Adobe paid Figma a $1B breakup fee.',
     keyFacts:['50x ARR multiple was unprecedented in SaaS M&A','Figma CEO Dylan Field kept the $1B break-up fee and relaunched Figma independently','Figma subsequently launched AI features that directly competed with Adobe Firefly'] },
-  { id:'d20', title:'Walmart / Flipkart', year:2018, sector:'Retail · E-Commerce', value:'$16B (77% stake)', type:'Acquisition',
+  { id:'d20', title:'Walmart / Flipkart', announced:'May 9, 2018', closed:'Aug 18, 2018', sector:'Retail · E-Commerce', value:'$16B (77% stake)', type:'Acquisition',
     summary:'Walmart bought a controlling stake in Indian e-commerce giant Flipkart to compete with Amazon in India\'s massive and fast-growing online retail market. The deal was a direct response to Amazon\'s aggressive India expansion. Flipkart has since grown significantly but still loses money; Walmart is playing a very long game.',
     keyFacts:['Amazon had previously tried to acquire Flipkart but was outbid','SoftBank sold its ~20% stake for a ~$1.5B profit; Tiger Global did the same','Flipkart IPO ambitions have been repeatedly delayed; still privately held as of 2024'] },
 ];
@@ -3152,25 +3152,122 @@ function getDailyDeal(seenIds){
     const deal = DEAL_POOL[(start + i) % DEAL_POOL.length];
     if(!seen.has(deal.id)) return deal;
   }
-  return DEAL_POOL[start]; // all seen — cycle back
+  return DEAL_POOL[start];
+}
+
+const LIVE_DEALS_CACHE_KEY = 'magverse:livedeals:';
+function useLiveDeals(){
+  const [deals, setDeals] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(()=>{
+    const dayIdx = Math.floor(Date.now() / 86400000);
+    const cacheKey = LIVE_DEALS_CACHE_KEY + dayIdx;
+    const cached = ls(cacheKey);
+    if(cached){ setDeals(cached); return; }
+
+    const savedSettings = ls('magverse:v1')?.settings || {};
+    const apiKey = savedSettings.apiKey || '';
+    if(!apiKey) return;
+
+    setLoading(true);
+    fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true',
+      },
+      body: JSON.stringify({
+        model:'claude-haiku-4-5-20251001',
+        max_tokens:1200,
+        system:'You are a financial data assistant. Return ONLY valid JSON, no markdown, no explanation.',
+        messages:[{
+          role:'user',
+          content:`List 4 significant M&A, private equity, or major corporate deals announced or closed in the past 6 months (as of early 2025). Include real deals with accurate facts. Return a JSON array of objects with exactly these fields: id (string, prefix "live-"), title, announced (e.g. "Mar 4, 2025"), closed (e.g. "Jun 1, 2025" or "pending"), sector, value, type, summary (2-3 sentences), keyFacts (array of 3 strings). Prioritize deals over $5B.`
+        }]
+      })
+    }).then(r=>r.json()).then(j=>{
+      try{
+        const text = j.content[0].text.trim();
+        const parsed = JSON.parse(text);
+        if(Array.isArray(parsed) && parsed.length){
+          ls(cacheKey, parsed);
+          setDeals(parsed);
+        }
+      }catch(e){}
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  },[]);
+
+  return { deals, loading };
+}
+
+function DealCard({deal, onChat, onDismiss, live}){
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-2xl p-4" style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${live?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.08)'}`}}>
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-sm leading-tight mb-1.5" style={{color:'#e2e8f0'}}>{deal.title}</div>
+          <div className="flex flex-wrap gap-1.5">
+            <span className="text-xs px-2 py-0.5 rounded-md" style={{background:'rgba(99,102,241,0.15)',color:'#a5b4fc'}}>{deal.type}</span>
+            <span className="text-xs px-2 py-0.5 rounded-md" style={{background:'rgba(255,255,255,0.06)',color:'#64748b'}}>{deal.sector}</span>
+            <span className="text-xs px-2 py-0.5 rounded-md font-semibold" style={{background:'rgba(16,185,129,0.12)',color:'#6ee7b7'}}>{deal.value}</span>
+          </div>
+          <div className="text-xs mt-1.5 space-x-2" style={{color:'#334155'}}>
+            <span>📅 Announced {deal.announced}</span>
+            {deal.closed && <span>· Closed {deal.closed}</span>}
+          </div>
+        </div>
+        {live && <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0" style={{background:'rgba(16,185,129,0.15)',color:'#6ee7b7',border:'1px solid rgba(16,185,129,0.3)'}}>Recent</span>}
+      </div>
+      <p className="text-xs leading-relaxed mb-2" style={{color:'#94a3b8'}}>{deal.summary}</p>
+      {expanded && (
+        <div className="mb-2 space-y-1">
+          {deal.keyFacts.map((f,i)=>(
+            <div key={i} className="flex gap-2 text-xs" style={{color:'#cbd5e1'}}>
+              <span style={{color:'#6366f1',flexShrink:0}}>▸</span><span>{f}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2 flex-wrap mt-2">
+        <button onClick={onChat}
+          className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+          style={{background:'rgba(99,102,241,0.2)',border:'1px solid rgba(99,102,241,0.4)',color:'#a5b4fc'}}>
+          Ask questions →
+        </button>
+        <button onClick={()=>setExpanded(e=>!e)}
+          className="px-2.5 py-1.5 rounded-xl text-xs transition-all"
+          style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',color:'#475569'}}>
+          {expanded?'Less ↑':'Key facts ↓'}
+        </button>
+        {onDismiss && <button onClick={onDismiss}
+          className="px-2.5 py-1.5 rounded-xl text-xs transition-all ml-auto"
+          style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',color:'#334155'}}>
+          Seen it →
+        </button>}
+      </div>
+    </div>
+  );
 }
 
 function DealOfDay({data, setData, isMobile}){
   const deal = getDailyDeal(data.seenDeals || []);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const { deals: liveDeals, loading: liveLoading } = useLiveDeals();
+  const [chatDeal, setChatDeal] = useState(null);
   const seenCount = (data.seenDeals||[]).length;
 
-  const markSeen = () => {
-    setData(d => ({ ...d, seenDeals: [...new Set([...(d.seenDeals||[]), deal.id])] }));
-  };
+  const markSeen = (id) => setData(d=>({...d, seenDeals:[...new Set([...(d.seenDeals||[]),id])]}));
 
-  const dealHub = {
-    id: 'deal-hub',
+  const makeDealHub = (d) => ({
+    id: 'deal-hub-'+d.id,
     emoji: '🏦',
-    name: deal.title,
-    system: `${NO_MARKDOWN}\n\nYou are a senior McKinsey M&A partner and former investment banker with deep expertise in the deal being discussed. The deal is: ${deal.title} (${deal.year}, ${deal.value}, ${deal.type}). Context: ${deal.summary} Key facts: ${deal.keyFacts.join('. ')}. Answer the user's questions about this deal with the depth and directness of a top-tier advisor. Discuss strategy, valuation, regulatory dynamics, synergies, mistakes made, and what consultants and bankers were actually thinking. Don't hedge. Give your real opinion.`,
-  };
+    name: d.title,
+    system: `${NO_MARKDOWN}\n\nYou are a senior McKinsey M&A partner and former investment banker. The deal under discussion: ${d.title} — announced ${d.announced}${d.closed?', closed '+d.closed:''}. Value: ${d.value}. Type: ${d.type}. Sector: ${d.sector}. Context: ${d.summary} Key facts: ${d.keyFacts.join('. ')}. Answer questions with the depth and directness of a top-tier advisor — strategy, valuation, regulatory dynamics, synergies, mistakes, what bankers were actually thinking. Give your real opinion. Don't hedge.`,
+  });
 
   return (
     <div className="mb-10">
@@ -3178,62 +3275,25 @@ function DealOfDay({data, setData, isMobile}){
         <div>
           <h3 className="text-base font-bold tracking-tight">Deal of the Day</h3>
           <div className="text-xs mt-0.5" style={{color:'#475569'}}>
-            {DEAL_POOL.length - seenCount} unseen · rotates when dismissed
+            {DEAL_POOL.length - seenCount} unseen in archive · {liveLoading ? 'fetching recent…' : liveDeals.length ? `${liveDeals.length} recent deals loaded` : 'recent deals via Claude'}
           </div>
         </div>
       </div>
 
-      <div className="rounded-2xl p-4" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)'}}>
-        {/* Header row */}
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div>
-            <div className="font-bold text-base leading-tight" style={{color:'#e2e8f0'}}>{deal.title}</div>
-            <div className="flex flex-wrap gap-2 mt-1.5">
-              <span className="text-xs px-2 py-0.5 rounded-md" style={{background:'rgba(99,102,241,0.15)',color:'#a5b4fc'}}>{deal.type}</span>
-              <span className="text-xs px-2 py-0.5 rounded-md" style={{background:'rgba(255,255,255,0.06)',color:'#64748b'}}>{deal.sector}</span>
-              <span className="text-xs px-2 py-0.5 rounded-md font-semibold" style={{background:'rgba(16,185,129,0.12)',color:'#6ee7b7'}}>{deal.value}</span>
-              <span className="text-xs px-2 py-0.5 rounded-md" style={{background:'rgba(255,255,255,0.06)',color:'#64748b'}}>{deal.year}</span>
-            </div>
-          </div>
-          <div className="text-3xl flex-shrink-0">🏦</div>
+      {/* Today's deal */}
+      <DealCard deal={deal} onChat={()=>setChatDeal(deal)} onDismiss={()=>markSeen(deal.id)} />
+
+      {/* Live deals */}
+      {liveDeals.length > 0 && (
+        <div className="mt-4 space-y-3">
+          <div className="text-xs font-semibold" style={{color:'#475569'}}>RECENT DEALS · updated daily via Claude</div>
+          {liveDeals.map(d=>(
+            <DealCard key={d.id} deal={d} onChat={()=>setChatDeal(d)} live />
+          ))}
         </div>
+      )}
 
-        {/* Summary */}
-        <p className="text-sm leading-relaxed mb-3" style={{color:'#94a3b8'}}>{deal.summary}</p>
-
-        {/* Key facts */}
-        {expanded && (
-          <div className="mb-3 space-y-1.5">
-            {deal.keyFacts.map((f,i)=>(
-              <div key={i} className="flex gap-2 text-sm" style={{color:'#cbd5e1'}}>
-                <span style={{color:'#6366f1',flexShrink:0}}>▸</span>
-                <span>{f}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={()=>{ setChatOpen(true); }}
-            className="px-4 py-2 rounded-xl text-sm font-semibold transition-all"
-            style={{background:'rgba(99,102,241,0.2)',border:'1px solid rgba(99,102,241,0.4)',color:'#a5b4fc'}}>
-            Ask questions →
-          </button>
-          <button onClick={()=>setExpanded(e=>!e)}
-            className="px-3 py-2 rounded-xl text-sm transition-all"
-            style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',color:'#475569'}}>
-            {expanded ? 'Less ↑' : 'Key facts ↓'}
-          </button>
-          <button onClick={markSeen}
-            className="px-3 py-2 rounded-xl text-sm transition-all ml-auto"
-            style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',color:'#334155'}}>
-            Seen it → next
-          </button>
-        </div>
-      </div>
-
-      {chatOpen && <ChatDrawer hub={dealHub} onClose={()=>setChatOpen(false)} data={data} setData={setData} toasts={[]} />}
+      {chatDeal && <ChatDrawer hub={makeDealHub(chatDeal)} onClose={()=>setChatDeal(null)} data={data} setData={setData} toasts={[]} />}
     </div>
   );
 }
