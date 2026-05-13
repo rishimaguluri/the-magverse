@@ -1161,9 +1161,14 @@ function SchedulePanel({data, setData, toasts, isMobile}){
 /* ---- Positioned calendar helpers ---- */
 const ROW_H = 56; // px per hour slot
 
-function getEventsForDayColumn(events, di){
+function getEventsForDayColumn(events, di, weekMonDate=null){
   return events.filter(ev=>{
     if(ev.when?.hour === undefined) return false;
+    if(ev.when?.exactDate){
+      if(!weekMonDate) return false;
+      const colDate=new Date(weekMonDate); colDate.setDate(weekMonDate.getDate()+di);
+      return ev.when.exactDate===colDate.toISOString().slice(0,10);
+    }
     const r = ev.recurrence; const d = ev.when?.day;
     if(!r||r==='weekly') return d===di;
     if(r==='daily') return true;
@@ -1218,20 +1223,22 @@ function EventBlock({ev, onRemove, onExpand, removingIds, height}){
   const endH = ev.when?.endHour;
   const timeStr = ev.when?.hour!==undefined ? fmtHour(ev.when.hour)+(endH?' – '+fmtHour(endH):'') : '';
   const tall = height >= ROW_H*1.4;
+  const isCheckin = ev.isCheckin;
   return (
     <div onClick={e=>{e.stopPropagation();onExpand&&onExpand(ev);}}
       className={`group w-full h-full rounded-lg overflow-hidden cursor-pointer select-none ${removingIds?.includes(ev.id)?'removing':''}`}
-      style={{background:c.bg,border:`1px solid ${c.border}`,padding:'3px 6px',boxSizing:'border-box',transition:'filter .1s'}}>
+      style={{background:isCheckin?'rgba(16,185,129,0.12)':c.bg,border:`1px solid ${isCheckin?'rgba(16,185,129,0.35)':c.border}`,padding:'3px 6px',boxSizing:'border-box',transition:'filter .1s'}}>
       <div className="flex items-start justify-between gap-0.5">
         <div className="min-w-0 flex-1">
-          <div className="font-semibold leading-tight" style={{fontSize:'11px',color:c.text,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:tall?3:1,WebkitBoxOrient:'vertical'}}>{ev.title}</div>
-          {tall && timeStr && <div style={{fontSize:'10px',color:c.text,opacity:0.7,marginTop:'1px'}}>{timeStr}</div>}
+          <div className="font-semibold leading-tight" style={{fontSize:'11px',color:isCheckin?'#6ee7b7':c.text,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:tall?3:1,WebkitBoxOrient:'vertical'}}>{ev.title}</div>
+          {tall && timeStr && <div style={{fontSize:'10px',color:isCheckin?'#6ee7b7':c.text,opacity:0.7,marginTop:'1px'}}>{timeStr}</div>}
           {tall && subtasks.length>0 && <div style={{fontSize:'10px',color:c.text,opacity:0.7}}>{doneCount}/{subtasks.length} done</div>}
           {!tall && subtasks.length>0 && <div style={{fontSize:'9px',color:c.text,opacity:0.6}}>{doneCount}/{subtasks.length}</div>}
+          {isCheckin && tall && <div style={{fontSize:'9px',color:'#6ee7b7',opacity:0.8,marginTop:'2px'}}>Log in Life Planner ›</div>}
         </div>
         <button onClick={e=>{e.stopPropagation();onRemove&&onRemove(ev);}}
           className="opacity-0 group-hover:opacity-100 flex-shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center hover:bg-white/25"
-          style={{color:c.text,fontSize:'11px',lineHeight:1}}>×</button>
+          style={{color:isCheckin?'#6ee7b7':c.text,fontSize:'11px',lineHeight:1}}>×</button>
       </div>
       {ev.recurrence && <div style={{fontSize:'8px',color:c.text,opacity:0.5,marginTop:'1px'}}>↻</div>}
     </div>
@@ -1396,7 +1403,7 @@ function WeekView({events, onAdd, onRemove, onExpand, removingIds, offset=0}){
         {/* Day columns */}
         {dayNames.map((d,di)=>{
           const isToday = di===todayDi;
-          const colEvs = layoutDayEvents(getEventsForDayColumn(events,di), 6);
+          const colEvs = layoutDayEvents(getEventsForDayColumn(events,di,weekMon), 6);
           return (
             <div key={d} style={{flex:1,position:'relative',height:totalH,borderRight:di<6?'1px solid rgba(255,255,255,0.04)':'none',background:isToday?'rgba(255,255,255,0.005)':'transparent',minWidth:0}}>
               {/* Hour grid lines + click targets */}
@@ -1439,7 +1446,8 @@ function DayView({events, onAdd, onRemove, onExpand, removingIds, offset=0}){
   const currentHour = isToday ? now.getHours() : -1;
   const nowTop = isToday ? (now.getHours()-6)*ROW_H+(now.getMinutes()/60)*ROW_H : -1;
   const dayLabel = displayDate.toLocaleDateString('en',{weekday:'long',month:'long',day:'numeric'});
-  const colEvs = layoutDayEvents(getEventsForDayColumn(events, displayDi), 6);
+  const dayViewMon = new Date(displayDate); dayViewMon.setDate(displayDate.getDate()-displayDi);
+  const colEvs = layoutDayEvents(getEventsForDayColumn(events, displayDi, dayViewMon), 6);
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
@@ -3017,6 +3025,9 @@ function LifePlannerSubtab({data,setData,toasts}){
   const [inFlightTools,setInFlightTools]=useState([]);
   const [listening,setListening]=useState(false);
   const [liveText,setLiveText]=useState('');
+  const [logCheckin,setLogCheckin]=useState(false);
+  const [logDate,setLogDate]=useState('');
+  const [logNote,setLogNote]=useState('');
   const recogRef=useRef(null);
   const chatEndRef=useRef(null);
   useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth'});},[planner.chatHistory?.length,streamText]);
@@ -3037,6 +3048,21 @@ function LifePlannerSubtab({data,setData,toasts}){
     const last=stack[stack.length-1];
     setData(d=>({...d,planner:{...d.planner,...last.snapshot,undoStack:stack.slice(0,-1)}}));
     toasts.push('Undid: '+last.desc);
+  }
+
+  function onToggleGoal(goalId,currentStatus){
+    const next=currentStatus==='done'?'active':'done';
+    mutate(p=>({...p,goals:p.goals.map(g=>g.id===goalId?{...g,status:next}:g)}),next==='done'?'Completed goal':'Reopened goal');
+    toasts.push(next==='done'?'Goal marked done!':'Goal reopened');
+  }
+
+  function onScheduleCheckin(personId,date){
+    const person=(planner.people||[]).find(p=>p.id===personId);
+    if(!person) return;
+    const dow=(new Date(date+'T12:00:00').getDay()+6)%7;
+    const event={id:uid(),title:`☎ Check in: ${person.name}`,type:'Personal',when:{exactDate:date,day:dow,hour:9},isCheckin:true,plannerPersonId:personId};
+    setData(d=>({...d,events:[...(d.events||[]),event]}));
+    toasts.push(`Check-in with ${person.name} added to calendar on ${date}`);
   }
 
   function executeTool(name,input){
@@ -3176,9 +3202,9 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
         </div>
         <div style={{flex:1,overflowY:'auto',minHeight:0}}>
           {viewMode==='cards'&&<PlannerCardsView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
-          {viewMode==='timeline'&&<PlannerTimelineView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}}/>}
+          {viewMode==='timeline'&&<PlannerTimelineView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} onToggleGoal={onToggleGoal}/>}
           {viewMode==='tree'&&<PlannerTreeView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
-          {viewMode==='people'&&<PlannerPeopleView planner={planner} onSelect={id=>{setSelectedType('person');setSelectedId(id);}} selectedId={selectedId}/>}
+          {viewMode==='people'&&<PlannerPeopleView planner={planner} onSelect={id=>{setSelectedType('person');setSelectedId(id);setLogCheckin(false);}} selectedId={selectedId} onScheduleCheckin={onScheduleCheckin}/>}
         </div>
         {(selGoal||selAction||selPerson)&&(
           <div style={{flexShrink:0,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'12px',padding:'12px'}}>
@@ -3201,8 +3227,37 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
               {selAction.people?.length>0&&<div style={{fontSize:'11px',color:'#818cf8',marginTop:'4px'}}>With: {selAction.people.join(', ')}</div>}
             </>}
             {selPerson&&<>
-              <div style={{fontSize:'11px',color:'#64748b'}}>{selPerson.relationship} · {selPerson.cadence} · {selPerson.lastInteraction?`Last: ${selPerson.lastInteraction}`:'Never logged'}</div>
-              {selPerson.notes&&<div style={{fontSize:'12px',color:'#94a3b8',marginTop:'4px'}}>{selPerson.notes}</div>}
+              <div style={{fontSize:'11px',color:'#64748b',marginBottom:'6px'}}>{selPerson.relationship} · {selPerson.cadence} · {selPerson.lastInteraction?`Last: ${selPerson.lastInteraction}`:'Never logged'}</div>
+              {selPerson.notes&&<div style={{fontSize:'12px',color:'#94a3b8',marginBottom:'8px'}}>{selPerson.notes}</div>}
+              {!logCheckin?(
+                <button onClick={()=>{setLogCheckin(true);setLogDate(new Date().toISOString().slice(0,10));setLogNote('');}}
+                  style={{padding:'5px 12px',borderRadius:'7px',fontSize:'11px',fontWeight:600,color:'#6ee7b7',background:'rgba(16,185,129,0.1)',border:'1px solid rgba(16,185,129,0.25)',cursor:'pointer'}}>
+                  ✓ Log Check-in
+                </button>
+              ):(
+                <div style={{display:'flex',flexDirection:'column',gap:'6px',background:'rgba(16,185,129,0.05)',border:'1px solid rgba(16,185,129,0.15)',borderRadius:'8px',padding:'10px'}}>
+                  <div style={{fontSize:'11px',fontWeight:600,color:'#6ee7b7',marginBottom:'2px'}}>Log check-in with {selPerson.name}</div>
+                  <input type="date" value={logDate} onChange={e=>setLogDate(e.target.value)}
+                    style={{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'6px',padding:'5px 8px',color:'#e2e8f0',fontSize:'12px',colorScheme:'dark',outline:'none'}}/>
+                  <textarea placeholder="What did you talk about?" value={logNote} onChange={e=>setLogNote(e.target.value)} rows={2}
+                    style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'6px',padding:'6px 8px',color:'#e2e8f0',fontSize:'12px',resize:'none',fontFamily:'inherit',outline:'none'}}/>
+                  <div style={{display:'flex',gap:'6px'}}>
+                    <button onClick={()=>{
+                      if(!logDate) return;
+                      mutate(p=>({...p,people:p.people.map(pr=>pr.id===selPerson.id?{...pr,lastInteraction:logDate,notes:logNote?`${logDate}: ${logNote}${pr.notes?'\n'+pr.notes:''}`:pr.notes}:pr)}),`Logged check-in: ${selPerson.name}`);
+                      // Remove matching check-in calendar events for this date+person
+                      setData(d=>({...d,events:(d.events||[]).filter(ev=>!(ev.isCheckin&&ev.plannerPersonId===selPerson.id&&ev.when?.exactDate===logDate))}));
+                      toasts.push(`Logged check-in with ${selPerson.name}`);
+                      setLogCheckin(false);setLogNote('');
+                    }} style={{flex:1,padding:'5px',borderRadius:'6px',fontSize:'11px',fontWeight:700,color:'white',background:'linear-gradient(90deg,#10b981,#059669)',border:'none',cursor:'pointer'}}>
+                      Save
+                    </button>
+                    <button onClick={()=>setLogCheckin(false)} style={{padding:'5px 10px',borderRadius:'6px',fontSize:'11px',color:'#475569',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',cursor:'pointer'}}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </>}
           </div>
         )}
@@ -3289,33 +3344,88 @@ function PlannerCardsView({planner,onSelect,selectedId}){
   );
 }
 
-function PlannerTimelineView({planner,onSelect}){
-  const goals=(planner.goals||[]).filter(g=>g.targetDate&&g.status!=='archived'),areas=planner.areas||[];
+function PlannerTimelineView({planner,onSelect,onToggleGoal}){
+  const goals=(planner.goals||[]).filter(g=>g.targetDate&&g.status!=='archived'),areas=planner.areas||[],actions=planner.actions||[];
   if(!goals.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No goals with target dates. Ask the planner to set some!</div>;
   const now=new Date();
   const msStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
   const msEnd=new Date(now.getFullYear(),now.getMonth()+12,1).getTime();
   const totalMs=msEnd-msStart;
+  const todayPct=Math.min(100,Math.max(0,((now.getTime()-msStart)/totalMs)*100));
   const months=[];for(let i=0;i<12;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);months.push(d.toLocaleDateString('en',{month:'short'}));}
-  return(
-    <div style={{overflowX:'auto'}}>
-      <div style={{minWidth:'520px'}}>
-        <div style={{display:'flex',marginLeft:'90px',marginBottom:'6px'}}>
-          {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'10px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.04)',paddingLeft:'4px'}}>{m}</div>)}
+  const groupedByArea=areas.map(area=>({area,goals:goals.filter(g=>g.areaId===area.id)})).filter(g=>g.goals.length>0);
+  const ungrouped=goals.filter(g=>!areas.find(a=>a.id===g.areaId));
+  const renderGoalRow=(g,area)=>{
+    const isDone=g.status==='done';
+    const color=area?.color||'#6366f1';
+    const targetMs=new Date(g.targetDate+'T12:00:00').getTime();
+    const targetPct=Math.max(1,Math.min(99,((targetMs-msStart)/totalMs)*100));
+    const isPast=targetMs<now.getTime()&&!isDone;
+    const ga=actions.filter(a=>a.goalId===g.id);
+    const doneAct=ga.filter(a=>a.status==='done').length;
+    return(
+      <div key={g.id} style={{display:'flex',alignItems:'center',marginBottom:'7px',gap:'8px'}}>
+        {/* Done toggle */}
+        <button onClick={e=>{e.stopPropagation();onToggleGoal&&onToggleGoal(g.id,g.status);}}
+          style={{width:'15px',height:'15px',borderRadius:'50%',flexShrink:0,border:`2px solid ${isDone?color:'rgba(255,255,255,0.18)'}`,background:isDone?color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',fontWeight:700,transition:'all .15s'}}>
+          {isDone?'✓':''}
+        </button>
+        {/* Label */}
+        <div onClick={()=>onSelect('goal',g.id)}
+          style={{width:'96px',flexShrink:0,fontSize:'11px',color:isDone?'#334155':'#94a3b8',textAlign:'right',paddingRight:'8px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none',cursor:'pointer'}}
+          title={g.title}>{g.title}</div>
+        {/* Track */}
+        <div onClick={()=>onSelect('goal',g.id)} style={{flex:1,height:'20px',position:'relative',borderRadius:'5px',background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.04)',cursor:'pointer',overflow:'visible'}}>
+          {/* Today line */}
+          <div style={{position:'absolute',left:`${todayPct}%`,top:'-2px',bottom:'-2px',width:'2px',background:'rgba(99,102,241,0.7)',zIndex:3,borderRadius:'1px'}}/>
+          {/* Fill bar today→target */}
+          {!isDone&&!isPast&&todayPct<targetPct&&(
+            <div style={{position:'absolute',left:`${todayPct}%`,width:`${targetPct-todayPct}%`,top:'4px',bottom:'4px',borderRadius:'3px',background:`${color}25`,border:`1px solid ${color}35`}}/>
+          )}
+          {/* Completed bar full */}
+          {isDone&&(
+            <div style={{position:'absolute',left:'2px',right:'2px',top:'4px',bottom:'4px',borderRadius:'3px',background:`${color}20`,opacity:0.5}}/>
+          )}
+          {/* Target dot */}
+          <div style={{position:'absolute',left:`calc(${targetPct}% - 8px)`,top:'2px',width:'16px',height:'16px',borderRadius:'50%',background:isDone?color:isPast?'rgba(239,68,68,0.6)':color,border:`2.5px solid ${isDone?'rgba(255,255,255,0.3)':isPast?'rgba(239,68,68,0.8)':'rgba(0,0,0,0.35)'}`,opacity:isDone?0.55:1,zIndex:2,boxShadow:isDone?'none':`0 0 10px ${color}60`,transition:'all .15s'}}/>
+          {/* Overdue label */}
+          {isPast&&<div style={{position:'absolute',left:`calc(${Math.min(targetPct+2,88)}% )`,top:'2px',fontSize:'9px',color:'#f87171',whiteSpace:'nowrap',fontWeight:600}}>overdue</div>}
+          {/* Done checkmark overlay */}
+          {isDone&&<div style={{position:'absolute',right:'6px',top:'2px',fontSize:'10px',color:color,opacity:0.7}}>✓</div>}
         </div>
-        {goals.map(g=>{
-          const area=areas.find(a=>a.id===g.areaId);
-          const pct=Math.max(1,Math.min(98,((new Date(g.targetDate+'T12:00:00').getTime()-msStart)/totalMs)*100));
-          return(
-            <div key={g.id} style={{display:'flex',alignItems:'center',marginBottom:'5px',gap:'8px'}}>
-              <div style={{width:'82px',flexShrink:0,fontSize:'10px',color:'#64748b',textAlign:'right',paddingRight:'8px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={g.title}>{g.title}</div>
-              <div style={{flex:1,height:'16px',position:'relative',borderRadius:'4px',background:'rgba(255,255,255,0.02)'}}>
-                <div style={{position:'absolute',left:`${((now.getTime()-msStart)/totalMs)*100}%`,top:0,bottom:0,width:'1px',background:'rgba(99,102,241,0.5)'}}/>
-                <button onClick={()=>onSelect('goal',g.id)} style={{position:'absolute',left:`calc(${pct}% - 6px)`,top:'2px',width:'12px',height:'12px',borderRadius:'50%',background:area?.color||'#6366f1',border:'2px solid rgba(0,0,0,0.4)',cursor:'pointer',padding:0}} title={`${g.title} — ${g.targetDate}`}/>
-              </div>
+        {/* Actions progress */}
+        {ga.length>0&&(
+          <div style={{fontSize:'10px',color:doneAct===ga.length?'#10b981':'#334155',flexShrink:0,minWidth:'30px',textAlign:'right',fontWeight:doneAct===ga.length?700:400}}>
+            {doneAct}/{ga.length}
+          </div>
+        )}
+        {/* Date */}
+        <div style={{fontSize:'10px',color:isPast?'#f87171':'#334155',flexShrink:0,width:'40px',textAlign:'right'}}>{g.targetDate?.slice(5)}</div>
+      </div>
+    );
+  };
+  return(
+    <div style={{overflowX:'auto',padding:'4px 0'}}>
+      <div style={{minWidth:'560px'}}>
+        {/* Month header */}
+        <div style={{display:'flex',marginLeft:'130px',marginBottom:'10px',marginRight:'80px'}}>
+          {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'10px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.05)',paddingLeft:'4px',fontWeight:500}}>{m}</div>)}
+        </div>
+        {/* Today marker label */}
+        <div style={{marginLeft:'130px',marginRight:'80px',position:'relative',height:'12px',marginBottom:'6px'}}>
+          <div style={{position:'absolute',left:`${todayPct}%`,transform:'translateX(-50%)',fontSize:'9px',color:'#6366f1',fontWeight:700,whiteSpace:'nowrap'}}>TODAY</div>
+        </div>
+        {groupedByArea.map(({area,goals:ag})=>(
+          <div key={area.id} style={{marginBottom:'16px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'7px',paddingBottom:'5px',borderBottom:`1px solid ${area.color}20`}}>
+              <div style={{width:'6px',height:'6px',borderRadius:'50%',background:area.color}}/>
+              <div style={{fontSize:'10px',fontWeight:700,color:area.color,letterSpacing:'0.07em',textTransform:'uppercase'}}>{area.name}</div>
+              <div style={{fontSize:'10px',color:'#334155',marginLeft:'4px'}}>{ag.filter(g=>g.status==='done').length}/{ag.length}</div>
             </div>
-          );
-        })}
+            {ag.map(g=>renderGoalRow(g,area))}
+          </div>
+        ))}
+        {ungrouped.length>0&&ungrouped.map(g=>renderGoalRow(g,null))}
       </div>
     </div>
   );
@@ -3363,23 +3473,43 @@ function PlannerTreeView({planner,onSelect,selectedId}){
 }
 
 const CADENCE_DAYS={weekly:7,biweekly:14,monthly:30,quarterly:90};
-function PlannerPeopleView({planner,onSelect,selectedId}){
+function PlannerPeopleView({planner,onSelect,selectedId,onScheduleCheckin}){
   const people=planner.people||[];
+  const [schedulingFor,setSchedulingFor]=useState(null);
+  const [checkinDate,setCheckinDate]=useState('');
   if(!people.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No people tracked yet. Tell the planner about someone you want to stay in touch with.</div>;
   const ws=people.map(p=>{const days=p.lastInteraction?Math.floor((Date.now()-new Date(p.lastInteraction))/86400000):null,cd=CADENCE_DAYS[p.cadence]||30;return{...p,days,overdue:days!==null&&days>cd,urgent:days!==null&&days>cd*1.5};}).sort((a,b)=>{if(a.urgent&&!b.urgent)return -1;if(!a.urgent&&b.urgent)return 1;if(a.overdue&&!b.overdue)return -1;if(!a.overdue&&b.overdue)return 1;return(b.days||0)-(a.days||0);});
+  const todayStr=new Date().toISOString().slice(0,10);
   return(
     <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
       {ws.map(p=>(
-        <button key={p.id} onClick={()=>onSelect(p.id)} style={{display:'flex',alignItems:'center',gap:'10px',textAlign:'left',padding:'10px 12px',borderRadius:'10px',background:selectedId===p.id?'rgba(255,255,255,0.06)':'rgba(255,255,255,0.02)',border:`1px solid ${p.urgent?'rgba(239,68,68,0.3)':p.overdue?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.06)'}`,cursor:'pointer'}}>
-          <div style={{width:'32px',height:'32px',borderRadius:'50%',background:p.urgent?'rgba(239,68,68,0.15)':p.overdue?'rgba(245,158,11,0.15)':'rgba(99,102,241,0.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#818cf8',flexShrink:0}}>{p.name[0]?.toUpperCase()}</div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:'13px',color:'#e2e8f0',fontWeight:500}}>{p.name}</div>
-            <div style={{fontSize:'11px',color:'#475569'}}>{p.relationship} · {p.cadence}</div>
+        <div key={p.id} style={{borderRadius:'10px',background:selectedId===p.id?'rgba(255,255,255,0.06)':'rgba(255,255,255,0.02)',border:`1px solid ${p.urgent?'rgba(239,68,68,0.3)':p.overdue?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.06)'}`,overflow:'hidden'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',cursor:'pointer'}} onClick={()=>onSelect(p.id)}>
+            <div style={{width:'32px',height:'32px',borderRadius:'50%',background:p.urgent?'rgba(239,68,68,0.15)':p.overdue?'rgba(245,158,11,0.15)':'rgba(99,102,241,0.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#818cf8',flexShrink:0}}>{p.name[0]?.toUpperCase()}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:'13px',color:'#e2e8f0',fontWeight:500}}>{p.name}</div>
+              <div style={{fontSize:'11px',color:'#475569'}}>{p.relationship} · {p.cadence}</div>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0,marginRight:'8px'}}>
+              {p.days===null?<div style={{fontSize:'11px',color:'#334155'}}>Never logged</div>:<><div style={{fontSize:'12px',fontWeight:600,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#6ee7b7'}}>{p.days}d ago</div>{p.overdue&&<div style={{fontSize:'10px',color:'#334155'}}>Overdue</div>}</>}
+            </div>
+            <button onClick={e=>{e.stopPropagation();setSchedulingFor(schedulingFor===p.id?null:p.id);setCheckinDate(todayStr);}}
+              style={{flexShrink:0,padding:'4px 8px',borderRadius:'6px',fontSize:'10px',fontWeight:600,color:schedulingFor===p.id?'#6ee7b7':'#6366f1',background:schedulingFor===p.id?'rgba(16,185,129,0.12)':'rgba(99,102,241,0.1)',border:`1px solid ${schedulingFor===p.id?'rgba(16,185,129,0.3)':'rgba(99,102,241,0.25)'}`,cursor:'pointer',whiteSpace:'nowrap'}}>
+              {schedulingFor===p.id?'Cancel':'☎ Schedule'}
+            </button>
           </div>
-          <div style={{textAlign:'right',flexShrink:0}}>
-            {p.days===null?<div style={{fontSize:'11px',color:'#334155'}}>Never logged</div>:<><div style={{fontSize:'12px',fontWeight:600,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#6ee7b7'}}>{p.days}d ago</div>{p.overdue&&<div style={{fontSize:'10px',color:'#334155'}}>Overdue</div>}</>}
-          </div>
-        </button>
+          {schedulingFor===p.id&&(
+            <div onClick={e=>e.stopPropagation()} style={{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px 10px',borderTop:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.015)'}}>
+              <span style={{fontSize:'11px',color:'#64748b',flexShrink:0}}>Check-in date:</span>
+              <input type="date" value={checkinDate} onChange={e=>setCheckinDate(e.target.value)}
+                style={{flex:1,background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'6px',padding:'4px 8px',color:'#e2e8f0',fontSize:'12px',colorScheme:'dark',outline:'none'}}/>
+              <button onClick={()=>{if(checkinDate&&onScheduleCheckin){onScheduleCheckin(p.id,checkinDate);setSchedulingFor(null);}}}
+                style={{flexShrink:0,padding:'4px 10px',borderRadius:'6px',fontSize:'11px',fontWeight:600,color:'white',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',border:'none',cursor:'pointer'}}>
+                Add to Calendar
+              </button>
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );
