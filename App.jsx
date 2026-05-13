@@ -37,6 +37,16 @@ const defaultState = () => ({
   hubs: DEFAULT_HUBS(),
   career: { contacts: [], questions: [], applications: [] },
   seenDeals: [],
+  planner: {
+    areas:[
+      {id:'pa1',name:'Startups',color:'#6366f1',description:'Entrepreneurial projects and ideas'},
+      {id:'pa2',name:'Academics',color:'#3b82f6',description:'School and intellectual growth'},
+      {id:'pa3',name:'Health',color:'#10b981',description:'Physical and mental wellbeing'},
+      {id:'pa4',name:'Relationships',color:'#f59e0b',description:'Friends, family, and connections'},
+      {id:'pa5',name:'Personal Growth',color:'#8b5cf6',description:'Self-development and mindset'},
+    ],
+    goals:[],actions:[],people:[],checkins:[],chatHistory:[],undoStack:[],
+  },
 });
 
 function useLocalState(key, initial) {
@@ -2527,14 +2537,15 @@ function NotesPanel({data, setData, toasts}){
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Notes</h2>
         <div className="flex gap-2">
-          {['notes','journal','habits'].map(t=> (
-            <button key={t} className={`px-3 py-1 rounded capitalize ${subtab===t?'bg-white/10':'hover:bg-white/3'}`} onClick={()=>setSubtab(t)}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+          {[['notes','Notes'],['journal','Journal'],['habits','Habits'],['planner','Life Planner']].map(([t,label])=> (
+            <button key={t} className={`px-3 py-1 rounded ${subtab===t?'bg-white/10':'hover:bg-white/3'}`} onClick={()=>setSubtab(t)}>{label}</button>
           ))}
         </div>
       </div>
-      {subtab==='notes'  && <NotesSubtab  data={data} setData={setData} toasts={toasts} />}
-      {subtab==='journal'&& <JournalSubtab data={data} setData={setData} toasts={toasts} />}
-      {subtab==='habits' && <HabitsSubtab  data={data} setData={setData} toasts={toasts} />}
+      {subtab==='notes'   && <NotesSubtab        data={data} setData={setData} toasts={toasts} />}
+      {subtab==='journal' && <JournalSubtab       data={data} setData={setData} toasts={toasts} />}
+      {subtab==='habits'  && <HabitsSubtab        data={data} setData={setData} toasts={toasts} />}
+      {subtab==='planner' && <LifePlannerSubtab   data={data} setData={setData} toasts={toasts} />}
     </div>
   );
 }
@@ -2974,6 +2985,402 @@ function JournalSubtab({data, setData, toasts}){
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Life Planner ----
+const PLANNER_TOOLS=[
+  {name:'add_area',description:'Create a new life area',input_schema:{type:'object',properties:{name:{type:'string'},description:{type:'string'},color:{type:'string',description:'CSS hex like #6366f1'}},required:['name']}},
+  {name:'add_goal',description:'Add a goal to a life area. Use when the user mentions something they want to achieve.',input_schema:{type:'object',properties:{areaId:{type:'string',description:'Life area ID'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string',description:'YYYY-MM-DD'},parentGoalId:{type:'string'},status:{type:'string',enum:['active','paused']}},required:['areaId','title']}},
+  {name:'update_goal',description:'Update an existing goal',input_schema:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string'},status:{type:'string',enum:['active','paused','done','archived']}},required:['goalId']}},
+  {name:'add_action',description:'Add a concrete action/task under a goal',input_schema:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},dueDate:{type:'string'},estimatedDuration:{type:'string',description:'e.g. "30min","2hr"'},people:{type:'array',items:{type:'string'}},notes:{type:'string'}},required:['goalId','title']}},
+  {name:'update_action',description:'Update or complete an action',input_schema:{type:'object',properties:{actionId:{type:'string'},title:{type:'string'},status:{type:'string',enum:['todo','done','skipped']},dueDate:{type:'string'},notes:{type:'string'}},required:['actionId']}},
+  {name:'add_person',description:'Add a person to the relationship tracker',input_schema:{type:'object',properties:{name:{type:'string'},relationship:{type:'string',description:'friend, mentor, family, colleague'},cadence:{type:'string',description:'weekly, biweekly, monthly, quarterly'},notes:{type:'string'}},required:['name']}},
+  {name:'update_person',description:'Update person info or log an interaction',input_schema:{type:'object',properties:{personId:{type:'string'},name:{type:'string'},relationship:{type:'string'},cadence:{type:'string'},lastInteraction:{type:'string',description:'ISO date YYYY-MM-DD'},notes:{type:'string'}},required:['personId']}},
+  {name:'log_checkin',description:'Log a reflection or weekly check-in',input_schema:{type:'object',properties:{summary:{type:'string'},areaUpdates:{type:'array',items:{type:'object',properties:{areaId:{type:'string'},note:{type:'string'}}}}},required:['summary']}},
+];
+
+function getDefaultPlanner(){
+  return{areas:[{id:'pa1',name:'Startups',color:'#6366f1',description:'Entrepreneurial projects and ideas'},{id:'pa2',name:'Academics',color:'#3b82f6',description:'School and intellectual growth'},{id:'pa3',name:'Health',color:'#10b981',description:'Physical and mental wellbeing'},{id:'pa4',name:'Relationships',color:'#f59e0b',description:'Friends, family, connections'},{id:'pa5',name:'Personal Growth',color:'#8b5cf6',description:'Self-development and mindset'}],goals:[],actions:[],people:[],checkins:[],chatHistory:[],undoStack:[]};
+}
+
+function LifePlannerSubtab({data,setData,toasts}){
+  const planner=data.planner||getDefaultPlanner();
+  const apiKey=data.settings?.apiKey||'';
+  const [viewMode,setViewMode]=useState('cards');
+  const [selectedId,setSelectedId]=useState(null);
+  const [selectedType,setSelectedType]=useState(null);
+  const [chatInput,setChatInput]=useState('');
+  const [streaming,setStreaming]=useState(false);
+  const [streamText,setStreamText]=useState('');
+  const [inFlightTools,setInFlightTools]=useState([]);
+  const [listening,setListening]=useState(false);
+  const [liveText,setLiveText]=useState('');
+  const recogRef=useRef(null);
+  const chatEndRef=useRef(null);
+  useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth'});},[planner.chatHistory?.length,streamText]);
+
+  function mutate(fn,desc){
+    setData(d=>{
+      const p=d.planner||getDefaultPlanner();
+      const next=fn({...p});
+      const snap={areas:p.areas,goals:p.goals,actions:p.actions,people:p.people,checkins:p.checkins};
+      const undoStack=[...(p.undoStack||[]).slice(-9),{desc,at:Date.now(),snapshot:snap}];
+      return{...d,planner:{...next,undoStack,chatHistory:next.chatHistory||p.chatHistory||[]}};
+    });
+  }
+
+  function undo(){
+    const stack=planner.undoStack||[];
+    if(!stack.length){toasts.push('Nothing to undo');return;}
+    const last=stack[stack.length-1];
+    setData(d=>({...d,planner:{...d.planner,...last.snapshot,undoStack:stack.slice(0,-1)}}));
+    toasts.push('Undid: '+last.desc);
+  }
+
+  function executeTool(name,input){
+    const now=new Date().toISOString();
+    let label=name;
+    mutate(p=>{
+      const COLS=['#6366f1','#8b5cf6','#10b981','#f59e0b','#ef4444','#3b82f6','#ec4899'];
+      switch(name){
+        case 'add_area':{const a={id:uid('pa'),name:input.name,color:input.color||COLS[p.areas.length%COLS.length],description:input.description||'',createdAt:now};label=`Created area: ${input.name}`;return{...p,areas:[...p.areas,a]};}
+        case 'add_goal':{const g={id:uid('pg'),areaId:input.areaId,title:input.title,description:input.description||'',status:input.status||'active',targetDate:input.targetDate||null,parentGoalId:input.parentGoalId||null,createdAt:now};label=`Added goal: ${input.title}`;return{...p,goals:[...p.goals,g]};}
+        case 'update_goal':{const{goalId,...u}=input;label=`Updated: ${p.goals.find(g=>g.id===goalId)?.title||goalId}`;return{...p,goals:p.goals.map(g=>g.id===goalId?{...g,...u}:g)};}
+        case 'add_action':{const a={id:uid('pa'),goalId:input.goalId,title:input.title,dueDate:input.dueDate||null,status:'todo',estimatedDuration:input.estimatedDuration||null,people:input.people||[],notes:input.notes||'',createdAt:now};label=`Added action: ${input.title}`;return{...p,actions:[...p.actions,a]};}
+        case 'update_action':{const{actionId,...u}=input;label=`Updated action`;return{...p,actions:p.actions.map(a=>a.id===actionId?{...a,...u}:a)};}
+        case 'add_person':{const pr={id:uid('pp'),name:input.name,relationship:input.relationship||'',cadence:input.cadence||'monthly',lastInteraction:null,notes:input.notes||'',createdAt:now};label=`Added: ${input.name}`;return{...p,people:[...p.people,pr]};}
+        case 'update_person':{const{personId,...u}=input;label=`Updated person`;return{...p,people:p.people.map(pr=>pr.id===personId?{...pr,...u}:pr)};}
+        case 'log_checkin':{const c={id:uid('pc'),date:new Date().toISOString().slice(0,10),summary:input.summary,areaUpdates:input.areaUpdates||[],createdAt:now};label=`Logged check-in`;return{...p,checkins:[...(p.checkins||[]),c]};}
+        default:return p;
+      }
+    },label);
+    return `Done — ${label}`;
+  }
+
+  function buildContext(){
+    const p=planner;
+    const today=new Date().toISOString().slice(0,10);
+    const dayName=new Date().toLocaleDateString('en',{weekday:'long'});
+    const plan=p.areas.map(area=>({area:area.name,id:area.id,goals:p.goals.filter(g=>g.areaId===area.id&&g.status!=='archived').map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,subGoals:p.goals.filter(sg=>sg.parentGoalId===g.id).map(sg=>({id:sg.id,title:sg.title,status:sg.status})),actions:p.actions.filter(a=>a.goalId===g.id&&a.status!=='done').map(a=>({id:a.id,title:a.title,dueDate:a.dueDate,status:a.status}))}))}));
+    const people=p.people.map(pr=>{const days=pr.lastInteraction?Math.floor((Date.now()-new Date(pr.lastInteraction))/86400000):null;const cd={weekly:7,biweekly:14,monthly:30,quarterly:90}[pr.cadence]||30;return{id:pr.id,name:pr.name,relationship:pr.relationship,cadence:pr.cadence,daysSinceContact:days,overdue:days!==null&&days>cd};});
+    const recentJournals=(data.journals||[]).filter(j=>j.date>=new Date(Date.now()-7*86400000).toISOString().slice(0,10)).map(j=>({date:j.date,tags:j.tags||[],preview:j.body.slice(0,120)}));
+    return{today,dayOfWeek:dayName,plan,people,recentJournals};
+  }
+
+  async function streamRound(messages,onText,onTool){
+    const k=(ls('magverse:v1')?.settings||{}).apiKey||'';
+    const ctx=buildContext();
+    const system=`You are a thoughtful life planner — direct, honest, and analytical. Reference the existing plan in every response. Push back on vague goals and unrealistic timelines. Surface conflicts. When someone is mentioned, check the People list. Never invent commitments the user didn't make.
+
+CURRENT PLAN:
+${JSON.stringify(ctx.plan,null,2)}
+
+PEOPLE:
+${JSON.stringify(ctx.people,null,2)}
+
+RECENT JOURNAL (7 days):
+${JSON.stringify(ctx.recentJournals,null,2)}
+
+Today: ${ctx.today} (${ctx.dayOfWeek})`;
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:2000,stream:true,system,tools:PLANNER_TOOLS,messages})});
+    if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
+    const reader=resp.body.getReader(),dec=new TextDecoder();
+    let buf='',fullText='',stopReason='end_turn';
+    let curBlock=null,curInput='';
+    const toolCalls=[],rawContent=[];
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop()||'';
+      for(const line of lines){
+        if(!line.startsWith('data:'))continue;
+        const raw=line.slice(5).trim();if(raw==='[DONE]')break;
+        try{
+          const ev=JSON.parse(raw);
+          if(ev.type==='message_delta'&&ev.delta?.stop_reason)stopReason=ev.delta.stop_reason;
+          else if(ev.type==='content_block_start'){curBlock=ev.content_block;curInput='';if(ev.content_block.type==='text')rawContent.push({type:'text',text:''});else if(ev.content_block.type==='tool_use')rawContent.push({...ev.content_block,input:{}});}
+          else if(ev.type==='content_block_delta'){
+            if(ev.delta.type==='text_delta'){fullText+=ev.delta.text;if(rawContent.length&&rawContent[rawContent.length-1].type==='text')rawContent[rawContent.length-1].text+=ev.delta.text;onText(fullText);}
+            else if(ev.delta.type==='input_json_delta')curInput+=ev.delta.partial_json;
+          }
+          else if(ev.type==='content_block_stop'&&curBlock?.type==='tool_use'){
+            try{const inp=JSON.parse(curInput||'{}');rawContent[rawContent.length-1].input=inp;const result=executeTool(curBlock.name,inp);const tc={id:curBlock.id,name:curBlock.name,input:inp,result};toolCalls.push(tc);onTool(tc);}catch(e){}
+          }
+        }catch(e){}
+      }
+    }
+    return{text:fullText,toolCalls,stopReason,rawContent};
+  }
+
+  async function sendMessage(text){
+    if(!text.trim()||streaming)return;
+    const userMsg={role:'user',content:text.trim(),id:uid(),at:Date.now()};
+    setData(d=>{const p=d.planner||getDefaultPlanner();return{...d,planner:{...p,chatHistory:[...(p.chatHistory||[]),userMsg]}};});
+    setChatInput('');setStreamText('');setInFlightTools([]);
+    if(!apiKey){
+      const e={role:'assistant',content:'Add your Anthropic API key in Settings.',id:uid(),at:Date.now()};
+      setData(d=>({...d,planner:{...d.planner,chatHistory:[...d.planner.chatHistory,e]}}));return;
+    }
+    setStreaming(true);
+    const collected=[];
+    try{
+      const history=(planner.chatHistory||[]).slice(-10).map(m=>({role:m.role,content:m.content}));
+      const messages=[...history,{role:'user',content:text.trim()}];
+      const{text:t1,toolCalls:tc1,stopReason,rawContent}=await streamRound(messages,ft=>setStreamText(ft),tc=>{collected.push(tc);setInFlightTools([...collected]);});
+      let finalText=t1;
+      if(tc1.length>0&&stopReason==='tool_use'){
+        const toolResults=tc1.map(tc=>({type:'tool_result',tool_use_id:tc.id,content:tc.result}));
+        setStreamText('');
+        const{text:t2}=await streamRound([...messages,{role:'assistant',content:rawContent},{role:'user',content:toolResults}],ft=>setStreamText(ft),()=>{});
+        finalText=t2;
+      }
+      const aMsg={role:'assistant',content:finalText,toolCalls:collected,id:uid(),at:Date.now()};
+      setData(d=>({...d,planner:{...d.planner,chatHistory:[...d.planner.chatHistory,aMsg]}}));
+    }catch(e){
+      const eMsg={role:'assistant',content:'Error: '+e.message,id:uid(),at:Date.now()};
+      setData(d=>({...d,planner:{...d.planner,chatHistory:[...d.planner.chatHistory,eMsg]}}));
+    }
+    setStreamText('');setInFlightTools([]);setStreaming(false);
+  }
+
+  function startListening(){
+    const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!R){toasts.push('Speech not supported');return;}
+    const r=new R();r.lang='en-US';r.interimResults=true;r.continuous=false;
+    let acc='';
+    r.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)acc+=t+' ';else interim=t;}setLiveText(acc+interim);};
+    r.onend=()=>{setListening(false);const f=acc.trim();if(f){setChatInput(f);setLiveText('');}else setLiveText('');};
+    r.onerror=()=>{setListening(false);setLiveText('');};
+    recogRef.current=r;r.start();setListening(true);setLiveText('');
+  }
+  function stopListening(){recogRef.current?.stop();setListening(false);}
+
+  const selGoal=selectedType==='goal'?planner.goals?.find(g=>g.id===selectedId):null;
+  const selAction=selectedType==='action'?planner.actions?.find(a=>a.id===selectedId):null;
+  const selPerson=selectedType==='person'?planner.people?.find(p=>p.id===selectedId):null;
+
+  return(
+    <div style={{display:'flex',gap:'16px',height:'calc(100vh - 215px)',minHeight:'520px'}}>
+      {/* LEFT: Visualization */}
+      <div style={{flex:'0 0 55%',display:'flex',flexDirection:'column',gap:'10px',overflow:'hidden',paddingRight:'12px',borderRight:'1px solid rgba(255,255,255,0.05)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:'6px',flexShrink:0}}>
+          <div style={{display:'flex',gap:'2px',padding:'4px',borderRadius:'12px',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>
+            {[['cards','Cards'],['timeline','Timeline'],['tree','Tree'],['people','People']].map(([v,l])=>(
+              <button key={v} onClick={()=>setViewMode(v)} style={viewMode===v?{background:'rgba(255,255,255,0.1)',color:'#e2e8f0',padding:'3px 10px',borderRadius:'8px',fontSize:'12px',fontWeight:600}:{color:'#64748b',padding:'3px 10px',fontSize:'12px',cursor:'pointer'}}>{l}</button>
+            ))}
+          </div>
+          <button onClick={undo} style={{marginLeft:'auto',fontSize:'11px',color:'#475569',padding:'4px 8px',borderRadius:'6px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',cursor:'pointer'}}>↩ Undo</button>
+          <button onClick={()=>{const j=JSON.stringify(planner,null,2);const b=new Blob([j],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='life-plan.json';a.click();URL.revokeObjectURL(u);}} style={{fontSize:'11px',color:'#475569',padding:'4px 8px',borderRadius:'6px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',cursor:'pointer'}}>Export</button>
+        </div>
+        <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+          {viewMode==='cards'&&<PlannerCardsView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
+          {viewMode==='timeline'&&<PlannerTimelineView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}}/>}
+          {viewMode==='tree'&&<PlannerTreeView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
+          {viewMode==='people'&&<PlannerPeopleView planner={planner} onSelect={id=>{setSelectedType('person');setSelectedId(id);}} selectedId={selectedId}/>}
+        </div>
+        {(selGoal||selAction||selPerson)&&(
+          <div style={{flexShrink:0,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'12px',padding:'12px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:'#e2e8f0'}}>{selGoal?.title||selAction?.title||selPerson?.name}</div>
+              <button onClick={()=>{setSelectedId(null);setSelectedType(null);}} style={{color:'#475569',fontSize:'14px',cursor:'pointer'}}>✕</button>
+            </div>
+            {selGoal&&<>
+              <div style={{fontSize:'11px',color:'#64748b',marginBottom:'6px'}}>{selGoal.status}{selGoal.targetDate&&` · target: ${selGoal.targetDate}`}</div>
+              {selGoal.description&&<div style={{fontSize:'12px',color:'#94a3b8',marginBottom:'6px'}}>{selGoal.description}</div>}
+              {planner.actions.filter(a=>a.goalId===selGoal.id).map(a=>(
+                <div key={a.id} style={{fontSize:'11px',color:a.status==='done'?'#475569':'#94a3b8',display:'flex',gap:'6px',marginBottom:'3px'}}>
+                  <span style={{color:a.status==='done'?'#10b981':'#334155'}}>{a.status==='done'?'✓':'○'}</span>{a.title}{a.dueDate&&<span style={{color:'#334155'}}>· {a.dueDate}</span>}
+                </div>
+              ))}
+            </>}
+            {selAction&&<>
+              <div style={{fontSize:'11px',color:'#64748b'}}>{selAction.status}{selAction.dueDate&&` · due ${selAction.dueDate}`}{selAction.estimatedDuration&&` · ${selAction.estimatedDuration}`}</div>
+              {selAction.notes&&<div style={{fontSize:'12px',color:'#94a3b8',marginTop:'4px'}}>{selAction.notes}</div>}
+              {selAction.people?.length>0&&<div style={{fontSize:'11px',color:'#818cf8',marginTop:'4px'}}>With: {selAction.people.join(', ')}</div>}
+            </>}
+            {selPerson&&<>
+              <div style={{fontSize:'11px',color:'#64748b'}}>{selPerson.relationship} · {selPerson.cadence} · {selPerson.lastInteraction?`Last: ${selPerson.lastInteraction}`:'Never logged'}</div>
+              {selPerson.notes&&<div style={{fontSize:'12px',color:'#94a3b8',marginTop:'4px'}}>{selPerson.notes}</div>}
+            </>}
+          </div>
+        )}
+      </div>
+
+      {/* RIGHT: Chat */}
+      <div style={{flex:'0 0 45%',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{fontSize:'11px',fontWeight:700,color:'#475569',marginBottom:'8px',letterSpacing:'0.1em',flexShrink:0}}>LIFE PLANNER · claude-opus-4-7</div>
+        <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',paddingRight:'4px',minHeight:0}}>
+          {!planner.chatHistory?.length&&!streaming&&(
+            <div style={{padding:'32px 16px',textAlign:'center'}}>
+              <div style={{fontSize:'28px',marginBottom:'10px'}}>🗺️</div>
+              <div style={{fontSize:'13px',color:'#e2e8f0',marginBottom:'8px',fontWeight:600}}>Your life planner</div>
+              <div style={{fontSize:'12px',color:'#334155',lineHeight:'1.6'}}>Tell me what you're working on, what you want to achieve, or who you want to reconnect with. I'll help you build and maintain a real plan — not just a list.</div>
+            </div>
+          )}
+          {planner.chatHistory?.map(msg=>(
+            <div key={msg.id} style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:msg.role==='user'?'flex-end':'flex-start'}}>
+              {msg.toolCalls?.map(tc=>(
+                <div key={tc.id} style={{fontSize:'11px',color:'#6ee7b7',background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:'8px',padding:'4px 10px',maxWidth:'90%'}}>✓ {tc.result||tc.name}</div>
+              ))}
+              {msg.content&&(
+                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:msg.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:msg.role==='user'?'rgba(99,102,241,0.2)':'rgba(255,255,255,0.05)',border:msg.role==='user'?'1px solid rgba(99,102,241,0.3)':'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{msg.content}</div>
+              )}
+            </div>
+          ))}
+          {streaming&&(
+            <div style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:'flex-start'}}>
+              {inFlightTools.map((tc,i)=>(
+                <div key={i} style={{fontSize:'11px',color:'#6ee7b7',background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.2)',borderRadius:'8px',padding:'4px 10px'}}>✓ {tc.result||tc.name}</div>
+              ))}
+              {streamText?(
+                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',whiteSpace:'pre-wrap'}}>
+                  {streamText}<span style={{display:'inline-block',width:'3px',height:'13px',background:'#6366f1',marginLeft:'2px',verticalAlign:'text-bottom',animation:'pulse 0.8s ease-in-out infinite'}}/>
+                </div>
+              ):(
+                <div style={{display:'flex',gap:'4px',padding:'12px'}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:'6px',height:'6px',borderRadius:'50%',background:'#334155',animation:`float${i%2+1} 1.2s ease-in-out ${i*0.2}s infinite`}}/>)}
+                </div>
+              )}
+            </div>
+          )}
+          <div ref={chatEndRef}/>
+        </div>
+        {liveText&&<div style={{fontSize:'12px',color:'#64748b',fontStyle:'italic',padding:'4px 0',flexShrink:0}}>{liveText}</div>}
+        <div style={{marginTop:'8px',display:'flex',gap:'6px',alignItems:'flex-end',flexShrink:0}}>
+          <textarea style={{flex:1,padding:'9px 12px',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'12px',fontSize:'13px',color:'#e2e8f0',resize:'none',minHeight:'40px',maxHeight:'120px',lineHeight:'1.5',fontFamily:'inherit'}}
+            placeholder="What are you working on? Goals, people, plans…"
+            value={chatInput} onChange={e=>setChatInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage(chatInput);}}} rows={1}/>
+          <button onMouseDown={startListening} onMouseUp={stopListening} onTouchStart={startListening} onTouchEnd={stopListening}
+            style={{width:'38px',height:'38px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,background:listening?'rgba(239,68,68,0.25)':'rgba(255,255,255,0.06)',border:`1px solid ${listening?'rgba(239,68,68,0.5)':'rgba(255,255,255,0.1)'}`,fontSize:'17px',cursor:'pointer',position:'relative'}}>
+            {listening&&<span style={{position:'absolute',inset:'-5px',borderRadius:'15px',border:'2px solid rgba(239,68,68,0.4)',animation:'pulse 1s ease-in-out infinite'}}/>}🎤
+          </button>
+          <button onClick={()=>sendMessage(chatInput)} disabled={streaming||!chatInput.trim()}
+            style={{width:'38px',height:'38px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,background:streaming||!chatInput.trim()?'rgba(99,102,241,0.15)':'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white',fontSize:'18px',cursor:streaming?'default':'pointer',border:'none',fontWeight:'bold'}}>↑</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlannerCardsView({planner,onSelect,selectedId}){
+  const areas=planner.areas||[],goals=planner.goals||[],actions=planner.actions||[];
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'10px'}}>
+      {areas.map(area=>{
+        const ag=goals.filter(g=>g.areaId===area.id&&g.status!=='archived'),active=ag.filter(g=>g.status==='active');
+        return(
+          <div key={area.id} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}22`,borderRadius:'10px',padding:'10px',borderTop:`2px solid ${area.color}`}}>
+            <div style={{fontSize:'11px',fontWeight:700,color:area.color,marginBottom:'8px',letterSpacing:'0.08em'}}>{area.name.toUpperCase()}</div>
+            {active.length===0&&<div style={{fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No active goals</div>}
+            {active.slice(0,3).map(g=>{const ga=actions.filter(a=>a.goalId===g.id),done=ga.filter(a=>a.status==='done').length;return(
+              <button key={g.id} onClick={()=>onSelect('goal',g.id)} style={{display:'block',width:'100%',textAlign:'left',padding:'6px 8px',borderRadius:'7px',marginBottom:'3px',background:selectedId===g.id?`${area.color}15`:'transparent',border:selectedId===g.id?`1px solid ${area.color}30`:'1px solid transparent',cursor:'pointer'}}>
+                <div style={{fontSize:'12px',color:'#e2e8f0',fontWeight:500,lineHeight:'1.3'}}>{g.title}</div>
+                <div style={{fontSize:'10px',color:'#475569',marginTop:'2px'}}>{g.targetDate&&<span>{g.targetDate} · </span>}{ga.length>0&&<span>{done}/{ga.length} done</span>}</div>
+              </button>
+            );})}
+            {ag.length>3&&<div style={{fontSize:'10px',color:'#334155',paddingLeft:'8px'}}>+{ag.length-3} more</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlannerTimelineView({planner,onSelect}){
+  const goals=(planner.goals||[]).filter(g=>g.targetDate&&g.status!=='archived'),areas=planner.areas||[];
+  if(!goals.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No goals with target dates. Ask the planner to set some!</div>;
+  const now=new Date();
+  const msStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
+  const msEnd=new Date(now.getFullYear(),now.getMonth()+12,1).getTime();
+  const totalMs=msEnd-msStart;
+  const months=[];for(let i=0;i<12;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);months.push(d.toLocaleDateString('en',{month:'short'}));}
+  return(
+    <div style={{overflowX:'auto'}}>
+      <div style={{minWidth:'520px'}}>
+        <div style={{display:'flex',marginLeft:'90px',marginBottom:'6px'}}>
+          {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'10px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.04)',paddingLeft:'4px'}}>{m}</div>)}
+        </div>
+        {goals.map(g=>{
+          const area=areas.find(a=>a.id===g.areaId);
+          const pct=Math.max(1,Math.min(98,((new Date(g.targetDate+'T12:00:00').getTime()-msStart)/totalMs)*100));
+          return(
+            <div key={g.id} style={{display:'flex',alignItems:'center',marginBottom:'5px',gap:'8px'}}>
+              <div style={{width:'82px',flexShrink:0,fontSize:'10px',color:'#64748b',textAlign:'right',paddingRight:'8px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={g.title}>{g.title}</div>
+              <div style={{flex:1,height:'16px',position:'relative',borderRadius:'4px',background:'rgba(255,255,255,0.02)'}}>
+                <div style={{position:'absolute',left:`${((now.getTime()-msStart)/totalMs)*100}%`,top:0,bottom:0,width:'1px',background:'rgba(99,102,241,0.5)'}}/>
+                <button onClick={()=>onSelect('goal',g.id)} style={{position:'absolute',left:`calc(${pct}% - 6px)`,top:'2px',width:'12px',height:'12px',borderRadius:'50%',background:area?.color||'#6366f1',border:'2px solid rgba(0,0,0,0.4)',cursor:'pointer',padding:0}} title={`${g.title} — ${g.targetDate}`}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PlannerTreeView({planner,onSelect,selectedId}){
+  const areas=planner.areas||[],goals=planner.goals||[],actions=planner.actions||[];
+  const [collapsed,setCollapsed]=useState({});
+  const toggle=id=>setCollapsed(c=>({...c,[id]:!c[id]}));
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+      {areas.map(area=>{
+        const ag=goals.filter(g=>g.areaId===area.id&&!g.parentGoalId&&g.status!=='archived'),isC=collapsed[area.id];
+        return(
+          <div key={area.id}>
+            <button onClick={()=>toggle(area.id)} style={{display:'flex',alignItems:'center',gap:'8px',width:'100%',textAlign:'left',padding:'6px 10px',borderRadius:'8px',background:`${area.color}10`,border:`1px solid ${area.color}22`,cursor:'pointer',marginBottom:'3px'}}>
+              <span style={{fontSize:'9px',color:area.color,width:'8px'}}>{isC?'▶':'▼'}</span>
+              <span style={{fontSize:'12px',fontWeight:700,color:area.color}}>{area.name}</span>
+              <span style={{marginLeft:'auto',fontSize:'10px',color:'#475569'}}>{ag.length} goal{ag.length!==1?'s':''}</span>
+            </button>
+            {!isC&&ag.map(g=>{
+              const ga=actions.filter(a=>a.goalId===g.id),isGC=collapsed[g.id];
+              return(
+                <div key={g.id} style={{marginLeft:'16px',marginBottom:'2px'}}>
+                  <button onClick={()=>{toggle(g.id);onSelect('goal',g.id);}} style={{display:'flex',alignItems:'center',gap:'7px',width:'100%',textAlign:'left',padding:'5px 8px',borderRadius:'6px',background:selectedId===g.id?'rgba(255,255,255,0.07)':'transparent',border:`1px solid ${selectedId===g.id?'rgba(255,255,255,0.1)':'transparent'}`,cursor:'pointer'}}>
+                    {ga.length?<span style={{fontSize:'9px',color:'#475569',width:'8px'}}>{isGC?'▶':'▼'}</span>:<span style={{width:'8px'}}/>}
+                    <span style={{fontSize:'12px',color:'#e2e8f0'}}>{g.title}</span>
+                    {g.targetDate&&<span style={{marginLeft:'auto',fontSize:'10px',color:'#334155'}}>{g.targetDate}</span>}
+                  </button>
+                  {!isGC&&ga.map(a=>(
+                    <button key={a.id} onClick={()=>onSelect('action',a.id)} style={{display:'flex',alignItems:'center',gap:'6px',marginLeft:'18px',width:'calc(100% - 18px)',textAlign:'left',padding:'3px 7px',borderRadius:'5px',cursor:'pointer'}}>
+                      <span style={{fontSize:'10px',color:a.status==='done'?'#10b981':'#334155'}}>{a.status==='done'?'✓':'○'}</span>
+                      <span style={{fontSize:'11px',color:a.status==='done'?'#475569':'#94a3b8',textDecoration:a.status==='done'?'line-through':'none'}}>{a.title}</span>
+                      {a.dueDate&&<span style={{marginLeft:'auto',fontSize:'10px',color:'#334155'}}>{a.dueDate}</span>}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const CADENCE_DAYS={weekly:7,biweekly:14,monthly:30,quarterly:90};
+function PlannerPeopleView({planner,onSelect,selectedId}){
+  const people=planner.people||[];
+  if(!people.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No people tracked yet. Tell the planner about someone you want to stay in touch with.</div>;
+  const ws=people.map(p=>{const days=p.lastInteraction?Math.floor((Date.now()-new Date(p.lastInteraction))/86400000):null,cd=CADENCE_DAYS[p.cadence]||30;return{...p,days,overdue:days!==null&&days>cd,urgent:days!==null&&days>cd*1.5};}).sort((a,b)=>{if(a.urgent&&!b.urgent)return -1;if(!a.urgent&&b.urgent)return 1;if(a.overdue&&!b.overdue)return -1;if(!a.overdue&&b.overdue)return 1;return(b.days||0)-(a.days||0);});
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+      {ws.map(p=>(
+        <button key={p.id} onClick={()=>onSelect(p.id)} style={{display:'flex',alignItems:'center',gap:'10px',textAlign:'left',padding:'10px 12px',borderRadius:'10px',background:selectedId===p.id?'rgba(255,255,255,0.06)':'rgba(255,255,255,0.02)',border:`1px solid ${p.urgent?'rgba(239,68,68,0.3)':p.overdue?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.06)'}`,cursor:'pointer'}}>
+          <div style={{width:'32px',height:'32px',borderRadius:'50%',background:p.urgent?'rgba(239,68,68,0.15)':p.overdue?'rgba(245,158,11,0.15)':'rgba(99,102,241,0.12)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#818cf8',flexShrink:0}}>{p.name[0]?.toUpperCase()}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'13px',color:'#e2e8f0',fontWeight:500}}>{p.name}</div>
+            <div style={{fontSize:'11px',color:'#475569'}}>{p.relationship} · {p.cadence}</div>
+          </div>
+          <div style={{textAlign:'right',flexShrink:0}}>
+            {p.days===null?<div style={{fontSize:'11px',color:'#334155'}}>Never logged</div>:<><div style={{fontSize:'12px',fontWeight:600,color:p.urgent?'#f87171':p.overdue?'#fcd34d':'#6ee7b7'}}>{p.days}d ago</div>{p.overdue&&<div style={{fontSize:'10px',color:'#334155'}}>Overdue</div>}</>}
+          </div>
+        </button>
+      ))}
     </div>
   );
 }
