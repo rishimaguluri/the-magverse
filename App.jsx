@@ -3151,7 +3151,7 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
     const r=new R();r.lang='en-US';r.interimResults=true;r.continuous=false;
     let acc='';
     r.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)acc+=t+' ';else interim=t;}setLiveText(acc+interim);};
-    r.onend=()=>{setListening(false);const f=acc.trim();if(f){setChatInput(f);setLiveText('');}else setLiveText('');};
+    r.onend=()=>{setListening(false);const f=acc.trim();if(f){setChatInput(prev=>prev?prev+' '+f:f);setLiveText('');}else setLiveText('');};
     r.onerror=()=>{setListening(false);setLiveText('');};
     recogRef.current=r;r.start();setListening(true);setLiveText('');
   }
