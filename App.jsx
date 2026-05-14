@@ -3017,6 +3017,7 @@ function LifePlannerSubtab({data,setData,toasts}){
   const planner=data.planner||getDefaultPlanner();
   const apiKey=data.settings?.apiKey||'';
   const [viewMode,setViewMode]=useState('cards');
+  const [detailAreaId,setDetailAreaId]=useState(null);
   const [selectedId,setSelectedId]=useState(null);
   const [selectedType,setSelectedType]=useState(null);
   const [chatInput,setChatInput]=useState('');
@@ -3054,6 +3055,11 @@ function LifePlannerSubtab({data,setData,toasts}){
     const next=currentStatus==='done'?'active':'done';
     mutate(p=>({...p,goals:p.goals.map(g=>g.id===goalId?{...g,status:next}:g)}),next==='done'?'Completed goal':'Reopened goal');
     toasts.push(next==='done'?'Goal marked done!':'Goal reopened');
+  }
+
+  function onToggleAction(actionId,currentStatus){
+    const next=currentStatus==='done'?'todo':'done';
+    mutate(p=>({...p,actions:p.actions.map(a=>a.id===actionId?{...a,status:next}:a)}),'Toggled action');
   }
 
   function onScheduleCheckin(personId,date){
@@ -3187,6 +3193,11 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
   const selAction=selectedType==='action'?planner.actions?.find(a=>a.id===selectedId):null;
   const selPerson=selectedType==='person'?planner.people?.find(p=>p.id===selectedId):null;
 
+  if(detailAreaId){
+    const area=(planner.areas||[]).find(a=>a.id===detailAreaId);
+    if(area) return <PlannerAreaDetail planner={planner} area={area} onBack={()=>setDetailAreaId(null)} onToggleGoal={onToggleGoal} onToggleAction={onToggleAction} apiKey={apiKey}/>;
+  }
+
   return(
     <div style={{display:'flex',gap:'16px',height:'calc(100vh - 215px)',minHeight:'520px'}}>
       {/* LEFT: Visualization */}
@@ -3201,8 +3212,8 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
           <button onClick={()=>{const j=JSON.stringify(planner,null,2);const b=new Blob([j],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='life-plan.json';a.click();URL.revokeObjectURL(u);}} style={{fontSize:'11px',color:'#475569',padding:'4px 8px',borderRadius:'6px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',cursor:'pointer'}}>Export</button>
         </div>
         <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-          {viewMode==='cards'&&<PlannerCardsView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
-          {viewMode==='timeline'&&<PlannerTimelineView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} onToggleGoal={onToggleGoal}/>}
+          {viewMode==='cards'&&<PlannerCardsView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId} onOpenArea={id=>setDetailAreaId(id)}/>}
+          {viewMode==='timeline'&&<PlannerTimelineView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} onToggleGoal={onToggleGoal} onOpenArea={id=>setDetailAreaId(id)}/>}
           {viewMode==='tree'&&<PlannerTreeView planner={planner} onSelect={(t,id)=>{setSelectedType(t);setSelectedId(id);}} selectedId={selectedId}/>}
           {viewMode==='people'&&<PlannerPeopleView planner={planner} onSelect={id=>{setSelectedType('person');setSelectedId(id);setLogCheckin(false);}} selectedId={selectedId} onScheduleCheckin={onScheduleCheckin}/>}
         </div>
@@ -3320,23 +3331,207 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
   );
 }
 
-function PlannerCardsView({planner,onSelect,selectedId}){
+function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiKey}){
+  const goals=(planner.goals||[]).filter(g=>g.areaId===area.id&&g.status!=='archived');
+  const actions=planner.actions||[];
+  const [msgs,setMsgs]=useState([]);
+  const [input,setInput]=useState('');
+  const [streaming,setStreaming]=useState(false);
+  const [streamText,setStreamText]=useState('');
+  const [collapsed,setCollapsed]=useState({});
+  const endRef=useRef(null);
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'});},[msgs.length,streamText]);
+  const toggle=id=>setCollapsed(c=>({...c,[id]:!c[id]}));
+
+  // Mini timeline for this area
+  const now=new Date();
+  const msStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
+  const msEnd=new Date(now.getFullYear(),now.getMonth()+12,1).getTime();
+  const totalMs=msEnd-msStart;
+  const todayPct=((now.getTime()-msStart)/totalMs)*100;
+  const months=[];for(let i=0;i<12;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);months.push(d.toLocaleDateString('en',{month:'short'}));}
+
+  async function sendAreaMsg(text){
+    if(!text.trim()||!apiKey) return;
+    const userMsg={role:'user',id:uid(),content:text,at:Date.now()};
+    setMsgs(m=>[...m,userMsg]);setInput('');setStreaming(true);setStreamText('');
+    const ctx={area:area.name,description:area.description,goals:goals.map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,actions:actions.filter(a=>a.goalId===g.id).map(a=>({title:a.title,status:a.status,dueDate:a.dueDate}))}))};
+    const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT GOALS:\n${JSON.stringify(ctx.goals,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
+    try{
+      const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:1200,stream:true,system,messages:[...msgs,userMsg].map(m=>({role:m.role,content:m.content}))})});
+      const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
+      while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.type==='content_block_delta'&&j.delta?.type==='text_delta'){out+=j.delta.text;setStreamText(out);}}catch{}}}
+      setMsgs(m=>[...m,{role:'assistant',id:uid(),content:out,at:Date.now()}]);
+    }catch(e){setMsgs(m=>[...m,{role:'assistant',id:uid(),content:'Error: '+e.message,at:Date.now()}]);}
+    setStreamText('');setStreaming(false);
+  }
+
+  return(
+    <div style={{height:'calc(100vh - 215px)',minHeight:'520px',display:'flex',flexDirection:'column',gap:'0'}}>
+      {/* Header */}
+      <div style={{display:'flex',alignItems:'center',gap:'12px',paddingBottom:'12px',borderBottom:`1px solid ${area.color}25`,marginBottom:'14px',flexShrink:0}}>
+        <button onClick={onBack} style={{padding:'5px 10px',borderRadius:'7px',fontSize:'12px',color:'#64748b',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',cursor:'pointer'}}>← Back</button>
+        <div style={{width:'12px',height:'12px',borderRadius:'50%',background:area.color,boxShadow:`0 0 12px ${area.color}80`}}/>
+        <div style={{fontSize:'16px',fontWeight:700,color:area.color}}>{area.name}</div>
+        {area.description&&<div style={{fontSize:'12px',color:'#475569'}}>{area.description}</div>}
+        <div style={{marginLeft:'auto',fontSize:'11px',color:'#334155'}}>{goals.filter(g=>g.status==='done').length}/{goals.length} goals complete</div>
+      </div>
+
+      <div style={{flex:1,display:'flex',gap:'16px',overflow:'hidden',minHeight:0}}>
+        {/* LEFT: Goals + Timeline */}
+        <div style={{flex:'0 0 54%',display:'flex',flexDirection:'column',gap:'12px',overflow:'hidden'}}>
+          {/* Mini timeline */}
+          {goals.filter(g=>g.targetDate).length>0&&(
+            <div style={{flexShrink:0,background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}15`,borderRadius:'10px',padding:'12px'}}>
+              <div style={{fontSize:'10px',fontWeight:700,color:area.color,letterSpacing:'0.08em',marginBottom:'8px'}}>TIMELINE</div>
+              <div style={{display:'flex',marginBottom:'4px'}}>
+                {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'9px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.04)',paddingLeft:'3px'}}>{m}</div>)}
+              </div>
+              <div style={{position:'relative',marginBottom:'4px'}}>
+                <div style={{position:'absolute',left:`${todayPct}%`,top:'-2px',fontSize:'8px',color:'#6366f1',fontWeight:700,transform:'translateX(-50%)'}}>▼</div>
+              </div>
+              {goals.filter(g=>g.targetDate).map(g=>{
+                const isDone=g.status==='done';
+                const tPct=Math.max(2,Math.min(98,((new Date(g.targetDate+'T12:00:00').getTime()-msStart)/totalMs)*100));
+                const isPast=new Date(g.targetDate+'T12:00:00').getTime()<now.getTime()&&!isDone;
+                return(
+                  <div key={g.id} style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'5px'}}>
+                    <div style={{width:'80px',flexShrink:0,fontSize:'10px',color:isDone?'#334155':'#94a3b8',textAlign:'right',paddingRight:'6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none'}} title={g.title}>{g.title}</div>
+                    <div style={{flex:1,height:'16px',position:'relative',background:'rgba(255,255,255,0.015)',borderRadius:'3px'}}>
+                      <div style={{position:'absolute',left:`${todayPct}%`,top:0,bottom:0,width:'1.5px',background:'rgba(99,102,241,0.5)',zIndex:2}}/>
+                      {!isDone&&!isPast&&<div style={{position:'absolute',left:`${todayPct}%`,width:`${Math.max(0,tPct-todayPct)}%`,top:'3px',bottom:'3px',borderRadius:'2px',background:`${area.color}30`}}/>}
+                      <div style={{position:'absolute',left:`calc(${tPct}% - 7px)`,top:'1px',width:'14px',height:'14px',borderRadius:'50%',background:isDone?area.color:isPast?'rgba(239,68,68,0.6)':area.color,border:`2px solid rgba(0,0,0,0.3)`,opacity:isDone?0.5:1,zIndex:3,boxShadow:isDone?'none':`0 0 8px ${area.color}60`}}/>
+                    </div>
+                    <div style={{fontSize:'9px',color:isPast?'#f87171':'#334155',flexShrink:0,width:'36px',textAlign:'right'}}>{g.targetDate?.slice(5)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Goals + actions */}
+          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'8px',minHeight:0}}>
+            {goals.length===0&&<div style={{padding:'24px',textAlign:'center',color:'#334155',fontSize:'12px'}}>No goals in this area yet. Start chatting to add some!</div>}
+            {goals.map(g=>{
+              const ga=actions.filter(a=>a.goalId===g.id);
+              const doneAct=ga.filter(a=>a.status==='done').length;
+              const isC=collapsed[g.id];
+              return(
+                <div key={g.id} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}18`,borderRadius:'10px',overflow:'hidden'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'10px 12px',cursor:'pointer'}} onClick={()=>toggle(g.id)}>
+                    <button onClick={e=>{e.stopPropagation();onToggleGoal&&onToggleGoal(g.id,g.status);}}
+                      style={{width:'16px',height:'16px',borderRadius:'50%',flexShrink:0,border:`2px solid ${g.status==='done'?area.color:'rgba(255,255,255,0.2)'}`,background:g.status==='done'?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',fontWeight:700}}>
+                      {g.status==='done'?'✓':''}
+                    </button>
+                    <div style={{flex:1,fontSize:'13px',color:g.status==='done'?'#475569':'#e2e8f0',fontWeight:600,textDecoration:g.status==='done'?'line-through':'none'}}>{g.title}</div>
+                    {g.targetDate&&<div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{g.targetDate}</div>}
+                    {ga.length>0&&<div style={{fontSize:'10px',color:doneAct===ga.length?'#10b981':'#475569',flexShrink:0}}>{doneAct}/{ga.length}</div>}
+                    <div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{isC?'▶':'▼'}</div>
+                  </div>
+                  {!isC&&ga.length>0&&(
+                    <div style={{padding:'0 12px 10px',display:'flex',flexDirection:'column',gap:'4px'}}>
+                      {ga.map(a=>(
+                        <div key={a.id} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 8px',borderRadius:'6px',background:'rgba(255,255,255,0.02)'}}>
+                          <button onClick={()=>onToggleAction&&onToggleAction(a.id,a.status)}
+                            style={{width:'14px',height:'14px',borderRadius:'3px',flexShrink:0,border:`1.5px solid ${a.status==='done'?area.color:'rgba(255,255,255,0.2)'}`,background:a.status==='done'?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px'}}>
+                            {a.status==='done'?'✓':''}
+                          </button>
+                          <div style={{flex:1,fontSize:'12px',color:a.status==='done'?'#334155':'#94a3b8',textDecoration:a.status==='done'?'line-through':'none'}}>{a.title}</div>
+                          {a.dueDate&&<div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{a.dueDate}</div>}
+                        </div>
+                      ))}
+                      {!isC&&<div style={{fontSize:'10px',color:'#334155',paddingLeft:'22px',fontStyle:'italic'}}>Ask the planner to add more actions</div>}
+                    </div>
+                  )}
+                  {!isC&&ga.length===0&&<div style={{padding:'0 12px 10px 40px',fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No actions yet</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* RIGHT: Area-focused chat */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',borderLeft:'1px solid rgba(255,255,255,0.05)',paddingLeft:'16px'}}>
+          <div style={{fontSize:'11px',fontWeight:700,color:'#475569',marginBottom:'8px',letterSpacing:'0.1em',flexShrink:0}}>FOCUS CHAT · {area.name.toUpperCase()}</div>
+          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',minHeight:0}}>
+            {msgs.length===0&&!streaming&&(
+              <div style={{padding:'24px 16px',textAlign:'center'}}>
+                <div style={{fontSize:'24px',marginBottom:'8px',color:area.color}}>◎</div>
+                <div style={{fontSize:'13px',color:'#e2e8f0',marginBottom:'6px',fontWeight:600}}>Focused on {area.name}</div>
+                <div style={{fontSize:'12px',color:'#334155',lineHeight:'1.6'}}>Ask me to review your progress, challenge your goals, suggest next actions, or help you think through obstacles in this area specifically.</div>
+              </div>
+            )}
+            {msgs.map(m=>(
+              <div key={m.id} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
+                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:m.role==='user'?`${area.color}25`:'rgba(255,255,255,0.05)',border:m.role==='user'?`1px solid ${area.color}40`:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.content}</div>
+              </div>
+            ))}
+            {streaming&&(
+              <div style={{display:'flex',justifyContent:'flex-start'}}>
+                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',whiteSpace:'pre-wrap'}}>
+                  {streamText||'…'}<span style={{display:'inline-block',width:'3px',height:'13px',background:area.color,marginLeft:'2px',verticalAlign:'text-bottom',animation:'pulse 0.8s ease-in-out infinite'}}/>
+                </div>
+              </div>
+            )}
+            <div ref={endRef}/>
+          </div>
+          <div style={{marginTop:'8px',display:'flex',gap:'6px',flexShrink:0}}>
+            <textarea style={{flex:1,padding:'9px 12px',background:'rgba(255,255,255,0.04)',border:`1px solid ${area.color}30`,borderRadius:'12px',fontSize:'13px',color:'#e2e8f0',resize:'none',minHeight:'40px',maxHeight:'100px',lineHeight:'1.5',fontFamily:'inherit',outline:'none'}}
+              placeholder={`Ask about your ${area.name} goals…`}
+              value={input} onChange={e=>setInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAreaMsg(input);}}} rows={1}/>
+            <button onClick={()=>sendAreaMsg(input)} disabled={streaming||!input.trim()||!apiKey}
+              style={{width:'38px',height:'38px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,background:streaming||!input.trim()||!apiKey?'rgba(99,102,241,0.15)':`linear-gradient(135deg,${area.color},${area.color}bb)`,color:'white',fontSize:'18px',cursor:streaming?'default':'pointer',border:'none',fontWeight:'bold'}}>↑</button>
+          </div>
+          {!apiKey&&<div style={{fontSize:'10px',color:'#334155',marginTop:'4px',textAlign:'center'}}>Add API key in Settings to use chat</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlannerCardsView({planner,onSelect,selectedId,onOpenArea}){
   const areas=planner.areas||[],goals=planner.goals||[],actions=planner.actions||[];
   return(
-    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'10px'}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'12px'}}>
       {areas.map(area=>{
-        const ag=goals.filter(g=>g.areaId===area.id&&g.status!=='archived'),active=ag.filter(g=>g.status==='active');
+        const ag=goals.filter(g=>g.areaId===area.id&&g.status!=='archived');
+        const active=ag.filter(g=>g.status==='active');
+        const done=ag.filter(g=>g.status==='done').length;
+        const totalAct=actions.filter(a=>ag.some(g=>g.id===a.goalId)).length;
+        const doneAct=actions.filter(a=>ag.some(g=>g.id===a.goalId)&&a.status==='done').length;
+        const pct=totalAct>0?Math.round(doneAct/totalAct*100):0;
         return(
-          <div key={area.id} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}22`,borderRadius:'10px',padding:'10px',borderTop:`2px solid ${area.color}`}}>
-            <div style={{fontSize:'11px',fontWeight:700,color:area.color,marginBottom:'8px',letterSpacing:'0.08em'}}>{area.name.toUpperCase()}</div>
-            {active.length===0&&<div style={{fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No active goals</div>}
-            {active.slice(0,3).map(g=>{const ga=actions.filter(a=>a.goalId===g.id),done=ga.filter(a=>a.status==='done').length;return(
-              <button key={g.id} onClick={()=>onSelect('goal',g.id)} style={{display:'block',width:'100%',textAlign:'left',padding:'6px 8px',borderRadius:'7px',marginBottom:'3px',background:selectedId===g.id?`${area.color}15`:'transparent',border:selectedId===g.id?`1px solid ${area.color}30`:'1px solid transparent',cursor:'pointer'}}>
-                <div style={{fontSize:'12px',color:'#e2e8f0',fontWeight:500,lineHeight:'1.3'}}>{g.title}</div>
-                <div style={{fontSize:'10px',color:'#475569',marginTop:'2px'}}>{g.targetDate&&<span>{g.targetDate} · </span>}{ga.length>0&&<span>{done}/{ga.length} done</span>}</div>
-              </button>
-            );})}
-            {ag.length>3&&<div style={{fontSize:'10px',color:'#334155',paddingLeft:'8px'}}>+{ag.length-3} more</div>}
+          <div key={area.id} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}25`,borderRadius:'12px',padding:'12px',borderTop:`3px solid ${area.color}`,display:'flex',flexDirection:'column',gap:'8px',cursor:'pointer',transition:'background .15s'}}
+            onClick={()=>onOpenArea&&onOpenArea(area.id)}
+            onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+            onMouseLeave={e=>e.currentTarget.style.background='rgba(255,255,255,0.02)'}>
+            {/* Area header */}
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              <div style={{fontSize:'11px',fontWeight:700,color:area.color,letterSpacing:'0.08em'}}>{area.name.toUpperCase()}</div>
+              <div style={{fontSize:'10px',color:'#475569'}}>{done}/{ag.length} done</div>
+            </div>
+            {/* Progress bar */}
+            <div style={{height:'3px',borderRadius:'2px',background:'rgba(255,255,255,0.06)',overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${pct}%`,borderRadius:'2px',background:area.color,transition:'width .3s'}}/>
+            </div>
+            {/* Goals list — all of them */}
+            {active.length===0&&done===0&&<div style={{fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No goals yet — open to add some</div>}
+            {ag.map(g=>{
+              const ga=actions.filter(a=>a.goalId===g.id),dA=ga.filter(a=>a.status==='done').length;
+              return(
+                <div key={g.id} onClick={e=>{e.stopPropagation();onSelect('goal',g.id);}} style={{padding:'6px 8px',borderRadius:'7px',background:selectedId===g.id?`${area.color}18`:'rgba(255,255,255,0.02)',border:`1px solid ${selectedId===g.id?area.color+'30':'rgba(255,255,255,0.04)'}`,cursor:'pointer'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                    <div style={{width:'7px',height:'7px',borderRadius:'50%',flexShrink:0,background:g.status==='done'?area.color:'transparent',border:`1.5px solid ${g.status==='done'?area.color:'rgba(255,255,255,0.2)'}`}}/>
+                    <div style={{fontSize:'12px',color:g.status==='done'?'#475569':'#e2e8f0',fontWeight:500,lineHeight:'1.3',textDecoration:g.status==='done'?'line-through':'none',flex:1}}>{g.title}</div>
+                    {ga.length>0&&<div style={{fontSize:'10px',color:dA===ga.length?area.color:'#334155',flexShrink:0}}>{dA}/{ga.length}</div>}
+                  </div>
+                  {g.targetDate&&<div style={{fontSize:'10px',color:'#334155',marginTop:'2px',marginLeft:'13px'}}>{g.targetDate}</div>}
+                </div>
+              );
+            })}
+            {/* Open prompt */}
+            <div style={{fontSize:'10px',color:area.color,opacity:0.6,textAlign:'center',marginTop:'2px'}}>Open area →</div>
           </div>
         );
       })}
@@ -3344,18 +3539,22 @@ function PlannerCardsView({planner,onSelect,selectedId}){
   );
 }
 
-function PlannerTimelineView({planner,onSelect,onToggleGoal}){
-  const goals=(planner.goals||[]).filter(g=>g.targetDate&&g.status!=='archived'),areas=planner.areas||[],actions=planner.actions||[];
-  if(!goals.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No goals with target dates. Ask the planner to set some!</div>;
+function PlannerTimelineView({planner,onSelect,onToggleGoal,onOpenArea}){
+  const allGoals=(planner.goals||[]).filter(g=>g.targetDate&&g.status!=='archived'),areas=planner.areas||[],actions=planner.actions||[];
+  const areaIds=areas.map(a=>a.id);
+  const [visibleAreas,setVisibleAreas]=useState(()=>new Set(areaIds));
+  const toggleArea=id=>setVisibleAreas(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n;});
+  const goals=allGoals.filter(g=>visibleAreas.has(g.areaId)||(g.areaId===undefined&&visibleAreas.size>0));
+  if(!allGoals.length)return<div style={{textAlign:'center',padding:'40px',color:'#334155',fontSize:'12px'}}>No goals with target dates. Ask the planner to set some!</div>;
   const now=new Date();
   const msStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
   const msEnd=new Date(now.getFullYear(),now.getMonth()+12,1).getTime();
   const totalMs=msEnd-msStart;
   const todayPct=Math.min(100,Math.max(0,((now.getTime()-msStart)/totalMs)*100));
-  const months=[];for(let i=0;i<12;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);months.push(d.toLocaleDateString('en',{month:'short'}));}
+  const months=[];for(let i=0;i<12;i++){const d=new Date(now.getFullYear(),now.getMonth()+i,1);months.push({label:d.toLocaleDateString('en',{month:'short',year:i===0||i===11?'2-digit':undefined})});}
+  const LABEL_W=120,META_W=90,ROW_H=38;
   const groupedByArea=areas.map(area=>({area,goals:goals.filter(g=>g.areaId===area.id)})).filter(g=>g.goals.length>0);
-  const ungrouped=goals.filter(g=>!areas.find(a=>a.id===g.areaId));
-  const renderGoalRow=(g,area)=>{
+  const renderGoalRow=(g,area,isLast)=>{
     const isDone=g.status==='done';
     const color=area?.color||'#6366f1';
     const targetMs=new Date(g.targetDate+'T12:00:00').getTime();
@@ -3363,69 +3562,94 @@ function PlannerTimelineView({planner,onSelect,onToggleGoal}){
     const isPast=targetMs<now.getTime()&&!isDone;
     const ga=actions.filter(a=>a.goalId===g.id);
     const doneAct=ga.filter(a=>a.status==='done').length;
+    // bar start: clamp to 0 if target is in past, else use today
+    const barStartPct=isPast?0:todayPct;
     return(
-      <div key={g.id} style={{display:'flex',alignItems:'center',marginBottom:'7px',gap:'8px'}}>
+      <div key={g.id} style={{display:'flex',alignItems:'center',height:`${ROW_H}px`,gap:'0',borderBottom:isLast?'none':`1px solid rgba(255,255,255,0.025)`}}>
         {/* Done toggle */}
-        <button onClick={e=>{e.stopPropagation();onToggleGoal&&onToggleGoal(g.id,g.status);}}
-          style={{width:'15px',height:'15px',borderRadius:'50%',flexShrink:0,border:`2px solid ${isDone?color:'rgba(255,255,255,0.18)'}`,background:isDone?color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',fontWeight:700,transition:'all .15s'}}>
-          {isDone?'✓':''}
-        </button>
-        {/* Label */}
-        <div onClick={()=>onSelect('goal',g.id)}
-          style={{width:'96px',flexShrink:0,fontSize:'11px',color:isDone?'#334155':'#94a3b8',textAlign:'right',paddingRight:'8px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none',cursor:'pointer'}}
-          title={g.title}>{g.title}</div>
-        {/* Track */}
-        <div onClick={()=>onSelect('goal',g.id)} style={{flex:1,height:'20px',position:'relative',borderRadius:'5px',background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.04)',cursor:'pointer',overflow:'visible'}}>
-          {/* Today line */}
-          <div style={{position:'absolute',left:`${todayPct}%`,top:'-2px',bottom:'-2px',width:'2px',background:'rgba(99,102,241,0.7)',zIndex:3,borderRadius:'1px'}}/>
-          {/* Fill bar today→target */}
-          {!isDone&&!isPast&&todayPct<targetPct&&(
-            <div style={{position:'absolute',left:`${todayPct}%`,width:`${targetPct-todayPct}%`,top:'4px',bottom:'4px',borderRadius:'3px',background:`${color}25`,border:`1px solid ${color}35`}}/>
-          )}
-          {/* Completed bar full */}
-          {isDone&&(
-            <div style={{position:'absolute',left:'2px',right:'2px',top:'4px',bottom:'4px',borderRadius:'3px',background:`${color}20`,opacity:0.5}}/>
-          )}
-          {/* Target dot */}
-          <div style={{position:'absolute',left:`calc(${targetPct}% - 8px)`,top:'2px',width:'16px',height:'16px',borderRadius:'50%',background:isDone?color:isPast?'rgba(239,68,68,0.6)':color,border:`2.5px solid ${isDone?'rgba(255,255,255,0.3)':isPast?'rgba(239,68,68,0.8)':'rgba(0,0,0,0.35)'}`,opacity:isDone?0.55:1,zIndex:2,boxShadow:isDone?'none':`0 0 10px ${color}60`,transition:'all .15s'}}/>
-          {/* Overdue label */}
-          {isPast&&<div style={{position:'absolute',left:`calc(${Math.min(targetPct+2,88)}% )`,top:'2px',fontSize:'9px',color:'#f87171',whiteSpace:'nowrap',fontWeight:600}}>overdue</div>}
-          {/* Done checkmark overlay */}
-          {isDone&&<div style={{position:'absolute',right:'6px',top:'2px',fontSize:'10px',color:color,opacity:0.7}}>✓</div>}
-        </div>
-        {/* Actions progress */}
-        {ga.length>0&&(
-          <div style={{fontSize:'10px',color:doneAct===ga.length?'#10b981':'#334155',flexShrink:0,minWidth:'30px',textAlign:'right',fontWeight:doneAct===ga.length?700:400}}>
-            {doneAct}/{ga.length}
+        <div style={{width:`${LABEL_W}px`,flexShrink:0,display:'flex',alignItems:'center',gap:'7px',paddingRight:'10px',justifyContent:'flex-end'}}>
+          <button onClick={e=>{e.stopPropagation();onToggleGoal&&onToggleGoal(g.id,g.status);}}
+            style={{width:'16px',height:'16px',borderRadius:'50%',flexShrink:0,border:`2px solid ${isDone?color:'rgba(255,255,255,0.2)'}`,background:isDone?color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',fontWeight:700,transition:'all .15s'}}>
+            {isDone?'✓':''}
+          </button>
+          <div onClick={()=>onSelect('goal',g.id)} title={g.title}
+            style={{fontSize:'11px',color:isDone?'#334155':'#94a3b8',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none',cursor:'pointer',maxWidth:'88px',textAlign:'right'}}>
+            {g.title}
           </div>
-        )}
-        {/* Date */}
-        <div style={{fontSize:'10px',color:isPast?'#f87171':'#334155',flexShrink:0,width:'40px',textAlign:'right'}}>{g.targetDate?.slice(5)}</div>
+        </div>
+        {/* Track */}
+        <div style={{flex:1,height:'28px',position:'relative',background:'rgba(255,255,255,0.015)',borderLeft:'1px solid rgba(255,255,255,0.04)',cursor:'pointer'}} onClick={()=>onSelect('goal',g.id)}>
+          {/* Today line */}
+          <div style={{position:'absolute',left:`${todayPct}%`,top:0,bottom:0,width:'2px',background:'rgba(99,102,241,0.55)',zIndex:3}}/>
+          {/* Filled bar */}
+          {isDone?(
+            <div style={{position:'absolute',left:'4px',right:'4px',top:'8px',height:'12px',borderRadius:'6px',background:`${color}30`,border:`1px solid ${color}40`}}/>
+          ):(
+            <div style={{position:'absolute',left:`${barStartPct}%`,width:`${Math.max(0,targetPct-barStartPct)}%`,top:'8px',height:'12px',borderRadius:'0 6px 6px 0',background:isPast?'rgba(239,68,68,0.18)':`linear-gradient(90deg,${color}18,${color}40)`,border:`1px solid ${isPast?'rgba(239,68,68,0.3)':color+'35'}`}}/>
+          )}
+          {/* Target marker */}
+          <div style={{position:'absolute',left:`${targetPct}%`,top:'4px',width:'20px',height:'20px',transform:'translateX(-50%)',zIndex:4}}>
+            <div style={{width:'20px',height:'20px',borderRadius:'50%',background:isDone?`${color}80`:isPast?'rgba(239,68,68,0.7)':color,border:`2.5px solid ${isDone?'rgba(255,255,255,0.25)':isPast?'#ef4444':'rgba(255,255,255,0.2)'}`,boxShadow:isDone?'none':isPast?'0 0 8px rgba(239,68,68,0.5)':`0 0 12px ${color}70`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',color:'white',fontWeight:700}}>
+              {isDone?'✓':isPast?'!':''}
+            </div>
+          </div>
+          {/* Overdue label */}
+          {isPast&&<div style={{position:'absolute',left:`calc(${Math.min(targetPct,80)}% + 14px)`,top:'7px',fontSize:'9px',color:'#f87171',fontWeight:700,whiteSpace:'nowrap'}}>overdue</div>}
+        </div>
+        {/* Meta: actions + date */}
+        <div style={{width:`${META_W}px`,flexShrink:0,display:'flex',flexDirection:'column',alignItems:'flex-end',paddingLeft:'10px',paddingRight:'4px',gap:'2px'}}>
+          {ga.length>0&&<div style={{fontSize:'10px',color:doneAct===ga.length?'#10b981':'#475569',fontWeight:doneAct===ga.length?700:400}}>{doneAct}/{ga.length} actions</div>}
+          <div style={{fontSize:'10px',color:isPast?'#f87171':'#334155'}}>{g.targetDate?.slice(5)}</div>
+        </div>
       </div>
     );
   };
   return(
-    <div style={{overflowX:'auto',padding:'4px 0'}}>
-      <div style={{minWidth:'560px'}}>
-        {/* Month header */}
-        <div style={{display:'flex',marginLeft:'130px',marginBottom:'10px',marginRight:'80px'}}>
-          {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'10px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.05)',paddingLeft:'4px',fontWeight:500}}>{m}</div>)}
-        </div>
-        {/* Today marker label */}
-        <div style={{marginLeft:'130px',marginRight:'80px',position:'relative',height:'12px',marginBottom:'6px'}}>
-          <div style={{position:'absolute',left:`${todayPct}%`,transform:'translateX(-50%)',fontSize:'9px',color:'#6366f1',fontWeight:700,whiteSpace:'nowrap'}}>TODAY</div>
-        </div>
-        {groupedByArea.map(({area,goals:ag})=>(
-          <div key={area.id} style={{marginBottom:'16px'}}>
-            <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'7px',paddingBottom:'5px',borderBottom:`1px solid ${area.color}20`}}>
-              <div style={{width:'6px',height:'6px',borderRadius:'50%',background:area.color}}/>
-              <div style={{fontSize:'10px',fontWeight:700,color:area.color,letterSpacing:'0.07em',textTransform:'uppercase'}}>{area.name}</div>
-              <div style={{fontSize:'10px',color:'#334155',marginLeft:'4px'}}>{ag.filter(g=>g.status==='done').length}/{ag.length}</div>
-            </div>
-            {ag.map(g=>renderGoalRow(g,area))}
+    <div style={{display:'flex',flexDirection:'column',gap:'0'}}>
+      {/* Area filter chips */}
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+        {areas.map(area=>{
+          const on=visibleAreas.has(area.id);
+          return(
+            <button key={area.id} onClick={()=>toggleArea(area.id)}
+              style={{display:'flex',alignItems:'center',gap:'5px',padding:'4px 10px',borderRadius:'20px',fontSize:'11px',fontWeight:600,cursor:'pointer',transition:'all .15s',background:on?`${area.color}20`:'rgba(255,255,255,0.03)',border:`1px solid ${on?area.color+'50':'rgba(255,255,255,0.08)'}`,color:on?area.color:'#334155'}}>
+              <div style={{width:'7px',height:'7px',borderRadius:'50%',background:on?area.color:'#334155'}}/>
+              {area.name}
+            </button>
+          );
+        })}
+      </div>
+      {/* Timeline grid */}
+      <div style={{overflowX:'auto'}}>
+        <div style={{minWidth:'680px'}}>
+          {/* Month headers row */}
+          <div style={{display:'flex',marginLeft:`${LABEL_W}px`,marginRight:`${META_W}px`,marginBottom:'4px'}}>
+            {months.map((m,i)=>(
+              <div key={i} style={{flex:1,fontSize:'10px',color:'#475569',borderLeft:'1px solid rgba(255,255,255,0.05)',paddingLeft:'5px',fontWeight:500,paddingBottom:'4px'}}>{m.label}</div>
+            ))}
           </div>
-        ))}
-        {ungrouped.length>0&&ungrouped.map(g=>renderGoalRow(g,null))}
+          {/* Today label */}
+          <div style={{marginLeft:`${LABEL_W}px`,marginRight:`${META_W}px`,position:'relative',height:'14px',marginBottom:'8px'}}>
+            <div style={{position:'absolute',left:`${todayPct}%`,transform:'translateX(-50%)',fontSize:'9px',color:'#6366f1',fontWeight:800,letterSpacing:'0.06em',whiteSpace:'nowrap'}}>▼ TODAY</div>
+          </div>
+          {/* Area sections */}
+          {groupedByArea.map(({area,goals:ag},si)=>(
+            <div key={area.id} style={{marginBottom:'20px',borderRadius:'10px',overflow:'hidden',border:`1px solid ${area.color}20`,boxShadow:`inset 0 0 0 1px ${area.color}08`}}>
+              {/* Section header */}
+              <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'8px 12px',background:`${area.color}10`,borderBottom:`1px solid ${area.color}20`,cursor:'pointer'}} onClick={()=>onOpenArea&&onOpenArea(area.id)}>
+                <div style={{width:'10px',height:'10px',borderRadius:'50%',background:area.color,flexShrink:0,boxShadow:`0 0 8px ${area.color}80`}}/>
+                <div style={{fontSize:'12px',fontWeight:700,color:area.color,letterSpacing:'0.06em',flex:1}}>{area.name.toUpperCase()}</div>
+                <div style={{fontSize:'10px',color:area.color,opacity:0.7}}>{ag.filter(g=>g.status==='done').length}/{ag.length} complete</div>
+                <div style={{fontSize:'10px',color:area.color,opacity:0.5,marginLeft:'8px'}}>Open ›</div>
+              </div>
+              {/* Goal rows */}
+              <div style={{background:'rgba(255,255,255,0.008)'}}>
+                {ag.map((g,i)=>renderGoalRow(g,area,i===ag.length-1))}
+              </div>
+            </div>
+          ))}
+          {goals.filter(g=>!areas.find(a=>a.id===g.areaId)).map(g=>renderGoalRow(g,null,false))}
+        </div>
       </div>
     </div>
   );
