@@ -3339,11 +3339,11 @@ function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiK
   const [streaming,setStreaming]=useState(false);
   const [streamText,setStreamText]=useState('');
   const [collapsed,setCollapsed]=useState({});
+  const [showTimeline,setShowTimeline]=useState(true);
   const endRef=useRef(null);
   useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'});},[msgs.length,streamText]);
   const toggle=id=>setCollapsed(c=>({...c,[id]:!c[id]}));
 
-  // Mini timeline for this area
   const now=new Date();
   const msStart=new Date(now.getFullYear(),now.getMonth(),1).getTime();
   const msEnd=new Date(now.getFullYear(),now.getMonth()+12,1).getTime();
@@ -3355,8 +3355,8 @@ function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiK
     if(!text.trim()||!apiKey) return;
     const userMsg={role:'user',id:uid(),content:text,at:Date.now()};
     setMsgs(m=>[...m,userMsg]);setInput('');setStreaming(true);setStreamText('');
-    const ctx={area:area.name,description:area.description,goals:goals.map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,actions:actions.filter(a=>a.goalId===g.id).map(a=>({title:a.title,status:a.status,dueDate:a.dueDate}))}))};
-    const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT GOALS:\n${JSON.stringify(ctx.goals,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
+    const ctx=goals.map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,actions:actions.filter(a=>a.goalId===g.id).map(a=>({title:a.title,status:a.status,dueDate:a.dueDate}))}));
+    const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT GOALS:\n${JSON.stringify(ctx,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
     try{
       const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:1200,stream:true,system,messages:[...msgs,userMsg].map(m=>({role:m.role,content:m.content}))})});
       const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
@@ -3366,124 +3366,138 @@ function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiK
     setStreamText('');setStreaming(false);
   }
 
+  const W='#f1f5f9'; // near-white for primary text
+  const WM='#cbd5e1'; // mid-white for secondary
+  const WD='#94a3b8'; // dimmer for tertiary
+
   return(
-    <div style={{height:'calc(100vh - 215px)',minHeight:'520px',display:'flex',flexDirection:'column',gap:'0'}}>
+    <div style={{height:'calc(100vh - 215px)',minHeight:'520px',display:'flex',flexDirection:'column'}}>
       {/* Header */}
-      <div style={{display:'flex',alignItems:'center',gap:'12px',paddingBottom:'12px',borderBottom:`1px solid ${area.color}25`,marginBottom:'14px',flexShrink:0}}>
-        <button onClick={onBack} style={{padding:'5px 10px',borderRadius:'7px',fontSize:'12px',color:'#64748b',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',cursor:'pointer'}}>← Back</button>
-        <div style={{width:'12px',height:'12px',borderRadius:'50%',background:area.color,boxShadow:`0 0 12px ${area.color}80`}}/>
-        <div style={{fontSize:'16px',fontWeight:700,color:area.color}}>{area.name}</div>
-        {area.description&&<div style={{fontSize:'12px',color:'#475569'}}>{area.description}</div>}
-        <div style={{marginLeft:'auto',fontSize:'11px',color:'#334155'}}>{goals.filter(g=>g.status==='done').length}/{goals.length} goals complete</div>
+      <div style={{display:'flex',alignItems:'center',gap:'12px',paddingBottom:'12px',borderBottom:`1px solid ${area.color}30`,marginBottom:'14px',flexShrink:0}}>
+        <button onClick={onBack} style={{padding:'5px 12px',borderRadius:'7px',fontSize:'13px',color:W,background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.12)',cursor:'pointer',fontFamily:'inherit'}}>← Back</button>
+        <div style={{width:'13px',height:'13px',borderRadius:'50%',background:area.color,boxShadow:`0 0 14px ${area.color}90`,flexShrink:0}}/>
+        <div style={{fontSize:'18px',fontWeight:700,color:area.color}}>{area.name}</div>
+        {area.description&&<div style={{fontSize:'13px',color:WM}}>{area.description}</div>}
+        <div style={{marginLeft:'auto',fontSize:'12px',color:WD}}>{goals.filter(g=>g.status==='done').length}/{goals.length} goals complete</div>
       </div>
 
-      <div style={{flex:1,display:'flex',gap:'16px',overflow:'hidden',minHeight:0}}>
-        {/* LEFT: Goals + Timeline */}
-        <div style={{flex:'0 0 54%',display:'flex',flexDirection:'column',gap:'12px',overflow:'hidden'}}>
-          {/* Mini timeline */}
+      <div style={{flex:1,display:'flex',gap:'18px',overflow:'hidden',minHeight:0}}>
+        {/* LEFT: Timeline + Goals */}
+        <div style={{flex:'0 0 54%',display:'flex',flexDirection:'column',gap:'10px',overflow:'hidden'}}>
+
+          {/* Collapsible mini timeline */}
           {goals.filter(g=>g.targetDate).length>0&&(
-            <div style={{flexShrink:0,background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}15`,borderRadius:'10px',padding:'12px'}}>
-              <div style={{fontSize:'10px',fontWeight:700,color:area.color,letterSpacing:'0.08em',marginBottom:'8px'}}>TIMELINE</div>
-              <div style={{display:'flex',marginBottom:'4px'}}>
-                {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'9px',color:'#334155',borderLeft:'1px solid rgba(255,255,255,0.04)',paddingLeft:'3px'}}>{m}</div>)}
-              </div>
-              <div style={{position:'relative',marginBottom:'4px'}}>
-                <div style={{position:'absolute',left:`${todayPct}%`,top:'-2px',fontSize:'8px',color:'#6366f1',fontWeight:700,transform:'translateX(-50%)'}}>▼</div>
-              </div>
-              {goals.filter(g=>g.targetDate).map(g=>{
-                const isDone=g.status==='done';
-                const tPct=Math.max(2,Math.min(98,((new Date(g.targetDate+'T12:00:00').getTime()-msStart)/totalMs)*100));
-                const isPast=new Date(g.targetDate+'T12:00:00').getTime()<now.getTime()&&!isDone;
-                return(
-                  <div key={g.id} style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'5px'}}>
-                    <div style={{width:'80px',flexShrink:0,fontSize:'10px',color:isDone?'#334155':'#94a3b8',textAlign:'right',paddingRight:'6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none'}} title={g.title}>{g.title}</div>
-                    <div style={{flex:1,height:'16px',position:'relative',background:'rgba(255,255,255,0.015)',borderRadius:'3px'}}>
-                      <div style={{position:'absolute',left:`${todayPct}%`,top:0,bottom:0,width:'1.5px',background:'rgba(99,102,241,0.5)',zIndex:2}}/>
-                      {!isDone&&!isPast&&<div style={{position:'absolute',left:`${todayPct}%`,width:`${Math.max(0,tPct-todayPct)}%`,top:'3px',bottom:'3px',borderRadius:'2px',background:`${area.color}30`}}/>}
-                      <div style={{position:'absolute',left:`calc(${tPct}% - 7px)`,top:'1px',width:'14px',height:'14px',borderRadius:'50%',background:isDone?area.color:isPast?'rgba(239,68,68,0.6)':area.color,border:`2px solid rgba(0,0,0,0.3)`,opacity:isDone?0.5:1,zIndex:3,boxShadow:isDone?'none':`0 0 8px ${area.color}60`}}/>
-                    </div>
-                    <div style={{fontSize:'9px',color:isPast?'#f87171':'#334155',flexShrink:0,width:'36px',textAlign:'right'}}>{g.targetDate?.slice(5)}</div>
+            <div style={{flexShrink:0,background:'rgba(255,255,255,0.03)',border:`1px solid ${area.color}20`,borderRadius:'10px',overflow:'hidden'}}>
+              <button onClick={()=>setShowTimeline(t=>!t)} style={{display:'flex',alignItems:'center',gap:'8px',width:'100%',padding:'8px 12px',background:'transparent',border:'none',cursor:'pointer',textAlign:'left'}}>
+                <div style={{fontSize:'10px',fontWeight:700,color:area.color,letterSpacing:'0.08em',flex:1}}>TIMELINE</div>
+                <div style={{fontSize:'10px',color:WD}}>{showTimeline?'▲ hide':'▼ show'}</div>
+              </button>
+              {showTimeline&&(
+                <div style={{padding:'0 12px 12px'}}>
+                  <div style={{display:'flex',marginBottom:'6px'}}>
+                    {months.map((m,i)=><div key={i} style={{flex:1,fontSize:'9px',color:WD,borderLeft:'1px solid rgba(255,255,255,0.06)',paddingLeft:'3px'}}>{m}</div>)}
                   </div>
-                );
-              })}
+                  <div style={{position:'relative',height:'14px',marginBottom:'4px'}}>
+                    <div style={{position:'absolute',left:`${todayPct}%`,transform:'translateX(-50%)',fontSize:'8px',color:'#818cf8',fontWeight:800}}>▼ TODAY</div>
+                  </div>
+                  {goals.filter(g=>g.targetDate).map(g=>{
+                    const isDone=g.status==='done';
+                    const tPct=Math.max(2,Math.min(98,((new Date(g.targetDate+'T12:00:00').getTime()-msStart)/totalMs)*100));
+                    const isPast=new Date(g.targetDate+'T12:00:00').getTime()<now.getTime()&&!isDone;
+                    return(
+                      <div key={g.id} style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
+                        <div style={{width:'88px',flexShrink:0,fontSize:'11px',color:isDone?WD:WM,textAlign:'right',paddingRight:'6px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',textDecoration:isDone?'line-through':'none'}} title={g.title}>{g.title}</div>
+                        <div style={{flex:1,height:'18px',position:'relative',background:'rgba(255,255,255,0.02)',borderRadius:'4px'}}>
+                          <div style={{position:'absolute',left:`${todayPct}%`,top:0,bottom:0,width:'2px',background:'rgba(99,102,241,0.6)',zIndex:2}}/>
+                          {!isDone&&!isPast&&<div style={{position:'absolute',left:`${todayPct}%`,width:`${Math.max(0,tPct-todayPct)}%`,top:'4px',bottom:'4px',borderRadius:'2px',background:`${area.color}35`}}/>}
+                          <div style={{position:'absolute',left:`calc(${tPct}% - 8px)`,top:'1px',width:'16px',height:'16px',borderRadius:'50%',background:isDone?area.color:isPast?'#ef4444':area.color,border:'2px solid rgba(0,0,0,0.3)',opacity:isDone?0.5:1,zIndex:3,boxShadow:isDone?'none':`0 0 10px ${area.color}70`}}/>
+                        </div>
+                        <div style={{fontSize:'10px',color:isPast?'#f87171':WD,flexShrink:0,width:'38px',textAlign:'right'}}>{g.targetDate?.slice(5)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Goals + actions */}
-          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'8px',minHeight:0}}>
-            {goals.length===0&&<div style={{padding:'24px',textAlign:'center',color:'#334155',fontSize:'12px'}}>No goals in this area yet. Start chatting to add some!</div>}
+          {/* Goals list — scrollable */}
+          <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'8px',minHeight:0,paddingRight:'4px'}}>
+            {goals.length===0&&(
+              <div style={{padding:'32px',textAlign:'center',color:WD,fontSize:'14px',fontStyle:'italic'}}>No goals yet — chat to add some!</div>
+            )}
             {goals.map(g=>{
               const ga=actions.filter(a=>a.goalId===g.id);
               const doneAct=ga.filter(a=>a.status==='done').length;
               const isC=collapsed[g.id];
+              const isDone=g.status==='done';
               return(
-                <div key={g.id} style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${area.color}18`,borderRadius:'10px',overflow:'hidden'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'10px 12px',cursor:'pointer'}} onClick={()=>toggle(g.id)}>
+                <div key={g.id} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${isDone?area.color+'30':area.color+'25'}`,borderRadius:'10px',overflow:'hidden'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'11px 14px',cursor:'pointer'}} onClick={()=>toggle(g.id)}>
                     <button onClick={e=>{e.stopPropagation();onToggleGoal&&onToggleGoal(g.id,g.status);}}
-                      style={{width:'16px',height:'16px',borderRadius:'50%',flexShrink:0,border:`2px solid ${g.status==='done'?area.color:'rgba(255,255,255,0.2)'}`,background:g.status==='done'?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',fontWeight:700}}>
-                      {g.status==='done'?'✓':''}
+                      style={{width:'18px',height:'18px',borderRadius:'50%',flexShrink:0,border:`2px solid ${isDone?area.color:'rgba(255,255,255,0.3)'}`,background:isDone?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'10px',fontWeight:700,transition:'all .15s'}}>
+                      {isDone?'✓':''}
                     </button>
-                    <div style={{flex:1,fontSize:'13px',color:g.status==='done'?'#475569':'#e2e8f0',fontWeight:600,textDecoration:g.status==='done'?'line-through':'none'}}>{g.title}</div>
-                    {g.targetDate&&<div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{g.targetDate}</div>}
-                    {ga.length>0&&<div style={{fontSize:'10px',color:doneAct===ga.length?'#10b981':'#475569',flexShrink:0}}>{doneAct}/{ga.length}</div>}
-                    <div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{isC?'▶':'▼'}</div>
+                    <div style={{flex:1,fontSize:'14px',color:isDone?WD:W,fontWeight:600,textDecoration:isDone?'line-through':'none',lineHeight:'1.3'}}>{g.title}</div>
+                    {g.targetDate&&<div style={{fontSize:'11px',color:WD,flexShrink:0}}>{g.targetDate}</div>}
+                    {ga.length>0&&<div style={{fontSize:'11px',color:doneAct===ga.length?'#34d399':WD,flexShrink:0,marginLeft:'4px'}}>{doneAct}/{ga.length}</div>}
+                    <div style={{fontSize:'11px',color:WD,flexShrink:0,marginLeft:'4px'}}>{isC?'▶':'▼'}</div>
                   </div>
-                  {!isC&&ga.length>0&&(
-                    <div style={{padding:'0 12px 10px',display:'flex',flexDirection:'column',gap:'4px'}}>
+                  {!isC&&(
+                    <div style={{padding:'0 14px 12px 42px',display:'flex',flexDirection:'column',gap:'5px'}}>
                       {ga.map(a=>(
-                        <div key={a.id} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 8px',borderRadius:'6px',background:'rgba(255,255,255,0.02)'}}>
+                        <div key={a.id} style={{display:'flex',alignItems:'center',gap:'9px',padding:'6px 10px',borderRadius:'7px',background:'rgba(255,255,255,0.025)',border:'1px solid rgba(255,255,255,0.05)'}}>
                           <button onClick={()=>onToggleAction&&onToggleAction(a.id,a.status)}
-                            style={{width:'14px',height:'14px',borderRadius:'3px',flexShrink:0,border:`1.5px solid ${a.status==='done'?area.color:'rgba(255,255,255,0.2)'}`,background:a.status==='done'?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px'}}>
+                            style={{width:'15px',height:'15px',borderRadius:'3px',flexShrink:0,border:`1.5px solid ${a.status==='done'?area.color:'rgba(255,255,255,0.3)'}`,background:a.status==='done'?area.color:'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0,color:'white',fontSize:'9px',transition:'all .15s'}}>
                             {a.status==='done'?'✓':''}
                           </button>
-                          <div style={{flex:1,fontSize:'12px',color:a.status==='done'?'#334155':'#94a3b8',textDecoration:a.status==='done'?'line-through':'none'}}>{a.title}</div>
-                          {a.dueDate&&<div style={{fontSize:'10px',color:'#334155',flexShrink:0}}>{a.dueDate}</div>}
+                          <div style={{flex:1,fontSize:'13px',color:a.status==='done'?WD:WM,textDecoration:a.status==='done'?'line-through':'none'}}>{a.title}</div>
+                          {a.dueDate&&<div style={{fontSize:'11px',color:WD,flexShrink:0}}>{a.dueDate}</div>}
                         </div>
                       ))}
-                      {!isC&&<div style={{fontSize:'10px',color:'#334155',paddingLeft:'22px',fontStyle:'italic'}}>Ask the planner to add more actions</div>}
+                      {ga.length===0&&<div style={{fontSize:'12px',color:WD,fontStyle:'italic'}}>No actions yet — ask the planner to add some</div>}
                     </div>
                   )}
-                  {!isC&&ga.length===0&&<div style={{padding:'0 12px 10px 40px',fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No actions yet</div>}
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* RIGHT: Area-focused chat */}
-        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',borderLeft:'1px solid rgba(255,255,255,0.05)',paddingLeft:'16px'}}>
-          <div style={{fontSize:'11px',fontWeight:700,color:'#475569',marginBottom:'8px',letterSpacing:'0.1em',flexShrink:0}}>FOCUS CHAT · {area.name.toUpperCase()}</div>
+        {/* RIGHT: Area chat */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',borderLeft:`1px solid ${area.color}15`,paddingLeft:'18px'}}>
+          <div style={{fontSize:'11px',fontWeight:700,color:WD,marginBottom:'10px',letterSpacing:'0.1em',flexShrink:0}}>FOCUS CHAT · {area.name.toUpperCase()}</div>
           <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',minHeight:0}}>
             {msgs.length===0&&!streaming&&(
-              <div style={{padding:'24px 16px',textAlign:'center'}}>
-                <div style={{fontSize:'24px',marginBottom:'8px',color:area.color}}>◎</div>
-                <div style={{fontSize:'13px',color:'#e2e8f0',marginBottom:'6px',fontWeight:600}}>Focused on {area.name}</div>
-                <div style={{fontSize:'12px',color:'#334155',lineHeight:'1.6'}}>Ask me to review your progress, challenge your goals, suggest next actions, or help you think through obstacles in this area specifically.</div>
+              <div style={{padding:'32px 16px',textAlign:'center'}}>
+                <div style={{fontSize:'28px',marginBottom:'10px',color:area.color}}>◎</div>
+                <div style={{fontSize:'15px',color:W,marginBottom:'8px',fontWeight:600}}>Focused on {area.name}</div>
+                <div style={{fontSize:'13px',color:WM,lineHeight:'1.7'}}>Ask me to review your progress, challenge your goals, suggest next actions, or help you work through obstacles in this area.</div>
               </div>
             )}
             {msgs.map(m=>(
               <div key={m.id} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
-                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:m.role==='user'?`${area.color}25`:'rgba(255,255,255,0.05)',border:m.role==='user'?`1px solid ${area.color}40`:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.content}</div>
+                <div style={{maxWidth:'90%',padding:'10px 14px',borderRadius:m.role==='user'?'16px 16px 4px 16px':'16px 16px 16px 4px',fontSize:'14px',lineHeight:'1.7',background:m.role==='user'?`${area.color}25`:'rgba(255,255,255,0.05)',border:m.role==='user'?`1px solid ${area.color}45`:'1px solid rgba(255,255,255,0.1)',color:W,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{m.content}</div>
               </div>
             ))}
             {streaming&&(
               <div style={{display:'flex',justifyContent:'flex-start'}}>
-                <div style={{maxWidth:'90%',padding:'9px 12px',borderRadius:'16px 16px 16px 4px',fontSize:'13px',lineHeight:'1.6',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',whiteSpace:'pre-wrap'}}>
-                  {streamText||'…'}<span style={{display:'inline-block',width:'3px',height:'13px',background:area.color,marginLeft:'2px',verticalAlign:'text-bottom',animation:'pulse 0.8s ease-in-out infinite'}}/>
+                <div style={{maxWidth:'90%',padding:'10px 14px',borderRadius:'16px 16px 16px 4px',fontSize:'14px',lineHeight:'1.7',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:W,whiteSpace:'pre-wrap'}}>
+                  {streamText||'…'}<span style={{display:'inline-block',width:'3px',height:'14px',background:area.color,marginLeft:'2px',verticalAlign:'text-bottom',animation:'pulse 0.8s ease-in-out infinite'}}/>
                 </div>
               </div>
             )}
             <div ref={endRef}/>
           </div>
-          <div style={{marginTop:'8px',display:'flex',gap:'6px',flexShrink:0}}>
-            <textarea style={{flex:1,padding:'9px 12px',background:'rgba(255,255,255,0.04)',border:`1px solid ${area.color}30`,borderRadius:'12px',fontSize:'13px',color:'#e2e8f0',resize:'none',minHeight:'40px',maxHeight:'100px',lineHeight:'1.5',fontFamily:'inherit',outline:'none'}}
+          <div style={{marginTop:'10px',display:'flex',gap:'6px',flexShrink:0}}>
+            <textarea style={{flex:1,padding:'10px 14px',background:'rgba(255,255,255,0.05)',border:`1px solid ${area.color}35`,borderRadius:'12px',fontSize:'14px',color:W,resize:'none',minHeight:'42px',maxHeight:'110px',lineHeight:'1.5',fontFamily:'inherit',outline:'none'}}
               placeholder={`Ask about your ${area.name} goals…`}
               value={input} onChange={e=>setInput(e.target.value)}
               onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAreaMsg(input);}}} rows={1}/>
             <button onClick={()=>sendAreaMsg(input)} disabled={streaming||!input.trim()||!apiKey}
-              style={{width:'38px',height:'38px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,background:streaming||!input.trim()||!apiKey?'rgba(99,102,241,0.15)':`linear-gradient(135deg,${area.color},${area.color}bb)`,color:'white',fontSize:'18px',cursor:streaming?'default':'pointer',border:'none',fontWeight:'bold'}}>↑</button>
+              style={{width:'40px',height:'40px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,background:streaming||!input.trim()||!apiKey?'rgba(99,102,241,0.2)':`linear-gradient(135deg,${area.color},${area.color}cc)`,color:'white',fontSize:'18px',cursor:streaming?'default':'pointer',border:'none',fontWeight:'bold'}}>↑</button>
           </div>
-          {!apiKey&&<div style={{fontSize:'10px',color:'#334155',marginTop:'4px',textAlign:'center'}}>Add API key in Settings to use chat</div>}
+          {!apiKey&&<div style={{fontSize:'11px',color:WD,marginTop:'5px',textAlign:'center'}}>Add API key in Settings to enable chat</div>}
         </div>
       </div>
     </div>
