@@ -3095,9 +3095,40 @@ function LifePlannerSubtab({data,setData,toasts}){
     const p=planner;
     const today=new Date().toISOString().slice(0,10);
     const dayName=new Date().toLocaleDateString('en',{weekday:'long'});
-    const plan=p.areas.map(area=>({area:area.name,id:area.id,goals:p.goals.filter(g=>g.areaId===area.id&&g.status!=='archived').map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,subGoals:p.goals.filter(sg=>sg.parentGoalId===g.id).map(sg=>({id:sg.id,title:sg.title,status:sg.status})),actions:p.actions.filter(a=>a.goalId===g.id&&a.status!=='done').map(a=>({id:a.id,title:a.title,dueDate:a.dueDate,status:a.status}))}))}));
-    const people=p.people.map(pr=>{const days=pr.lastInteraction?Math.floor((Date.now()-new Date(pr.lastInteraction))/86400000):null;const cd={weekly:7,biweekly:14,monthly:30,quarterly:90}[pr.cadence]||30;return{id:pr.id,name:pr.name,relationship:pr.relationship,cadence:pr.cadence,daysSinceContact:days,overdue:days!==null&&days>cd};});
-    const recentJournals=(data.journals||[]).filter(j=>j.date>=new Date(Date.now()-7*86400000).toISOString().slice(0,10)).map(j=>({date:j.date,tags:j.tags||[],preview:j.body.slice(0,120)}));
+
+    // Per area: active goals in full (open actions only), done goals as summary
+    const plan=p.areas.map(area=>{
+      const all=p.goals.filter(g=>g.areaId===area.id&&g.status!=='archived');
+      const active=all.filter(g=>g.status!=='done');
+      const done=all.filter(g=>g.status==='done');
+      return{
+        area:area.name, id:area.id,
+        activeGoals:active.map(g=>({
+          id:g.id, title:g.title, status:g.status, targetDate:g.targetDate||null,
+          openActions:p.actions.filter(a=>a.goalId===g.id&&a.status!=='done').map(a=>({id:a.id,title:a.title,dueDate:a.dueDate||null})),
+          doneActionCount:p.actions.filter(a=>a.goalId===g.id&&a.status==='done').length,
+        })),
+        completedGoals:done.length>0?{count:done.length,titles:done.map(g=>g.title)}:undefined,
+      };
+    });
+
+    // People: overdue contacts in full, up-to-date as name list only
+    const rawPeople=p.people.map(pr=>{
+      const days=pr.lastInteraction?Math.floor((Date.now()-new Date(pr.lastInteraction))/86400000):null;
+      const cd={weekly:7,biweekly:14,monthly:30,quarterly:90}[pr.cadence]||30;
+      return{id:pr.id,name:pr.name,relationship:pr.relationship,cadence:pr.cadence,daysSinceContact:days,overdue:days!==null&&days>cd};
+    });
+    const people={
+      overdue:rawPeople.filter(p=>p.overdue),
+      upToDate:rawPeople.filter(p=>!p.overdue).map(p=>p.name),
+      total:rawPeople.length,
+    };
+
+    // Journals: last 7 days, 80-char preview only
+    const recentJournals=(data.journals||[])
+      .filter(j=>j.date>=new Date(Date.now()-7*86400000).toISOString().slice(0,10))
+      .map(j=>({date:j.date,tags:j.tags||[],preview:j.body.slice(0,80)}));
+
     return{today,dayOfWeek:dayName,plan,people,recentJournals};
   }
 
@@ -3355,8 +3386,16 @@ function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiK
     if(!text.trim()||!apiKey) return;
     const userMsg={role:'user',id:uid(),content:text,at:Date.now()};
     setMsgs(m=>[...m,userMsg]);setInput('');setStreaming(true);setStreamText('');
-    const ctx=goals.map(g=>({id:g.id,title:g.title,status:g.status,targetDate:g.targetDate,actions:actions.filter(a=>a.goalId===g.id).map(a=>({title:a.title,status:a.status,dueDate:a.dueDate}))}));
-    const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT GOALS:\n${JSON.stringify(ctx,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
+    // Active goals: full detail with open actions only. Done goals: title summary.
+    const ctx={
+      activeGoals:goals.filter(g=>g.status!=='done').map(g=>({
+        id:g.id, title:g.title, status:g.status, targetDate:g.targetDate||null,
+        openActions:actions.filter(a=>a.goalId===g.id&&a.status!=='done').map(a=>({title:a.title,dueDate:a.dueDate||null})),
+        doneActionCount:actions.filter(a=>a.goalId===g.id&&a.status==='done').length,
+      })),
+      completedGoals:goals.filter(g=>g.status==='done').map(g=>g.title),
+    };
+    const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT STATE:\n${JSON.stringify(ctx,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
     try{
       const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:1200,stream:true,system,messages:[...msgs,userMsg].map(m=>({role:m.role,content:m.content}))})});
       const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
@@ -3523,29 +3562,29 @@ function PlannerCardsView({planner,onSelect,selectedId,onOpenArea}){
             {/* Area header */}
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
               <div style={{fontSize:'11px',fontWeight:700,color:area.color,letterSpacing:'0.08em'}}>{area.name.toUpperCase()}</div>
-              <div style={{fontSize:'10px',color:'#475569'}}>{done}/{ag.length} done</div>
+              <div style={{fontSize:'10px',color:'#94a3b8'}}>{done}/{ag.length} done</div>
             </div>
             {/* Progress bar */}
-            <div style={{height:'3px',borderRadius:'2px',background:'rgba(255,255,255,0.06)',overflow:'hidden'}}>
+            <div style={{height:'3px',borderRadius:'2px',background:'rgba(255,255,255,0.08)',overflow:'hidden'}}>
               <div style={{height:'100%',width:`${pct}%`,borderRadius:'2px',background:area.color,transition:'width .3s'}}/>
             </div>
             {/* Goals list — all of them */}
-            {active.length===0&&done===0&&<div style={{fontSize:'11px',color:'#334155',fontStyle:'italic'}}>No goals yet — open to add some</div>}
+            {ag.length===0&&<div style={{fontSize:'12px',color:'#94a3b8',fontStyle:'italic'}}>No goals yet — open to add some</div>}
             {ag.map(g=>{
               const ga=actions.filter(a=>a.goalId===g.id),dA=ga.filter(a=>a.status==='done').length;
               return(
-                <div key={g.id} onClick={e=>{e.stopPropagation();onSelect('goal',g.id);}} style={{padding:'6px 8px',borderRadius:'7px',background:selectedId===g.id?`${area.color}18`:'rgba(255,255,255,0.02)',border:`1px solid ${selectedId===g.id?area.color+'30':'rgba(255,255,255,0.04)'}`,cursor:'pointer'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                    <div style={{width:'7px',height:'7px',borderRadius:'50%',flexShrink:0,background:g.status==='done'?area.color:'transparent',border:`1.5px solid ${g.status==='done'?area.color:'rgba(255,255,255,0.2)'}`}}/>
-                    <div style={{fontSize:'12px',color:g.status==='done'?'#475569':'#e2e8f0',fontWeight:500,lineHeight:'1.3',textDecoration:g.status==='done'?'line-through':'none',flex:1}}>{g.title}</div>
-                    {ga.length>0&&<div style={{fontSize:'10px',color:dA===ga.length?area.color:'#334155',flexShrink:0}}>{dA}/{ga.length}</div>}
+                <div key={g.id} onClick={e=>{e.stopPropagation();onSelect('goal',g.id);}} style={{padding:'7px 9px',borderRadius:'7px',background:selectedId===g.id?`${area.color}20`:'rgba(255,255,255,0.04)',border:`1px solid ${selectedId===g.id?area.color+'40':'rgba(255,255,255,0.07)'}`,cursor:'pointer'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'7px'}}>
+                    <div style={{width:'7px',height:'7px',borderRadius:'50%',flexShrink:0,background:g.status==='done'?area.color:'transparent',border:`1.5px solid ${g.status==='done'?area.color:'rgba(255,255,255,0.35)'}`}}/>
+                    <div style={{fontSize:'12px',color:g.status==='done'?'#94a3b8':'#f1f5f9',fontWeight:500,lineHeight:'1.3',textDecoration:g.status==='done'?'line-through':'none',flex:1}}>{g.title}</div>
+                    {ga.length>0&&<div style={{fontSize:'10px',color:dA===ga.length?area.color:'#94a3b8',flexShrink:0}}>{dA}/{ga.length}</div>}
                   </div>
-                  {g.targetDate&&<div style={{fontSize:'10px',color:'#334155',marginTop:'2px',marginLeft:'13px'}}>{g.targetDate}</div>}
+                  {g.targetDate&&<div style={{fontSize:'10px',color:'#94a3b8',marginTop:'2px',marginLeft:'14px'}}>{g.targetDate}</div>}
                 </div>
               );
             })}
             {/* Open prompt */}
-            <div style={{fontSize:'10px',color:area.color,opacity:0.6,textAlign:'center',marginTop:'2px'}}>Open area →</div>
+            <div style={{fontSize:'10px',color:area.color,opacity:0.7,textAlign:'center',marginTop:'2px'}}>Open area →</div>
           </div>
         );
       })}
