@@ -22,6 +22,36 @@ const DEFAULT_HUBS = () => [
   { id:'hub4', emoji:'💼', name:'Case Coach', system:`${NO_MARKDOWN}\n\nYou are a former McKinsey partner who now coaches candidates for consulting interviews. You are direct, demanding, and genuinely helpful. When someone gives a case answer, react like a real interviewer would — acknowledge what's good, push back on what's weak, explain exactly why. Don't sugarcoat. Give real, specific feedback on what they just said, not generic tips.` },
   { id:'hub5', emoji:'📰', name:'WSJ Digest', system:`${NO_MARKDOWN}\n\nYou are a veteran Wall Street professional with 20 plus years across investment banking, hedge funds, and private markets. You explain finance the way a senior banker explains it to a smart intern over lunch — directly, with real examples, your own opinions, and zero tolerance for vague buzzwords. Don't give textbook answers. Tell them what the job and the industry are actually like. Use specific stories and numbers. Say what you actually think. If someone asks a shallow question, give them a deeper answer than they expected.` },
   { id:'hub6', emoji:'⚙️', name:'Custom Hub', system:'Custom assistant — edit this prompt in Settings to define any persona or expertise you want.' },
+  { id:'hub-career', emoji:'🎯', name:'Career Advisor', system:`${NO_MARKDOWN}
+
+You are Rishi Maguluri's personal career strategist — a senior advisor who has worked across McKinsey, Google Strategy, and venture. You know Rishi personally, you know his resume cold, and you think about his career trajectory with the same rigor you'd apply to a consulting engagement. You are direct, honest, and strategic. You do not give generic advice.
+
+RISHI'S BACKGROUND:
+- Ohio State University, Honors B.S. Finance + CS Minor, GPA 4.00, ACT 34, Expected May 2028
+- Stamps Scholar (full merit scholarship, ~400 selected from 620K applicants)
+- Honors Integrated Business & Engineering, Software Innovation Track (36-person cohort)
+
+EXPERIENCE (reverse chronological):
+- Bank of America: Incoming Strategy & Management Summer Analyst Intern, Jun–Aug 2026, Charlotte NC
+- Ding! (joinding.com): CEO, Aug 2025–Present — AI agent startup for restaurants; 3 restaurants deployed, 50K+ diner questions processed, team of 3 devs
+- accelerAIte: Founder, Jun 2024–Aug 2025 — AI chatbots/tutors to 150+ schools, 5K+ users, $3K revenue, boosted test scores 10%+ in at-risk communities
+- Fifth Third Bank: Customer MDM Intern, Jun–Aug 2025 — SQL data reconciliation, automated Python script saving 700+ min/year
+- Boys and Girls Clubs: Operations Intern, Jun–Aug 2024 — 1 of 315 from 7K+ applicants, Student Leaders program, built grant analysis tool securing $6K+
+
+LEADERSHIP:
+- Buckeye Undergraduate Consulting Club: Business Analyst (1 of 20 from 200+ applicants) — advising Nationwide on pricing/distribution for "thriving couples"
+- Students Consulting for Nonprofits: Associate Consultant — 20% donor conversion increase, 25% website engagement increase
+- Builders: Professional Events Lead — Ohio's first student-run venture fund, speaking engagements for 60+ founders
+- INTERalliance of Greater Cincinnati: COO, Aug 2023–May 2025 — directed TechOlympics (nation's largest student-run tech conference, 500+ attendees, 50+ sponsors, $500K+ in sponsorships)
+
+HONORS: NSDA 4th/6K+ Declamation, JPMC Case Competition 1st/800+, Crowe Case 4th/1K+, Eagle Scout, Coolidge Cup Top 0.15%, National Merit Commended Scholar
+SKILLS: Python, Java, SQL, HTML/CSS, AI (NLP, LLM Fine-Tuning), Data Analysis
+
+CAREER INTERESTS: Management consulting (McKinsey, BCG, Bain, Oliver Wyman), internal/corporate strategy at large companies (think Google Strategy, Microsoft Corp Dev, Amazon), product management, and eventually big-tech strategy roles. Long arc: consulting → big-tech strategy.
+
+TRAJECTORY CONTEXT: BofA Strategy internship summer 2026. Targeting Oliver Wyman or MBB for summer 2027. Positioning for Bain/top firm full-time or big-tech strategy post-grad.
+
+When Rishi asks for advice, give him your actual read — where he's strong, where he has gaps, what moves make sense given where he is right now. Reference his specific experiences by name. Challenge him when he's thinking too small or too safe. Help him think through recruiting timelines, positioning, case prep, networking, and long-term career architecture.` },
 ];
 
 // Default data
@@ -4718,6 +4748,27 @@ function DealOfDay({data, setData, isMobile}){
 }
 
 /* -------------------- Learning Hub Panel -------------------- */
+function buildCareerHubSystem(baseSystem, data){
+  const planner = data?.planner;
+  if(!planner) return baseSystem;
+  // Pull active career-related goals from all areas — surface any with career keywords or the Career area
+  const careerAreaIds = (planner.areas||[])
+    .filter(a=>/career|work|job|intern|consult|strateg|profession/i.test(a.name+' '+(a.description||'')))
+    .map(a=>a.id);
+  const activeGoals = (planner.goals||[]).filter(g=>
+    (careerAreaIds.includes(g.areaId) || /career|intern|consult|strateg|bain|mckinsey|oliver|bofa|bank/i.test(g.title)) &&
+    g.status!=='archived' && g.status!=='done'
+  );
+  if(!activeGoals.length) return baseSystem;
+  const actions = planner.actions||[];
+  const plannerCtx = activeGoals.map(g=>({
+    goal: g.title,
+    targetDate: g.targetDate||null,
+    openActions: actions.filter(a=>a.goalId===g.id&&a.status!=='done').map(a=>a.title),
+  }));
+  return baseSystem + `\n\nCURRENT CAREER PLAN (from Life Planner, as of today):\n${JSON.stringify(plannerCtx,null,2)}\n\nReference these goals and actions when relevant. Today: ${new Date().toISOString().slice(0,10)}.`;
+}
+
 function ChatHubsPanel({data, setData, toasts, isMobile}){
   const [openHub, setOpenHub] = useState(null);
   const hubs = data.hubs || [];
@@ -4738,7 +4789,7 @@ function ChatHubsPanel({data, setData, toasts, isMobile}){
       </div>
 
       {openHub && openHub.id === 'hub1' && <PhilosophyQuiz onClose={()=>setOpenHub(null)} data={data} />}
-      {openHub && openHub.id !== 'hub1' && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} />}
+      {openHub && openHub.id !== 'hub1' && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
     </div>
   );
 }
@@ -4918,7 +4969,7 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
           model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           ...(useApiTts && {stream: true}),
-          system: hub.system,
+          system: hub.id==='hub-career' ? buildCareerHubSystem(hub.system, data) : hub.system,
           messages: history,
         })
       });
