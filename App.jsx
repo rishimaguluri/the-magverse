@@ -1923,12 +1923,162 @@ function formatDue(dateStr){
   return { text: d.toLocaleDateString('en-US',{month:'short',day:'numeric'}), urgent: false };
 }
 
+/* -------------------- Tasks AI Chat Panel -------------------- */
+function TasksAIChatPanel({ tasks, apiKey, onAddTask, onUpdateTask, onDeleteTask, toasts }) {
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const scrollRef = useRef(null);
+  const dict = useDictation((t) => { setInput(prev => prev ? prev + ' ' + t : t); setListening(false); });
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [msgs, loading]);
+
+  function buildSystem() {
+    const today = new Date().toISOString().slice(0, 10);
+    const taskList = tasks.map(t => ({
+      id: t.id, title: t.title, category: t.category,
+      priority: t.priority, status: t.status,
+      dueDate: t.dueDate || null, subject: t.subject || null,
+    }));
+    return `You are Rishi's personal task assistant in Magverse. Help him manage tasks across 3 categories: classroom (academic work, assignments, homework), extracurricular (clubs/activities/sports), personal (life tasks/errands/habits).
+
+You can add tasks, update them, mark done, delete, reprioritize, give workload insights, and help plan what to tackle first.
+
+When performing actions, include them at the END of your response in <magverse-actions> tags:
+<magverse-actions>[{"type":"add_task","task":{"title":"...","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD","subject":"","notes":"","status":"To Do"}},{"type":"mark_done","taskId":"id"},{"type":"update_task","taskId":"id","patch":{"priority":"High","dueDate":"2026-05-25"}},{"type":"delete_task","taskId":"id"}]</magverse-actions>
+
+Rules: dueDate = YYYY-MM-DD or null. category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low". Always explain briefly before acting. Be concise. Plain text only, no markdown.
+
+Today: ${today}
+TASKS: ${JSON.stringify(taskList)}`;
+  }
+
+  function execActions(text) {
+    const m = text.match(/<magverse-actions>([\s\S]*?)<\/magverse-actions>/);
+    if (!m) return;
+    try {
+      JSON.parse(m[1]).forEach(a => {
+        if (a.type === 'add_task') onAddTask(a.task);
+        else if (a.type === 'mark_done') onUpdateTask(a.taskId, { status: 'Done', doneAt: new Date().toISOString() });
+        else if (a.type === 'update_task') onUpdateTask(a.taskId, a.patch);
+        else if (a.type === 'delete_task') onDeleteTask(a.taskId);
+      });
+    } catch(e) {}
+  }
+
+  async function send() {
+    const msg = input.trim();
+    if (!msg || loading) return;
+    if (!apiKey) { toasts.push('Add API key in Settings to use AI chat'); return; }
+    setInput('');
+    const history = [...msgs, { role: 'user', content: msg }];
+    setMsgs(history);
+    setLoading(true);
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, stream: true, system: buildSystem(), messages: history.map(m => ({ role: m.role, content: m.content })) })
+      });
+      if (!resp.ok) throw new Error('API error');
+      let full = '';
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      setMsgs(m => [...m, { role: 'assistant', content: '' }]);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of dec.decode(value).split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const j = JSON.parse(line.slice(6));
+            if (j.type === 'content_block_delta' && j.delta?.type === 'text_delta') {
+              full += j.delta.text;
+              setMsgs(m => { const a = [...m]; a[a.length-1] = { role: 'assistant', content: full }; return a; });
+            }
+          } catch(e) {}
+        }
+      }
+      execActions(full);
+    } catch(e) {
+      setMsgs(m => [...m, { role: 'assistant', content: 'Could not reach AI. Check your API key in Settings.' }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const displayText = t => t.replace(/<magverse-actions>[\s\S]*?<\/magverse-actions>/g, '').trim();
+
+  return (
+    <div style={{ width:'320px', flexShrink:0, borderLeft:'1px solid rgba(255,255,255,0.06)', display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
+      <div style={{ padding:'14px 16px 12px', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0 }}>
+        <div style={{ fontSize:'13px', fontWeight:600, color:'#e2e8f0' }}>AI Assistant</div>
+        <div style={{ fontSize:'11px', color:'#64748b', marginTop:'2px' }}>Add, organize & prioritize tasks with AI</div>
+      </div>
+      <div ref={scrollRef} style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:'10px' }}>
+        {msgs.length === 0 && (
+          <div style={{ textAlign:'center', paddingTop:'28px' }}>
+            <div style={{ fontSize:'26px', marginBottom:'10px' }}>🤖</div>
+            <div style={{ fontSize:'11px', color:'#475569', lineHeight:1.75 }}>
+              "Add high priority essay for English due Friday"<br/>
+              "What's most urgent right now?"<br/>
+              "Mark my CS homework done"<br/>
+              "Move Spanish quiz to high priority"<br/>
+              "What do I have due this week?"
+            </div>
+          </div>
+        )}
+        {msgs.map((m, i) => {
+          const txt = displayText(m.content);
+          if (!txt && !(m.role === 'assistant' && loading && i === msgs.length - 1)) return null;
+          return (
+            <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+              <div style={{
+                maxWidth:'88%', padding:'8px 11px',
+                borderRadius: m.role==='user' ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
+                background: m.role==='user' ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${m.role==='user'?'rgba(99,102,241,0.28)':'rgba(255,255,255,0.07)'}`,
+                fontSize:'12px', color:'#e2e8f0', lineHeight:1.55, whiteSpace:'pre-wrap'
+              }}>
+                {txt || <span style={{color:'#475569'}}>...</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding:'10px 12px', borderTop:'1px solid rgba(255,255,255,0.06)', flexShrink:0 }}>
+        <div style={{ display:'flex', gap:'6px', alignItems:'flex-end' }}>
+          <textarea value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } }}
+            placeholder="Ask about your tasks…" rows={2}
+            style={{ flex:1, resize:'none', background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:'10px', padding:'7px 10px', fontSize:'12px', color:'#e2e8f0', outline:'none', fontFamily:'inherit', lineHeight:1.4 }}
+          />
+          <div style={{ display:'flex', flexDirection:'column', gap:'5px' }}>
+            <button onClick={()=>{ dict.start(); setListening(true); }}
+              style={{ width:'30px', height:'30px', borderRadius:'8px', background:listening?'rgba(239,68,68,0.2)':'rgba(255,255,255,0.05)', border:listening?'1px solid rgba(239,68,68,0.35)':'1px solid rgba(255,255,255,0.07)', color:listening?'#f87171':'#64748b', fontSize:'13px', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+              🎤
+            </button>
+            <button onClick={send} disabled={loading||!input.trim()}
+              style={{ width:'30px', height:'30px', borderRadius:'8px', background:input.trim()?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.04)', border:`1px solid ${input.trim()?'rgba(99,102,241,0.35)':'rgba(255,255,255,0.06)'}`, color:input.trim()?'#a5b4fc':'#334155', fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+              ↑
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AssignmentsPanel({data, setData, toasts}){
-  const [modalCat, setModalCat] = useState(null); // category to add to
+  const [modalCat, setModalCat] = useState(null);
   const [editTask, setEditTask] = useState(null);
   const [sort, setSort] = useState('smart');
-  const [filter, setFilter] = useState('active'); // active | all | done
+  const [filter, setFilter] = useState('active');
   const [collapsed, setCollapsed] = useState({});
+  const apiKey = data.settings?.apiKey || '';
 
   const tasks = data.assignments || [];
 
@@ -1966,127 +2116,130 @@ function AssignmentsPanel({data, setData, toasts}){
   const totalOverdue = tasks.filter(t=>t.status!=='Done' && t.dueDate && new Date(t.dueDate)<new Date()).length;
 
   return (
-    <div className="max-w-3xl">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <div>
-          <h2 className="text-xl font-semibold">Tasks</h2>
-          <div className="text-xs mt-0.5" style={{color:'#475569'}}>
-            {totalActive} active{totalOverdue>0 && <span style={{color:'#f87171'}}> · {totalOverdue} overdue</span>}
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Filter */}
-          <div className="flex rounded overflow-hidden border" style={{borderColor:'rgba(255,255,255,0.07)'}}>
-            {['active','all','done'].map(f=>(
-              <button key={f} onClick={()=>setFilter(f)}
-                className="px-3 py-1 text-xs capitalize transition-all"
-                style={{background:filter===f?'rgba(99,102,241,0.3)':'transparent', color:filter===f?'#a5b4fc':'#64748b'}}>
-                {f}
-              </button>
-            ))}
-          </div>
-          {/* Sort */}
-          <select className="px-2 py-1 rounded text-xs border bg-transparent"
-            style={{borderColor:'rgba(255,255,255,0.07)',color:'#94a3b8'}}
-            value={sort} onChange={e=>setSort(e.target.value)}>
-            <option value="smart">Smart sort</option>
-            <option value="due">By due date</option>
-            <option value="priority">By priority</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Category sections */}
-      <div className="space-y-4">
-        {TASK_CATEGORIES.map(cat=>{
-          const catTasks = visibleTasks(cat.id);
-          const allCatTasks = tasks.filter(t=>t.category===cat.id);
-          const doneCount = allCatTasks.filter(t=>t.status==='Done').length;
-          const isCollapsed = collapsed[cat.id];
-          return (
-            <div key={cat.id} className="glass rounded border-subtle overflow-hidden">
-              {/* Section header */}
-              <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
-                style={{borderBottom: isCollapsed?'none':'1px solid rgba(255,255,255,0.05)'}}
-                onClick={()=>setCollapsed(c=>({...c,[cat.id]:!c[cat.id]}))}>
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full" style={{background:cat.dot}}/>
-                  <span className="font-semibold text-sm">{cat.label}</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:cat.bg, color:cat.color}}>
-                    {allCatTasks.filter(t=>t.status!=='Done').length} left
-                  </span>
-                  {doneCount>0 && <span className="text-xs" style={{color:'#334155'}}>{doneCount} done</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button className="text-xs px-2 py-1 rounded transition-all"
-                    style={{background:cat.bg, color:cat.color}}
-                    onClick={e=>{ e.stopPropagation(); setModalCat(cat.id); }}>
-                    + Add
-                  </button>
-                  <span style={{color:'#475569',fontSize:'10px'}}>{isCollapsed?'▶':'▼'}</span>
-                </div>
-              </div>
-
-              {/* Tasks list */}
-              {!isCollapsed && (
-                <div className="divide-y" style={{borderColor:'rgba(255,255,255,0.04)'}}>
-                  {catTasks.length===0 && (
-                    <div className="px-4 py-5 text-xs text-center" style={{color:'#334155'}}>
-                      {filter==='done' ? 'No completed tasks' : 'No tasks — click + Add to get started'}
-                    </div>
-                  )}
-                  {catTasks.map(task=>{
-                    const due = formatDue(task.dueDate);
-                    const pm = PRIORITY_META[task.priority] || PRIORITY_META.Med;
-                    const isDone = task.status==='Done';
-                    return (
-                      <div key={task.id} className="group flex items-start gap-3 px-4 py-3 transition-all hover:bg-white/[0.02]">
-                        {/* Checkbox */}
-                        <button onClick={()=>toggleDone(task)}
-                          className="mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-all"
-                          style={{borderColor: isDone ? cat.color : 'rgba(255,255,255,0.15)', background: isDone ? cat.bg : 'transparent'}}>
-                          {isDone && <span style={{color:cat.color, fontSize:'9px'}}>✓</span>}
-                        </button>
-
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="text-sm font-medium leading-snug" style={{textDecoration:isDone?'line-through':'none', color:isDone?'#475569':'#e2e8f0'}}>
-                              {task.title}
-                            </span>
-                            {/* Priority chip */}
-                            <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0 font-medium"
-                              style={{background:pm.bg, color:pm.color}}>
-                              {pm.label}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-3 mt-1 flex-wrap">
-                            {task.subject && <span className="text-xs" style={{color:'#475569'}}>{task.subject}</span>}
-                            {due && (
-                              <span className="text-xs font-medium"
-                                style={{color: due.overdue?'#f87171': due.urgent?'#fbbf24':'#64748b'}}>
-                                {due.overdue && '⚠ '}{due.text}
-                              </span>
-                            )}
-                            {task.notes && <span className="text-xs italic truncate max-w-[200px]" style={{color:'#334155'}}>{task.notes}</span>}
-                          </div>
-                        </div>
-
-                        {/* Edit / Delete on hover */}
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
-                          <button onClick={()=>setEditTask(task)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-white/10" style={{color:'#64748b'}}>✎</button>
-                          <button onClick={()=>deleteTask(task.id)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-red-500/20" style={{color:'#64748b'}}>×</button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+    <div style={{ display:'flex', gap:0, height:'calc(100vh - 96px)', overflow:'hidden' }}>
+      {/* Left: task list */}
+      <div style={{ flex:1, overflowY:'auto', paddingRight:'20px', minWidth:0 }}>
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div>
+            <h2 className="text-xl font-semibold">Tasks</h2>
+            <div className="text-xs mt-0.5" style={{color:'#94a3b8'}}>
+              {totalActive} active{totalOverdue>0 && <span style={{color:'#f87171'}}> · {totalOverdue} overdue</span>}
             </div>
-          );
-        })}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex rounded overflow-hidden border" style={{borderColor:'rgba(255,255,255,0.07)'}}>
+              {['active','all','done'].map(f=>(
+                <button key={f} onClick={()=>setFilter(f)}
+                  className="px-3 py-1 text-xs capitalize transition-all"
+                  style={{background:filter===f?'rgba(99,102,241,0.3)':'transparent', color:filter===f?'#a5b4fc':'#64748b'}}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            <select className="px-2 py-1 rounded text-xs border bg-transparent"
+              style={{borderColor:'rgba(255,255,255,0.07)',color:'#94a3b8'}}
+              value={sort} onChange={e=>setSort(e.target.value)}>
+              <option value="smart">Smart sort</option>
+              <option value="due">By due date</option>
+              <option value="priority">By priority</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Category sections */}
+        <div className="space-y-4">
+          {TASK_CATEGORIES.map(cat=>{
+            const catTasks = visibleTasks(cat.id);
+            const allCatTasks = tasks.filter(t=>t.category===cat.id);
+            const doneCount = allCatTasks.filter(t=>t.status==='Done').length;
+            const isCollapsed = collapsed[cat.id];
+            return (
+              <div key={cat.id} className="glass rounded border-subtle overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
+                  style={{borderBottom: isCollapsed?'none':'1px solid rgba(255,255,255,0.05)'}}
+                  onClick={()=>setCollapsed(c=>({...c,[cat.id]:!c[cat.id]}))}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full" style={{background:cat.dot}}/>
+                    <span className="font-semibold text-sm">{cat.label}</span>
+                    <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:cat.bg, color:cat.color}}>
+                      {allCatTasks.filter(t=>t.status!=='Done').length} left
+                    </span>
+                    {doneCount>0 && <span className="text-xs" style={{color:'#64748b'}}>{doneCount} done</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button className="text-xs px-2 py-1 rounded transition-all"
+                      style={{background:cat.bg, color:cat.color}}
+                      onClick={e=>{ e.stopPropagation(); setModalCat(cat.id); }}>
+                      + Add
+                    </button>
+                    <span style={{color:'#475569',fontSize:'10px'}}>{isCollapsed?'▶':'▼'}</span>
+                  </div>
+                </div>
+
+                {!isCollapsed && (
+                  <div className="divide-y" style={{borderColor:'rgba(255,255,255,0.04)'}}>
+                    {catTasks.length===0 && (
+                      <div className="px-4 py-5 text-xs text-center" style={{color:'#64748b'}}>
+                        {filter==='done' ? 'No completed tasks' : 'No tasks — ask AI or click + Add'}
+                      </div>
+                    )}
+                    {catTasks.map(task=>{
+                      const due = formatDue(task.dueDate);
+                      const pm = PRIORITY_META[task.priority] || PRIORITY_META.Med;
+                      const isDone = task.status==='Done';
+                      return (
+                        <div key={task.id} className="group flex items-start gap-3 px-4 py-3 transition-all hover:bg-white/[0.02]">
+                          <button onClick={()=>toggleDone(task)}
+                            className="mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-all"
+                            style={{borderColor: isDone ? cat.color : 'rgba(255,255,255,0.15)', background: isDone ? cat.bg : 'transparent'}}>
+                            {isDone && <span style={{color:cat.color, fontSize:'9px'}}>✓</span>}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-sm font-medium leading-snug" style={{textDecoration:isDone?'line-through':'none', color:isDone?'#475569':'#e2e8f0'}}>
+                                {task.title}
+                              </span>
+                              <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0 font-medium"
+                                style={{background:pm.bg, color:pm.color}}>
+                                {pm.label}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 mt-1 flex-wrap">
+                              {task.subject && <span className="text-xs" style={{color:'#64748b'}}>{task.subject}</span>}
+                              {due && (
+                                <span className="text-xs font-medium"
+                                  style={{color: due.overdue?'#f87171': due.urgent?'#fbbf24':'#64748b'}}>
+                                  {due.overdue && '⚠ '}{due.text}
+                                </span>
+                              )}
+                              {task.notes && <span className="text-xs italic truncate max-w-[180px]" style={{color:'#64748b'}}>{task.notes}</span>}
+                            </div>
+                          </div>
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                            <button onClick={()=>setEditTask(task)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-white/10" style={{color:'#64748b'}}>✎</button>
+                            <button onClick={()=>deleteTask(task.id)} className="w-6 h-6 rounded flex items-center justify-center text-xs hover:bg-red-500/20" style={{color:'#64748b'}}>×</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
+
+      {/* Right: AI chat */}
+      <TasksAIChatPanel
+        tasks={tasks}
+        apiKey={apiKey}
+        onAddTask={addTask}
+        onUpdateTask={updateTask}
+        onDeleteTask={deleteTask}
+        toasts={toasts}
+      />
 
       {(modalCat||editTask) && (
         <TaskModal
@@ -2100,8 +2253,6 @@ function AssignmentsPanel({data, setData, toasts}){
           }}
         />
       )}
-
-      <TasksAssistant tasks={tasks} sort={sort} setSort={setSort} filter={filter} setFilter={setFilter} onAddTask={addTask} onEditTask={updateTask} onDeleteTask={deleteTask} toasts={toasts} />
     </div>
   );
 }
@@ -5218,7 +5369,25 @@ function SettingsPanel({data, setData, toasts}){
       ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice, voyageKey}}));
     toasts.push('Settings saved');
   };
-  const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='magverse-export.json'; a.click(); URL.revokeObjectURL(url); };
+  const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`magverse-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); toasts.push('Backup downloaded'); };
+  const importData = ()=>{
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.json';
+    input.onchange = (e)=>{
+      const file = e.target.files[0]; if(!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev)=>{
+        try {
+          const parsed = JSON.parse(ev.target.result);
+          if(typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid format');
+          setData(parsed);
+          toasts.push('Data restored from backup');
+        } catch(err) { toasts.push('Import failed: ' + err.message); }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
   const clearAll = ()=>{ if(!confirm('Clear all data? This cannot be undone.')) return; localStorage.clear(); location.reload(); };
   const resetHubs = ()=>{ if(!confirm('Reset all hub prompts to defaults? Custom edits will be lost.')) return; setData(d=>({...d, hubs:DEFAULT_HUBS()})); toasts.push('Hub prompts reset'); };
   return (
@@ -5324,9 +5493,29 @@ function SettingsPanel({data, setData, toasts}){
         </div>
       </div>
 
+      {/* Data Backup */}
+      <div style={{borderTop:'1px solid rgba(255,255,255,0.05)', paddingTop:'16px'}}>
+        <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Data Backup</div>
+        <p className="text-xs mb-4 leading-relaxed" style={{color:'#64748b'}}>
+          All your data (tasks, notes, calendar, life planner, journals) is stored in this browser. Export a backup to save it as a file you can commit to GitHub or restore on any device.
+        </p>
+        <div className="flex gap-3 flex-wrap">
+          <button onClick={exportAll}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+            style={{background:'rgba(99,102,241,0.18)',color:'#a5b4fc',border:'1px solid rgba(99,102,241,0.3)'}}>
+            ↓ Export Backup
+          </button>
+          <button onClick={importData}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
+            style={{background:'rgba(16,185,129,0.15)',color:'#34d399',border:'1px solid rgba(16,185,129,0.28)'}}>
+            ↑ Restore from Backup
+          </button>
+        </div>
+        <p className="text-xs mt-2" style={{color:'#334155'}}>Import replaces all current data with the backup file.</p>
+      </div>
+
       <div className="flex flex-wrap gap-2 pt-2 border-t" style={{borderColor:'rgba(255,255,255,0.05)'}}>
         <button className="px-3 py-1 rounded bg-indigo-600 text-white text-sm font-medium" onClick={save}>Save Settings</button>
-        <button className="px-3 py-1 rounded text-sm" style={{background:'rgba(255,255,255,0.05)'}} onClick={exportAll}>Export JSON</button>
         <button className="px-3 py-1 rounded text-sm" onClick={resetHubs} style={{background:'rgba(99,102,241,0.2)',color:'#a5b4fc'}}>Reset Hub Prompts</button>
         <button className="px-3 py-1 rounded bg-red-600 text-white text-sm" onClick={clearAll}>Clear All Data</button>
       </div>
