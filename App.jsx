@@ -5369,7 +5369,22 @@ function SettingsPanel({data, setData, toasts}){
       ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice, voyageKey}}));
     toasts.push('Settings saved');
   };
-  const exportAll = ()=>{ const json = JSON.stringify(data,null,2); const blob = new Blob([json],{type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`magverse-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); toasts.push('Backup downloaded'); };
+  const exportAll = ()=>{
+    // Collect hub chat histories stored at separate localStorage keys
+    const hubHistories = {};
+    for(let i = 0; i < localStorage.length; i++){
+      const key = localStorage.key(i);
+      if(key && key.startsWith('magverse:hub:') && key.endsWith(':history')){
+        try{ hubHistories[key] = JSON.parse(localStorage.getItem(key)); }catch(e){}
+      }
+    }
+    const exportObj = { ...data, _hubHistories: hubHistories };
+    const json = JSON.stringify(exportObj, null, 2);
+    const blob = new Blob([json],{type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=`magverse-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+    toasts.push('Backup downloaded');
+  };
   const importData = ()=>{
     const input = document.createElement('input');
     input.type = 'file'; input.accept = '.json';
@@ -5380,7 +5395,12 @@ function SettingsPanel({data, setData, toasts}){
         try {
           const parsed = JSON.parse(ev.target.result);
           if(typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid format');
-          setData(parsed);
+          // Restore hub chat histories to their separate keys
+          const hubHistories = parsed._hubHistories || {};
+          Object.entries(hubHistories).forEach(([key, val])=>{ localStorage.setItem(key, JSON.stringify(val)); });
+          // Restore main data (strip the meta key before saving)
+          const { _hubHistories: _ignored, ...mainData } = parsed;
+          setData(mainData);
           toasts.push('Data restored from backup');
         } catch(err) { toasts.push('Import failed: ' + err.message); }
       };
