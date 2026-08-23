@@ -1,5 +1,5 @@
 // Magverse Service Worker — caches app shell only, never API responses or personal data
-const CACHE_VERSION = 'magverse-v1';
+const CACHE_VERSION = 'magverse-v2';
 const SHELL_URLS = [
   '/',
   '/index.html',

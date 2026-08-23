@@ -15,8 +15,94 @@ function ls(k, v) {
 // Hub system prompts
 const NO_MARKDOWN = `CRITICAL FORMATTING RULE: You are speaking out loud. Never use markdown. No asterisks, no pound signs, no dashes as bullets, no numbered lists, no arrows, no blockquotes, no bold, no italics, no headers, no horizontal rules. Write only in plain natural spoken sentences and paragraphs, exactly as you would say it out loud to someone's face. If you need to list things, weave them into a sentence naturally.`;
 
+/* §10 — Dynamic prompt builders for state-driven briefing hubs */
+function buildPhilosophyPrompt(pb){
+  if(!pb) return NO_MARKDOWN + '\n\nYou are a philosophy professor. Have a deep Socratic conversation.';
+  const avg = pb.speakingScoreHistory?.length ? (pb.speakingScoreHistory.reduce((s,x)=>s+x.score,0)/pb.speakingScoreHistory.length).toFixed(1) : 'N/A';
+  const lastS = pb.speakingScoreHistory?.at?.(-1);
+  const cbList = (pb.conceptCallbackPool||[]).map(c=>`${c.concept}: ${c.answer}`).join(' | ');
+  const daysLog = (pb.completedInCurrentTheme||[]).join('\n  ');
+  return `${NO_MARKDOWN}
+
+You are Rishi Maguluri's philosophy training system. Follow every instruction precisely.
+
+CURRICULUM STATE: Theme = "${pb.currentTheme}" | Today = Day ${pb.currentDay}
+Days completed in this theme:
+  ${daysLog||'(none yet)'}
+
+SPEAKING TRAINING (do every session): After a conceptual question, assign one speaking challenge using this 5-beat rubric: Beat 1 = state your claim (1 crisp sentence). Beat 2 = give the principle or mechanism, not an example yet. Beat 3 = steelman the best objection to your own view, do not thin it out. Beat 4 = dismantle that objection, close its best comeback. Beat 5 = one concrete example. Score out of 100. Say the score, which beat was weakest, and the single most important fix.
+ACTIVE WEAKNESS (focus here): ${pb.activeWeakness||'none'}
+Score history: ${pb.speakingScoreHistory?.map(s=>`#${s.n}=${s.score}`).join(', ')||'none'} | Avg = ${avg} | Last = ${lastS?`#${lastS.n} "${lastS.topic}" = ${lastS.score}`:'N/A'}
+
+CONCEPT CALLBACK POOL (open each session with a random one from here): ${cbList}
+
+USED LISTS — DO NOT REPEAT: Greek stories used: ${(pb.greekStoriesUsed||[]).join(', ')||'none'}. Reasoning tools used: ${(pb.reasoningToolsUsed||[]).join(', ')||'none'}. Terms introduced: ${(pb.termsUsed||[]).join(', ')||'none'}. Flow Reps done: ${(pb.flowRepsUsed||[]).join(', ')||'none'}.
+
+SESSION FORMAT for Day ${pb.currentDay}: 1) Open with one callback drill. 2) Introduce 3-4 new concepts from the theme via Socratic questions, weave in one NEW Greek story (not from the used list), one NEW reasoning tool (not from the used list), and define 2-3 new philosophical terms. 3) Assign one speaking challenge at a conceptual peak. 4) Close with one practical Flow Rep (a concrete action Rishi will do today — not from the used list). 5) At the very end of your response include this exact hidden update block on its own line: <!--STATE_UPDATE:{"type":"philosophy","dayAdvanced":true,"greekStoryUsed":"STORY_NAME","reasoningToolUsed":"TOOL_NAME","termsDefined":["term1","term2"],"flowRepUsed":"REP_NAME","speakingScore":{"n":${(pb.speakingScoreHistory?.length||0)+1},"topic":"TOPIC","score":0,"grade":"TBD"}}-->
+
+When Rishi says "philosophy", "let's go", or "start" — begin the Day ${pb.currentDay} session immediately.`;
+}
+
+function buildAcumenPrompt(ba){
+  if(!ba) return NO_MARKDOWN + '\n\nYou are a Wall Street business acumen trainer. Run a structured daily session.';
+  const avg = ba.speakingScoreHistory?.length ? (ba.speakingScoreHistory.reduce((s,x)=>s+x.score,0)/ba.speakingScoreHistory.length).toFixed(2) : 'N/A';
+  const lastS = ba.speakingScoreHistory?.at?.(-1);
+  const cbList = (ba.callbackQueue||[]).map(c=>`${c.concept}: ${c.answer}`).join(' | ');
+  const themes = (ba.completedThemes||[]).join('; ');
+  return `${NO_MARKDOWN}
+
+You are Rishi Maguluri's business acumen training system. Follow every instruction precisely.
+
+CURRICULUM STATE: Theme = "${ba.currentWeekTheme}" | Today = Day ${ba.currentDayInTheme}
+Portfolio status: ${ba.portfolioStatus==='paused_cash'?'100% cash — portfolio paused':ba.portfolioStatus}
+Continuity note: ${ba.continuityNote||'(none)'}
+Completed prior themes: ${themes||'(none)'}
+
+SPEAKING TRAINING (mandatory): Format rotation — last format was "${ba.lastSpeakingFormat||'explain-why'}". Pick next unused from: explain-why, CFO-decision, teach-back-to-beginner, compare-and-judge, evaluate-a-claim, explain-a-paradox, synthesis, self-reflection/diagnose, herd-behavior-challenge, diagnose-the-crowd. Score out of 10: clarity of claim (2), precision of mechanism (3), concrete numbers/examples (2), terminology accuracy (2), concision (1). Give score, one-line highlight, one-line fix.
+ACTIVE WEAKNESS (drill hard): ${ba.activeWeakness||'none'}
+Score history: ${ba.speakingScoreHistory?.map(s=>`#${s.n}=${s.score}`).join(', ')||'none'} | Avg = ${avg}/10 | Last = ${lastS?`#${lastS.n} "${lastS.topic}" = ${lastS.score}`:'N/A'}
+
+CONCEPT CALLBACK QUEUE (open with 2 rapid-fire callbacks from these): ${cbList}
+
+SESSION FORMAT for Day ${ba.currentDayInTheme}: 1) Open with 2 rapid-fire callback drills. 2) Today's content: Behavioral Finance Day ${ba.currentDayInTheme} — cover herd behavior, FOMO, momentum effects, how crowds create and amplify price moves, practical examples from recent markets. 3) Introduce 2-3 new vocab terms. 4) Assign one speaking challenge using the next format in rotation. 5) At the very end of your response include this hidden update block on its own line: <!--STATE_UPDATE:{"type":"acumen","dayAdvanced":true,"callbacksReviewed":["concept1","concept2"],"vocabBusiness":["term1","term2"],"speakingScore":{"n":${(ba.speakingScoreHistory?.length||0)+1},"topic":"TOPIC","score":0}}-->
+
+When Rishi says "today", "let's go", or "start" — begin Day ${ba.currentDayInTheme} immediately.`;
+}
+
+/* Parse hidden STATE_UPDATE block from AI response and persist to data */
+function applyStateUpdate(rawText, setData){
+  const m = rawText.match(/<!--STATE_UPDATE:(\{[\s\S]*?\})-->/);
+  if(!m) return;
+  let upd;
+  try{ upd = JSON.parse(m[1]); }catch(e){ return; }
+  if(!upd?.type) return;
+  if(upd.type === 'philosophy'){
+    setData(d=>{
+      const pb = {...(d.philosophyBriefing||{})};
+      if(upd.dayAdvanced) pb.currentDay = (pb.currentDay||1)+1;
+      if(upd.greekStoryUsed) pb.greekStoriesUsed = [...(pb.greekStoriesUsed||[]), upd.greekStoryUsed];
+      if(upd.reasoningToolUsed) pb.reasoningToolsUsed = [...(pb.reasoningToolsUsed||[]), upd.reasoningToolUsed];
+      if(upd.termsDefined?.length) pb.termsUsed = [...(pb.termsUsed||[]), ...upd.termsDefined];
+      if(upd.flowRepUsed) pb.flowRepsUsed = [...(pb.flowRepsUsed||[]), upd.flowRepUsed];
+      if(upd.speakingScore?.score > 0){
+        pb.speakingScoreHistory = [...(pb.speakingScoreHistory||[]), upd.speakingScore];
+      }
+      return {...d, philosophyBriefing: pb};
+    });
+  } else if(upd.type === 'acumen'){
+    setData(d=>{
+      const ba = {...(d.businessAcumenBriefing||{})};
+      if(upd.dayAdvanced) ba.currentDayInTheme = (ba.currentDayInTheme||1)+1;
+      if(upd.speakingScore?.score > 0){
+        ba.speakingScoreHistory = [...(ba.speakingScoreHistory||[]), upd.speakingScore];
+      }
+      return {...d, businessAcumenBriefing: ba};
+    });
+  }
+}
+
 const DEFAULT_HUBS = () => [
-  { id:'hub1', emoji:'🏛️', name:'Philosophy', system:`${NO_MARKDOWN}\n\nYou are a brilliant philosophy professor — curious, sharp, and genuinely excited by ideas. When someone asks you something, don't give them a Wikipedia entry. Talk to them like you're sitting at a coffee shop having a real conversation. Share your actual perspective, push back if you disagree, ask follow-up questions that make them think harder. Use real-world analogies. Keep it focused and conversational.` },
+  { id:'hub1', emoji:'🏛️', name:'Philosophy', stateDriven:true, system:`${NO_MARKDOWN}\n\nYou are a brilliant philosophy professor running Rishi's structured daily briefing. When Rishi opens this hub, run the full state-driven session.` },
   { id:'hub2', emoji:'😮‍💨', name:'Stress & Mind', system:`${NO_MARKDOWN}\n\nYou are a wise, grounded mental wellness coach — part therapist, part older sibling who has figured some things out. You speak warmly and directly, never in therapy-speak or self-help clichés. When someone shares what they're going through, engage with their specific situation. Ask the right questions. Be honest, including when you think they're being too hard on themselves or not hard enough. Sound like a real person.` },
   { id:'hub3', emoji:'📐', name:'Quant Hub', system:`${NO_MARKDOWN}\n\nYou are a quant who has worked at a top hedge fund and now genuinely loves teaching. Explain things the way a brilliant friend would — clearly, directly, without condescension. Give the real intuition first, then the mechanics. Use concrete examples and numbers. Call out where people usually get confused. If they're getting something wrong, correct them honestly but kindly.` },
   { id:'hub4', emoji:'💼', name:'Case Coach', system:`${NO_MARKDOWN}\n\nYou are a former McKinsey partner who now coaches candidates for consulting interviews. You are direct, demanding, and genuinely helpful. When someone gives a case answer, react like a real interviewer would — acknowledge what's good, push back on what's weak, explain exactly why. Don't sugarcoat. Give real, specific feedback on what they just said, not generic tips.` },
@@ -52,6 +138,7 @@ CAREER INTERESTS: Management consulting (McKinsey, BCG, Bain, Oliver Wyman), int
 TRAJECTORY CONTEXT: BofA Strategy internship summer 2026. Targeting Oliver Wyman or MBB for summer 2027. Positioning for Bain/top firm full-time or big-tech strategy post-grad.
 
 When Rishi asks for advice, give him your actual read — where he's strong, where he has gaps, what moves make sense given where he is right now. Reference his specific experiences by name. Challenge him when he's thinking too small or too safe. Help him think through recruiting timelines, positioning, case prep, networking, and long-term career architecture.` },
+  { id:'hub-acumen', emoji:'📊', name:'Business Acumen', stateDriven:true, system:`${NO_MARKDOWN}\n\nYou are Rishi's structured daily business acumen trainer. Run the state-driven session when Rishi opens this hub.` },
 ];
 
 // Default data
@@ -68,6 +155,172 @@ const defaultState = () => ({
   career: { contacts: [], questions: [], applications: [] },
   seenDeals: [],
   inbox: [], // §3 universal capture
+  /* §10 — Philosophy briefing (seeded from session state as of Aug 2026) */
+  philosophyBriefing: {
+    currentTheme:"The Good Life — Happiness, Flow & Deep Focus",
+    currentDay:5,
+    completedThemes:[],
+    conceptCallbackPool:[
+      {concept:"Virtue ethics",answer:"becoming a certain kind of person via practical wisdom; virtue as a disposition, not mere rule-following"},
+      {concept:"Eudaimonia",answer:"human flourishing through excellent activity over a whole life; something you DO, not a mood"},
+      {concept:"Dichotomy of control",answer:"separate what is up to you (judgments, choices) from what is not (outcomes, others' reactions)"},
+      {concept:"Preference vs. dependence",answer:"preferring an outcome vs. making it your 'end all be all'"},
+      {concept:"The absurd",answer:"collision between the human need for meaning and the universe's silence; response is revolt; imagine Sisyphus happy"},
+      {concept:"Adlerian teleology",answer:"behavior understood by the future goal it serves, not only past cause"},
+      {concept:"Compensation / inferiority feelings",answer:"universal felt inferiority as the engine of healthy striving"},
+      {concept:"Creative self / style of life",answer:"we interpret and construct personality; style of life largely set in early childhood but revisable"},
+      {concept:"Hedonic treadmill",answer:"return to baseline as aspiration level rises"},
+      {concept:"Flow + challenge-skill balance",answer:"~4% past current skill; too-hard=anxiety, too-easy=boredom; three entry conditions"},
+      {concept:"Three life tasks",answer:"work, friendship, love; neurosis = evasion of a task"},
+      {concept:"Autotelic",answer:"done for its own sake; the doing is the reward"},
+      {concept:"Deep work / attention residue",answer:"switching tasks leaves residue; deep work = protected focus time"},
+      {concept:"Separation of tasks",answer:"whose-task test: who bears the consequences? Only own your task"},
+      {concept:"Aristotle's three friendships",answer:"utility, pleasure, virtue — only virtue is lasting"},
+    ],
+    greekStoriesUsed:["Sword of Damocles","Oedipus and the prophecy","Orestes on trial","King Midas","Daedalus in the Labyrinth","the Lotus-Eaters","Achilles chooses his fate"],
+    reasoningToolsUsed:["necessary vs. sufficient conditions","false dichotomy","genetic fallacy","fallacy of composition","continuum fallacy","is-ought gap","Goodhart's Law","Goldilocks principle","opportunity cost","motte-and-bailey"],
+    termsUsed:["Eudaimonia","Teleology","Dichotomy of control","Social interest","The Absurd","Compensation","Determinism","Readiness potential","Style of life","Reactive attitudes","Hedonic adaptation","Gemeinschaftsgefuehl","Flow","Autotelic","Attention residue","The Three Life Tasks","Separation of tasks","Friendship of virtue"],
+    flowRepsUsed:["Challenge Dial framing","Distraction Dump + Single Tab","single-deliverable time-block"],
+    speakingScoreHistory:[
+      {n:1,topic:"Virtue ethics",score:83,grade:"B"},
+      {n:2,topic:"Dichotomy of control",score:87,grade:"B+"},
+      {n:3,topic:"The absurd (Camus)",score:79,grade:"C+"},
+      {n:4,topic:"Determinism & the creative self",score:85,grade:"B"},
+      {n:5,topic:"Libet experiment",score:77,grade:"C+"},
+      {n:6,topic:"Hedonic treadmill",score:84,grade:"B"},
+      {n:7,topic:"Flow",score:90,grade:"A-"},
+      {n:8,topic:"Three life tasks",score:85,grade:"B"},
+    ],
+    activeWeakness:"Restating view instead of DISMANTLING objection; not closing objection's best comeback",
+    completedInCurrentTheme:[
+      "Day 1: Hedonic vs. eudaimonic happiness; hedonic treadmill; King Midas story; Goodhart's Law; Treadmill Audit",
+      "Day 2: Flow; challenge-skill balance; three entry conditions; autotelic; Daedalus story; Goldilocks principle; Challenge Dial exercise",
+      "Day 3: Deep work + attention residue; Lotus-Eaters story; Three Life Tasks; opportunity cost; Three-Legged Stool Check",
+      "Day 4: Separation of tasks; Achilles-chooses-his-fate; Aristotle's three friendships; motte-and-bailey; Whose-Task-Is-It Audit",
+    ],
+  },
+  /* §10 — Business Acumen briefing (seeded from session state as of Aug 2026) */
+  businessAcumenBriefing: {
+    currentWeekTheme:"Behavioral Finance & Market Psychology",
+    currentDayInTheme:2,
+    completedThemes:[
+      "Capital Allocation (capex, sector rotation, buybacks vs M&A, execution beats strategy, Apple-vs-Amazon return-vs-reinvest)",
+      "Valuation (Price vs Value & P/E, PEG ratio, priced for perfection, short selling/short squeeze, discount rate & present value, bad news is good news/Fed put)",
+    ],
+    portfolioStatus:"paused_cash",
+    callbackQueue:[
+      {concept:"Expectations treadmill",answer:"performing well raises the bar so a company must keep exceeding ever-higher expectations"},
+      {concept:"Capex + timing gap",answer:"spending on long-term assets hits now, returns come later"},
+      {concept:"Sector rotation",answer:"investors move money between industry groups by cycle/sentiment"},
+      {concept:"Free cash flow",answer:"operating cash flow minus capex; hard to fake"},
+      {concept:"P/E ratio",answer:"price / EPS; high P/E = high growth expectations + high risk"},
+      {concept:"PEG ratio",answer:"P/E divided by growth; ~1 fair, >1 expensive, <1 cheap"},
+      {concept:"Priced for perfection",answer:"price assumes flawless execution; good news isn't enough"},
+      {concept:"Short selling / short squeeze",answer:"betting a stock falls; unlimited loss; forced buy-ins push price up"},
+      {concept:"Discount rate / present value",answer:"future cash / (1+r)^n; higher r shrinks distant cash most"},
+      {concept:"Bad news is good news / Fed put",answer:"weak data lowers rate expectations, lifts present values"},
+      {concept:"Loss aversion",answer:"losses feel ~2x as intense as equal gains"},
+      {concept:"Disposition effect",answer:"sell winners early, hold losers too long"},
+    ],
+    speakingScoreHistory:[
+      {n:1,topic:"Why a growing AI market doesn't benefit all tech equally",score:6.5},
+      {n:2,topic:"Acquisition with sound logic can still destroy value",score:7},
+      {n:3,topic:"Cheaper competing AI model / pricing pressure",score:6.5},
+      {n:4,topic:"Masco: profit up while sales fell",score:8.5},
+      {n:5,topic:"Microsoft vs. Meta (same AI spend, opposite reaction)",score:8.75},
+      {n:6,topic:"Teach P/E to a 15-year-old",score:6.5},
+      {n:7,topic:"PEG comparison (two firms, same P/E, different growth)",score:8.75},
+      {n:8,topic:"Judge the Bear - Burry short of NVDA/TSLA/PLTR",score:8.5},
+      {n:9,topic:"Rate paradox (why growth stocks are more rate-sensitive)",score:6},
+      {n:10,topic:"Disposition-effect self-diagnosis of GOOGL sale",score:8},
+    ],
+    activeWeakness:"Terminology & mechanism precision: exact terms, precise mechanisms, cash flow sources",
+    lastSpeakingFormat:"self-reflection/diagnose",
+    continuityNote:"Aug 11: Behavioral Finance Day 1 — loss aversion, Teach-In, self-diagnosis of GOOGL disposition effect, scored 8/10. Next = Day 2 = HERD BEHAVIOR/FOMO.",
+  },
+  /* §9 — Golden Egg Capital workspace */
+  goldenEgg: {
+    strategyStatement:"We will specialize in small/mid-cap companies where deep sector knowledge, filing analysis, and qualitative judgment can identify durable businesses or improving situations before they are fully appreciated by the market.",
+    currentPhase:0,
+    roles:{researchLead:"Rishi",systemsLead:"Rohan"},
+    curriculum:[
+      {id:"ge-t1",name:"Accounting & Financial Statements",owner:"both",topics:[
+        {id:"ge-t1-1",title:"Income statement anatomy",done:false},{id:"ge-t1-2",title:"Balance sheet reading",done:false},
+        {id:"ge-t1-3",title:"Cash flow statement (ops/inv/fin)",done:false},{id:"ge-t1-4",title:"Working capital dynamics",done:false},
+        {id:"ge-t1-5",title:"Revenue recognition nuances",done:false},{id:"ge-t1-6",title:"Gross vs. operating margin",done:false},
+        {id:"ge-t1-7",title:"Free cash flow",done:false},{id:"ge-t1-8",title:"Accruals and earnings quality",done:false},
+        {id:"ge-t1-9",title:"Debt, covenants, and refinancing risk",done:false},{id:"ge-t1-10",title:"Dilution — shares, options, converts",done:false},
+        {id:"ge-t1-11",title:"ROIC and capital efficiency",done:false},{id:"ge-t1-12",title:"Inventory & receivables red flags",done:false},
+      ]},
+      {id:"ge-t2",name:"Valuation",owner:"both",topics:[
+        {id:"ge-t2-1",title:"Intrinsic value concept",done:false},{id:"ge-t2-2",title:"DCF basics + owner earnings",done:false},
+        {id:"ge-t2-3",title:"P/E, EV/EBITDA, FCF yield multiples",done:false},{id:"ge-t2-4",title:"Sum-of-the-parts analysis",done:false},
+        {id:"ge-t2-5",title:"Margin of safety",done:false},{id:"ge-t2-6",title:"Downside/base/upside case building",done:false},
+      ]},
+      {id:"ge-t3",name:"Business Quality",owner:"rishi",topics:[
+        {id:"ge-t3-1",title:"Economic moats overview",done:false},{id:"ge-t3-2",title:"Switching costs",done:false},
+        {id:"ge-t3-3",title:"Network effects",done:false},{id:"ge-t3-4",title:"Scale advantages",done:false},
+        {id:"ge-t3-5",title:"Brand moats",done:false},{id:"ge-t3-6",title:"Cost advantages",done:false},
+        {id:"ge-t3-7",title:"Recurring revenue structures",done:false},{id:"ge-t3-8",title:"Pricing power signals",done:false},
+        {id:"ge-t3-9",title:"Customer concentration risk",done:false},{id:"ge-t3-10",title:"Capital intensity analysis",done:false},
+        {id:"ge-t3-11",title:"Cyclicality and timing",done:false},{id:"ge-t3-12",title:"Management quality assessment",done:false},
+      ]},
+      {id:"ge-t4",name:"Small/Mid-Cap Specifics",owner:"both",topics:[
+        {id:"ge-t4-1",title:"Liquidity and bid-ask spread risk",done:false},{id:"ge-t4-2",title:"Promotional management red flags",done:false},
+        {id:"ge-t4-3",title:"Dilution patterns in small caps",done:false},{id:"ge-t4-4",title:"Governance issues to screen for",done:false},
+        {id:"ge-t4-5",title:"Why weak coverage creates edge",done:false},{id:"ge-t4-6",title:"Catalyst identification",done:false},
+        {id:"ge-t4-7",title:"Why small caps can stay cheap (patience required)",done:false},
+      ]},
+      {id:"ge-t5",name:"SEC Filings Mastery",owner:"both",topics:[
+        {id:"ge-t5-1",title:"10-K deep read",done:false},{id:"ge-t5-2",title:"10-Q quarterly tracking",done:false},
+        {id:"ge-t5-3",title:"8-K material events",done:false},{id:"ge-t5-4",title:"DEF 14A proxy (compensation, board)",done:false},
+        {id:"ge-t5-5",title:"Form 4 insider transaction analysis",done:false},{id:"ge-t5-6",title:"13D/13G ownership changes",done:false},
+        {id:"ge-t5-7",title:"S-3 shelf registration implications",done:false},{id:"ge-t5-8",title:"Revenue recognition footnotes",done:false},
+        {id:"ge-t5-9",title:"Risk factors (what to take seriously)",done:false},{id:"ge-t5-10",title:"MD&A reading for management tone",done:false},
+      ]},
+      {id:"ge-t6",name:"Sector Expertise",owner:"rishi",topics:[
+        {id:"ge-t6-1",title:"Business models in target sectors",done:false},{id:"ge-t6-2",title:"KPIs and unit economics",done:false},
+        {id:"ge-t6-3",title:"Customer behavior patterns",done:false},{id:"ge-t6-4",title:"Regulatory environment",done:false},
+        {id:"ge-t6-5",title:"Value chain mapping",done:false},{id:"ge-t6-6",title:"Competitive dynamics",done:false},
+        {id:"ge-t6-7",title:"Margin structure benchmarks",done:false},
+      ]},
+      {id:"ge-t7",name:"Research Writing",owner:"rishi",topics:[
+        {id:"ge-t7-1",title:"Write a 1-page thesis",done:false},{id:"ge-t7-2",title:"Write a full investment memo",done:false},
+        {id:"ge-t7-3",title:"Build bull/base/bear case",done:false},{id:"ge-t7-4",title:"Identify disconfirming evidence",done:false},
+        {id:"ge-t7-5",title:"Track thesis evolution",done:false},{id:"ge-t7-6",title:"Write postmortems",done:false},
+      ]},
+      {id:"ge-t8",name:"AI & Data Systems",owner:"rohan",topics:[
+        {id:"ge-t8-1",title:"EDGAR API + SEC data pipelines",done:false},{id:"ge-t8-2",title:"Basic Python for financial data",done:false},
+        {id:"ge-t8-3",title:"Watchlist database design",done:false},{id:"ge-t8-4",title:"Prompt design for filing analysis",done:false},
+        {id:"ge-t8-5",title:"News filtering automation",done:false},{id:"ge-t8-6",title:"Paper-trading logs and audit trails",done:false},
+      ]},
+    ],
+    phases:[
+      {id:"ph1",name:"Summer Before Sophomore Year",status:"in_progress",timeframe:"May–Aug 2026",goal:"Build foundations",deliverable:"Strategy doc + starter watchlist (20-50 co.) + 3 research memos"},
+      {id:"ph2",name:"Sophomore Year",status:"future",timeframe:"Sep 2026–May 2027",goal:"Build competence",deliverable:"50+ companies tracked, 10 deep memos, 1 internship application"},
+      {id:"ph3",name:"Summer Before Junior Year",status:"future",timeframe:"May–Aug 2027",goal:"Build the system",deliverable:"Automated watchlist pipeline, sector framework complete"},
+      {id:"ph4",name:"Junior Year",status:"future",timeframe:"Sep 2027–May 2028",goal:"Validate the process",deliverable:"Thesis track record, paper portfolio with documented reasoning"},
+      {id:"ph5",name:"Summer Before Senior Year",status:"future",timeframe:"May–Aug 2028",goal:"Pre-live readiness",deliverable:"Audited process, risk framework, capital planning"},
+      {id:"ph6",name:"Senior Year (Columbus)",status:"future",timeframe:"Sep 2028–May 2029",goal:"Potential execution",deliverable:"Live fund decision based on track record"},
+    ],
+    firstThirtyDays:[
+      {id:"f30-1",text:"Write the shared one-paragraph strategy statement",done:false},
+      {id:"f30-2",text:"Rishi: bring 1 candidate sector + why it's inefficient + 5 example companies",done:false},
+      {id:"f30-3",text:"Rohan: bring 1 candidate sector + why it's inefficient + 5 example companies",done:false},
+      {id:"f30-4",text:"Pick a 3rd sector to explore together",done:false},
+      {id:"f30-5",text:"Build starter watchlist: 20-50 companies across 3 sectors",done:false},
+      {id:"f30-6",text:"Complete 3 company research memos (one each + one shared)",done:false},
+      {id:"f30-7",text:"Decide on a shared filing/data tool (EDGAR direct, Koyfin, Tikr, or custom)",done:false},
+    ],
+    sectorCandidates:[
+      {name:"Niche software / SaaS",notes:"",status:"exploring"},{name:"Industrials (specialty)",notes:"",status:"exploring"},
+      {name:"Healthcare services",notes:"",status:"exploring"},{name:"Medical devices (small cap)",notes:"",status:"exploring"},
+      {name:"Specialty finance",notes:"",status:"exploring"},{name:"Consumer brands (regional)",notes:"",status:"exploring"},
+      {name:"Payments / fintech infrastructure",notes:"",status:"exploring"},{name:"Aerospace & defense suppliers",notes:"",status:"exploring"},
+      {name:"Environmental / waste services",notes:"",status:"exploring"},{name:"Education & workforce services",notes:"",status:"exploring"},
+    ],
+    watchlist:[],
+  },
   planner: {
     areas:[
       {id:'pa1',name:'Startups',color:'#6366f1',description:'Entrepreneurial projects and ideas'},
@@ -254,6 +507,7 @@ function App(){
             {active==='settings'    && <SettingsPanel    data={data} setData={setData} toasts={toasts} lastBackup={lastBackup} />}
             {active==='career'      && <CareerPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='inbox'       && <InboxPanel       data={data} setData={setData} toasts={toasts} isMobile={isMobile} setActive={setActive} />}
+            {active==='golden-egg'  && <GoldenEggPanel   data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
           </div>
         </main>
       </div>
@@ -776,7 +1030,7 @@ function BottomNav({active, setActive, inboxCount=0}){
     {id:'inbox',        label:'Inbox',    icon:IconInbox, badge:inboxCount},
     {id:'notes',        label:'Notes',    icon:IconNotes},
     {id:'chathubs',     label:'Learn',    icon:IconChat},
-    {id:'career',       label:'Career',   icon:IconBriefcase},
+    {id:'golden-egg',   label:'Fund',     icon:IconEgg},
     {id:'settings',     label:'More',     icon:IconGear},
   ];
   return (
@@ -804,6 +1058,7 @@ function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
     {id:'assignments', label:'Tasks',        icon:IconKanban},
     {id:'inbox',       label:'Inbox',        icon:IconInbox, badge:inboxCount},
     {id:'career',      label:'Career',       icon:IconBriefcase},
+    {id:'golden-egg',  label:'Golden Egg',   icon:IconEgg},
     {id:'gym',         label:'Gym',          icon:IconDumbbell},
     {id:'social',      label:'Social',       icon:IconUsers},
     {id:'notes',       label:'Notes',        icon:IconNotes},
@@ -5220,8 +5475,7 @@ function ChatHubsPanel({data, setData, toasts, isMobile}){
         ))}
       </div>
 
-      {openHub && openHub.id === 'hub1' && <PhilosophyQuiz onClose={()=>setOpenHub(null)} data={data} />}
-      {openHub && openHub.id !== 'hub1' && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+      {openHub && <ChatDrawer hub={openHub} onClose={()=>setOpenHub(null)} data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
     </div>
   );
 }
@@ -5401,7 +5655,10 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
           model: 'claude-sonnet-4-6',
           max_tokens: 1024,
           ...(useApiTts && {stream: true}),
-          system: hub.id==='hub-career' ? buildCareerHubSystem(hub.system, data) : hub.system,
+          system: hub.id==='hub-career' ? buildCareerHubSystem(hub.system, data)
+                : hub.id==='hub1' ? buildPhilosophyPrompt(data.philosophyBriefing)
+                : hub.id==='hub-acumen' ? buildAcumenPrompt(data.businessAcumenBriefing)
+                : hub.system,
           messages: history,
         })
       });
@@ -5472,14 +5729,17 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
         const finalOut = cleanText(fullRaw) || '(no response)';
         setMessages(msgs => msgs.map(x => x.id===botId ? {...x, text: finalOut} : x));
         playChain.then(()=>{ if(speakGenRef.current===gen) setSpeaking(false); });
+        if(hub.stateDriven) applyStateUpdate(fullRaw, setData);
 
       } else {
         // ── Non-streaming path (browser TTS or no TTS provider) ──
         const j = await resp.json();
         if(j.error) throw new Error(j.error.message||'API error');
-        const out = cleanText(j?.content?.[0]?.text || '(no response)');
+        const rawOut = j?.content?.[0]?.text || '(no response)';
+        const out = cleanText(rawOut);
         setMessages(m=>[...m, {id:uid(), role:'ai', text:out, at:new Date().toISOString()}]);
         setTyping(false);
+        if(hub.stateDriven) applyStateUpdate(rawOut, setData);
         speak(out);
         return;
       }
@@ -5503,7 +5763,13 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
           <div className="text-2xl">{hub.emoji}</div>
           <div>
             <div className="font-bold">{hub.name}</div>
-            <div className="text-xs" style={{color:'#475569'}}>AI Assistant</div>
+            {hub.id==='hub1' && data.philosophyBriefing && (
+              <div className="text-xs" style={{color:'#818cf8'}}>Day {data.philosophyBriefing.currentDay} · {data.philosophyBriefing.currentTheme.split('—')[0].trim()}</div>
+            )}
+            {hub.id==='hub-acumen' && data.businessAcumenBriefing && (
+              <div className="text-xs" style={{color:'#10b981'}}>Day {data.businessAcumenBriefing.currentDayInTheme} · {data.businessAcumenBriefing.currentWeekTheme}</div>
+            )}
+            {!hub.stateDriven && <div className="text-xs" style={{color:'#475569'}}>AI Assistant</div>}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -5516,10 +5782,45 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
       {/* Messages */}
       <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
         {messages.length===0 && (
-          <div className="text-center mt-12" style={{color:'#334155'}}>
-            <div className="text-4xl mb-3">{hub.emoji}</div>
-            <div className="text-sm font-medium">{hub.name}</div>
-            <div className="text-xs mt-1">Ask me anything</div>
+          <div className="mt-8 px-2">
+            <div className="text-center mb-6" style={{color:'#334155'}}>
+              <div className="text-4xl mb-2">{hub.emoji}</div>
+              <div className="text-sm font-medium" style={{color:'#64748b'}}>{hub.name}</div>
+            </div>
+            {hub.id==='hub1' && data.philosophyBriefing && (
+              <div className="glass rounded-xl p-4 space-y-3 text-xs" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-semibold text-sm" style={{color:'#818cf8'}}>Philosophy Briefing — Day {data.philosophyBriefing.currentDay}</div>
+                    <div style={{color:'#64748b',marginTop:'2px'}}>{data.philosophyBriefing.currentTheme}</div>
+                  </div>
+                  <div className="text-right">
+                    <div style={{color:'#a5b4fc'}}>Avg {data.philosophyBriefing.speakingScoreHistory?.length ? (data.philosophyBriefing.speakingScoreHistory.reduce((s,x)=>s+x.score,0)/data.philosophyBriefing.speakingScoreHistory.length).toFixed(0) : '—'}/100</div>
+                    <div style={{color:'#475569'}}>Sessions {data.philosophyBriefing.speakingScoreHistory?.length||0}</div>
+                  </div>
+                </div>
+                <div style={{color:'#f59e0b',background:'rgba(245,158,11,0.08)',borderRadius:'6px',padding:'6px 8px'}}>⚠ Weakness: {data.philosophyBriefing.activeWeakness}</div>
+                <div style={{color:'#475569'}}>Say "philosophy" or "start" to begin Day {data.philosophyBriefing.currentDay}.</div>
+              </div>
+            )}
+            {hub.id==='hub-acumen' && data.businessAcumenBriefing && (
+              <div className="glass rounded-xl p-4 space-y-3 text-xs" style={{border:'1px solid rgba(16,185,129,0.2)'}}>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-semibold text-sm" style={{color:'#10b981'}}>Business Acumen — Day {data.businessAcumenBriefing.currentDayInTheme}</div>
+                    <div style={{color:'#64748b',marginTop:'2px'}}>{data.businessAcumenBriefing.currentWeekTheme}</div>
+                  </div>
+                  <div className="text-right">
+                    <div style={{color:'#34d399'}}>Avg {data.businessAcumenBriefing.speakingScoreHistory?.length ? (data.businessAcumenBriefing.speakingScoreHistory.reduce((s,x)=>s+x.score,0)/data.businessAcumenBriefing.speakingScoreHistory.length).toFixed(1) : '—'}/10</div>
+                    <div style={{color:'#475569'}}>Sessions {data.businessAcumenBriefing.speakingScoreHistory?.length||0}</div>
+                  </div>
+                </div>
+                <div style={{color:'#f59e0b',background:'rgba(245,158,11,0.08)',borderRadius:'6px',padding:'6px 8px'}}>⚠ Weakness: {data.businessAcumenBriefing.activeWeakness}</div>
+                <div style={{color:'#475569',fontSize:'11px'}}>{data.businessAcumenBriefing.continuityNote}</div>
+                <div style={{color:'#475569'}}>Say "today" or "start" to begin Day {data.businessAcumenBriefing.currentDayInTheme}.</div>
+              </div>
+            )}
+            {!hub.stateDriven && <div className="text-center text-xs" style={{color:'#334155'}}>Ask me anything</div>}
           </div>
         )}
         {messages.map(m=>(
@@ -5877,6 +6178,7 @@ function IconMic(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="no
 function IconNotes(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> }
 function IconInbox(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg> }
 function IconBriefcase(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/><path d="M2 12h20"/></svg> }
+function IconEgg(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2C8 2 4 8 4 13a8 8 0 0 0 16 0c0-5-4-11-8-11z"/></svg> }
 
 /* -------------------- Career Panel -------------------- */
 
@@ -6421,6 +6723,304 @@ function InterviewPrep({questions, addQ, updateQ, deleteQ}){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* -------------------- §9 Golden Egg Capital -------------------- */
+const GE_PHASE_COLORS = {in_progress:'#6366f1', future:'#334155', done:'#10b981'};
+const GE_OWNER_COLORS = {rishi:'#6366f1', rohan:'#10b981', both:'#8b5cf6'};
+
+function GoldenEggPanel({data, setData, toasts, isMobile}){
+  const ge = data.goldenEgg || {};
+  const [tab, setTab] = useState('overview');
+  const [editStrategy, setEditStrategy] = useState(false);
+  const [strategyDraft, setStrategyDraft] = useState(ge.strategyStatement||'');
+  const [expandedTrack, setExpandedTrack] = useState(null);
+  const [sectorNote, setSectorNote] = useState({});
+
+  const upGE = (patch) => setData(d=>({...d, goldenEgg:{...(d.goldenEgg||{}), ...patch}}));
+
+  const toggleTopic = (trackId, topicId) => {
+    const curr = ge.curriculum||[];
+    upGE({curriculum: curr.map(t=> t.id===trackId ? {
+      ...t, topics: t.topics.map(tp=> tp.id===topicId ? {...tp, done:!tp.done} : tp)
+    } : t)});
+  };
+
+  const toggleF30 = (id) => {
+    upGE({firstThirtyDays:(ge.firstThirtyDays||[]).map(i=>i.id===id?{...i,done:!i.done}:i)});
+  };
+
+  const saveStrategy = () => {
+    upGE({strategyStatement: strategyDraft});
+    setEditStrategy(false);
+    toasts.push('Strategy statement saved');
+  };
+
+  const totalTopics = (ge.curriculum||[]).reduce((s,t)=>s+t.topics.length,0);
+  const doneTopics  = (ge.curriculum||[]).reduce((s,t)=>s+t.topics.filter(tp=>tp.done).length,0);
+  const pct = totalTopics ? Math.round(100*doneTopics/totalTopics) : 0;
+  const f30done = (ge.firstThirtyDays||[]).filter(i=>i.done).length;
+  const f30total = (ge.firstThirtyDays||[]).length;
+
+  const tabs = [{id:'overview',label:'Overview'},{id:'curriculum',label:'Curriculum'},{id:'timeline',label:'Timeline'},{id:'sectors',label:'Sectors'}];
+
+  return (
+    <div className="max-w-3xl">
+      {/* Header */}
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span style={{fontSize:'22px'}}>🥚</span>
+            <h2 className="text-xl font-bold" style={{background:'linear-gradient(90deg,#f59e0b,#f97316)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>Golden Egg Capital</h2>
+          </div>
+          <div className="text-xs" style={{color:'#64748b'}}>Small/mid-cap research fund · Rishi (Research) + Rohan (Systems)</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs font-semibold" style={{color:'#f59e0b'}}>{pct}% curriculum</div>
+          <div className="text-xs" style={{color:'#475569'}}>{doneTopics}/{totalTopics} topics</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-5 p-1 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+        {tabs.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+            style={{background:tab===t.id?'rgba(245,158,11,0.15)':'transparent',color:tab===t.id?'#f59e0b':'#475569',border:tab===t.id?'1px solid rgba(245,158,11,0.25)':'1px solid transparent'}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* OVERVIEW */}
+      {tab==='overview' && (
+        <div className="space-y-4">
+          {/* Strategy */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(245,158,11,0.15)'}}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#f59e0b'}}>Strategy Statement</div>
+              <button onClick={()=>{setStrategyDraft(ge.strategyStatement||'');setEditStrategy(!editStrategy);}} className="text-xs px-2 py-0.5 rounded" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>
+                {editStrategy?'Cancel':'Edit'}
+              </button>
+            </div>
+            {editStrategy ? (
+              <div className="space-y-2">
+                <textarea rows={4} value={strategyDraft} onChange={e=>setStrategyDraft(e.target.value)}
+                  className="w-full text-sm p-2 rounded bg-transparent resize-none"
+                  style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',fontFamily:'inherit',lineHeight:1.6}} />
+                <button onClick={saveStrategy} className="px-3 py-1 rounded text-xs font-semibold" style={{background:'linear-gradient(90deg,#f59e0b,#f97316)',color:'#000'}}>Save</button>
+              </div>
+            ) : (
+              <p className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{ge.strategyStatement}</p>
+            )}
+          </div>
+
+          {/* Roles */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Roles</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-lg" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.15)'}}>
+                <div className="text-xs" style={{color:'#818cf8'}}>Research Lead</div>
+                <div className="font-semibold mt-1">{ge.roles?.researchLead||'—'}</div>
+                <div className="text-xs mt-1" style={{color:'#475569'}}>Thesis writing · business quality analysis · investment memos · sector frameworks</div>
+              </div>
+              <div className="p-3 rounded-lg" style={{background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.15)'}}>
+                <div className="text-xs" style={{color:'#10b981'}}>Systems Lead</div>
+                <div className="font-semibold mt-1">{ge.roles?.systemsLead||'—'}</div>
+                <div className="text-xs mt-1" style={{color:'#475569'}}>AI/data infra · EDGAR pipeline · automation · monitoring · paper-trading logs</div>
+              </div>
+            </div>
+          </div>
+
+          {/* First 30 Days */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#475569'}}>First 30 Days</div>
+              <div className="text-xs" style={{color:f30done===f30total?'#10b981':'#64748b'}}>{f30done}/{f30total} done</div>
+            </div>
+            <div className="space-y-2">
+              {(ge.firstThirtyDays||[]).map(item=>(
+                <div key={item.id} className="flex items-start gap-3 cursor-pointer" onClick={()=>toggleF30(item.id)}>
+                  <div className="w-5 h-5 rounded flex-shrink-0 flex items-center justify-center mt-0.5"
+                    style={{background:item.done?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.04)',border:item.done?'1px solid rgba(16,185,129,0.4)':'1px solid rgba(255,255,255,0.08)',color:'#10b981',fontSize:'12px'}}>
+                    {item.done?'✓':''}
+                  </div>
+                  <div className="text-sm" style={{color:item.done?'#475569':'#e2e8f0',textDecoration:item.done?'line-through':'none'}}>{item.text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CURRICULUM */}
+      {tab==='curriculum' && (
+        <div className="space-y-3">
+          {(ge.curriculum||[]).map(track=>{
+            const done = track.topics.filter(t=>t.done).length;
+            const total = track.topics.length;
+            const pctT = total ? Math.round(100*done/total) : 0;
+            const isOpen = expandedTrack===track.id;
+            const ownerColor = GE_OWNER_COLORS[track.owner]||'#6366f1';
+            return (
+              <div key={track.id} className="glass rounded-xl" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="flex items-center justify-between p-4 cursor-pointer" onClick={()=>setExpandedTrack(isOpen?null:track.id)}>
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div>
+                      <div className="font-medium text-sm">{track.name}</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:`${ownerColor}18`,color:ownerColor}}>{track.owner}</span>
+                        <span className="text-xs" style={{color:'#475569'}}>{done}/{total} done</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <div style={{width:'60px',height:'6px',background:'rgba(255,255,255,0.06)',borderRadius:'3px',overflow:'hidden'}}>
+                      <div style={{width:`${pctT}%`,height:'100%',background:`${ownerColor}`,borderRadius:'3px',transition:'width 0.3s'}}/>
+                    </div>
+                    <span className="text-xs font-medium" style={{color:ownerColor,minWidth:'30px',textAlign:'right'}}>{pctT}%</span>
+                    <span style={{color:'#334155',fontSize:'12px'}}>{isOpen?'▲':'▼'}</span>
+                  </div>
+                </div>
+                {isOpen && (
+                  <div className="px-4 pb-4 grid grid-cols-1 gap-1.5" style={{borderTop:'1px solid rgba(255,255,255,0.04)'}}>
+                    <div className="h-2"/>
+                    {track.topics.map(tp=>(
+                      <div key={tp.id} className="flex items-center gap-2.5 cursor-pointer py-1" onClick={()=>toggleTopic(track.id, tp.id)}>
+                        <div className="w-4 h-4 rounded flex-shrink-0 flex items-center justify-center"
+                          style={{background:tp.done?`${ownerColor}20`:'rgba(255,255,255,0.04)',border:tp.done?`1px solid ${ownerColor}50`:'1px solid rgba(255,255,255,0.08)',color:ownerColor,fontSize:'10px'}}>
+                          {tp.done?'✓':''}
+                        </div>
+                        <span className="text-xs" style={{color:tp.done?'#475569':'#94a3b8',textDecoration:tp.done?'line-through':'none'}}>{tp.title}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* TIMELINE */}
+      {tab==='timeline' && (
+        <div className="space-y-3">
+          {(ge.phases||[]).map((ph,i)=>{
+            const isActive = ph.status==='in_progress';
+            const isDone   = ph.status==='done';
+            const color = isActive?'#6366f1':isDone?'#10b981':'#334155';
+            return (
+              <div key={ph.id} className="glass rounded-xl p-4" style={{border:`1px solid ${isActive?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.06)'}`,background:isActive?'rgba(99,102,241,0.05)':'transparent'}}>
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold mt-0.5"
+                    style={{background:`${color}20`,color,border:`1px solid ${color}40`}}>
+                    {isDone?'✓':i+1}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-semibold text-sm">{ph.name}</div>
+                      {isActive && <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>Current</span>}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{color:'#475569'}}>{ph.timeframe}</div>
+                    <div className="text-xs mt-2" style={{color:'#64748b'}}><span style={{color:'#94a3b8',fontWeight:600}}>Goal:</span> {ph.goal}</div>
+                    <div className="text-xs mt-1" style={{color:'#64748b'}}><span style={{color:'#94a3b8',fontWeight:600}}>Deliverable:</span> {ph.deliverable}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* SECTORS */}
+      {tab==='sectors' && (
+        <div className="space-y-3">
+          <div className="text-xs mb-4" style={{color:'#475569'}}>Explore these sectors to find where small/mid-cap inefficiencies exist. Narrow to 2-3 by end of Phase 1.</div>
+          {(ge.sectorCandidates||[]).map((s,i)=>(
+            <div key={i} className="glass rounded-xl p-3" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div className="flex items-center justify-between">
+                <div className="font-medium text-sm">{s.name}</div>
+                <select value={s.status} onChange={e=>{
+                  const updated = [...(ge.sectorCandidates||[])];
+                  updated[i]={...updated[i],status:e.target.value};
+                  upGE({sectorCandidates:updated});
+                }} className="text-xs rounded px-2 py-0.5 bg-transparent"
+                  style={{border:'1px solid rgba(255,255,255,0.08)',color:s.status==='selected'?'#10b981':s.status==='eliminated'?'#ef4444':'#64748b'}}>
+                  <option value="exploring">Exploring</option>
+                  <option value="selected">Selected</option>
+                  <option value="eliminated">Eliminated</option>
+                </select>
+              </div>
+              <input value={sectorNote[i]!==undefined?sectorNote[i]:(s.notes||'')}
+                onChange={e=>setSectorNote(prev=>({...prev,[i]:e.target.value}))}
+                onBlur={e=>{
+                  const updated=[...(ge.sectorCandidates||[])];
+                  updated[i]={...updated[i],notes:e.target.value};
+                  upGE({sectorCandidates:updated});
+                  setSectorNote(prev=>{const n={...prev};delete n[i];return n;});
+                }}
+                placeholder="Notes…"
+                className="mt-2 w-full text-xs bg-transparent"
+                style={{border:'none',outline:'none',color:'#64748b',padding:0}} />
+            </div>
+          ))}
+
+          {/* Watchlist */}
+          <div className="mt-6">
+            <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Company Watchlist</div>
+            {(ge.watchlist||[]).length===0 ? (
+              <div className="glass rounded-xl p-6 text-center text-xs" style={{color:'#334155'}}>No companies yet. Add your first research target after choosing sectors.</div>
+            ) : (
+              <div className="space-y-2">
+                {(ge.watchlist||[]).map((co,i)=>(
+                  <div key={i} className="glass rounded-xl p-3 flex items-center justify-between" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                    <div>
+                      <div className="font-medium text-sm">{co.ticker} — {co.name}</div>
+                      <div className="text-xs mt-0.5" style={{color:'#475569'}}>{co.sector} · {co.notes}</div>
+                    </div>
+                    <button onClick={()=>upGE({watchlist:(ge.watchlist||[]).filter((_,j)=>j!==i)})} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',background:'rgba(239,68,68,0.08)'}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <WatchlistAddForm onAdd={co=>upGE({watchlist:[...(ge.watchlist||[]),co]})} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WatchlistAddForm({onAdd}){
+  const [open, setOpen] = useState(false);
+  const [ticker, setTicker] = useState('');
+  const [name, setName] = useState('');
+  const [sector, setSector] = useState('');
+  const [notes, setNotes] = useState('');
+  const save = ()=>{
+    if(!ticker.trim()) return;
+    onAdd({ticker:ticker.trim().toUpperCase(), name:name.trim(), sector:sector.trim(), notes:notes.trim()});
+    setTicker(''); setName(''); setSector(''); setNotes(''); setOpen(false);
+  };
+  if(!open) return (
+    <button onClick={()=>setOpen(true)} className="mt-3 w-full py-2 rounded-xl text-xs font-medium" style={{background:'rgba(245,158,11,0.1)',color:'#f59e0b',border:'1px solid rgba(245,158,11,0.2)'}}>
+      + Add company to watchlist
+    </button>
+  );
+  return (
+    <div className="mt-3 glass rounded-xl p-4 space-y-2" style={{border:'1px solid rgba(245,158,11,0.2)'}}>
+      <div className="grid grid-cols-2 gap-2">
+        <input value={ticker} onChange={e=>setTicker(e.target.value)} placeholder="Ticker *" className="px-2 py-1.5 rounded text-xs bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Company name" className="px-2 py-1.5 rounded text-xs bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+      </div>
+      <input value={sector} onChange={e=>setSector(e.target.value)} placeholder="Sector" className="w-full px-2 py-1.5 rounded text-xs bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+      <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Quick thesis / why watching" className="w-full px-2 py-1.5 rounded text-xs bg-transparent" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}} />
+      <div className="flex gap-2">
+        <button onClick={save} className="px-3 py-1.5 rounded text-xs font-semibold" style={{background:'linear-gradient(90deg,#f59e0b,#f97316)',color:'#000'}}>Add</button>
+        <button onClick={()=>setOpen(false)} className="px-3 py-1.5 rounded text-xs" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>Cancel</button>
+      </div>
     </div>
   );
 }
