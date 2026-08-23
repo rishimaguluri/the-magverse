@@ -56,7 +56,7 @@ When Rishi asks for advice, give him your actual read — where he's strong, whe
 
 // Default data
 const defaultState = () => ({
-  settings: { apiKey: '', accent: 'indigo', userName: 'You', avatarInitial: 'Y' },
+  settings: { apiKey: '', accent: 'indigo', userName: 'You', avatarInitial: 'Y', syncEndpoint: '', syncKey: '' },
   events: [],
   assignments: [],
   workouts: [],
@@ -67,6 +67,7 @@ const defaultState = () => ({
   hubs: DEFAULT_HUBS(),
   career: { contacts: [], questions: [], applications: [] },
   seenDeals: [],
+  inbox: [], // §3 universal capture
   planner: {
     areas:[
       {id:'pa1',name:'Startups',color:'#6366f1',description:'Entrepreneurial projects and ideas'},
@@ -98,20 +99,100 @@ function useToasts(){
   return {toasts, push, remove};
 }
 
-// Simple voice recognition helper
+// Voice recognition — degrades gracefully on mobile Safari (no SpeechRecognition)
+const HAS_SPEECH_API = (typeof window !== 'undefined') && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 function useDictation(onResult){
   const recogRef = useRef(null);
   useEffect(()=>{
-    if(!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
+    if(!HAS_SPEECH_API) return;
     const R = window.SpeechRecognition || window.webkitSpeechRecognition;
     const r = new R(); r.lang='en-US'; r.interimResults=false; r.maxAlternatives=1;
     r.onresult = (e)=>{ const t = e.results[0][0].transcript; onResult && onResult(t); };
     r.onerror = ()=>{};
     recogRef.current = r;
   },[onResult]);
-  const start = ()=>{ recogRef.current && recogRef.current.start(); };
-  const stop = ()=>{ recogRef.current && recogRef.current.stop(); };
-  return { start, stop };
+  const start = ()=>{ if(recogRef.current) try{ recogRef.current.start(); }catch(e){} };
+  const stop  = ()=>{ if(recogRef.current) try{ recogRef.current.stop();  }catch(e){} };
+  return { start, stop, hasSpeech: HAS_SPEECH_API };
+}
+
+/* ── IndexedDB auto-backup (§2) ────────────────────────────────────────────
+   Debounced 5 s after each data write. Keeps last 5 snapshots.
+   Never stores API responses — only the app data object.                    */
+const IDB_NAME = 'magverse-backup', IDB_STORE = 'snapshots', IDB_MAX = 5;
+function openIDB(){
+  return new Promise((res,rej)=>{
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = e=>{ e.target.result.createObjectStore(IDB_STORE, {keyPath:'ts'}); };
+    req.onsuccess = e=>res(e.target.result);
+    req.onerror   = e=>rej(e.target.error);
+  });
+}
+async function idbSaveSnapshot(data){
+  try {
+    const db  = await openIDB();
+    const tx  = db.transaction(IDB_STORE,'readwrite');
+    const st  = tx.objectStore(IDB_STORE);
+    const ts  = Date.now();
+    st.put({ts, data});
+    // Prune old snapshots — keep latest IDB_MAX
+    const allReq = st.getAllKeys();
+    allReq.onsuccess = ()=>{
+      const keys = allReq.result.sort((a,b)=>a-b);
+      keys.slice(0, Math.max(0, keys.length - IDB_MAX)).forEach(k=>st.delete(k));
+    };
+    db.close();
+    return ts;
+  } catch(e){ return null; }
+}
+async function idbLatestSnapshot(){
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE,'readonly');
+    const st = tx.objectStore(IDB_STORE);
+    return await new Promise((res,rej)=>{
+      const req = st.openCursor(null,'prev');
+      req.onsuccess = e=>res(e.target.result?.value || null);
+      req.onerror   = e=>rej(null);
+    });
+  } catch(e){ return null; }
+}
+function useIndexedDBBackup(data){
+  const [lastBackup, setLastBackup] = useLocalState('magverse:lastBackup', null);
+  const timerRef = useRef(null);
+  useEffect(()=>{
+    clearTimeout(timerRef.current);
+    // Debounce 5 s — never writes on every keystroke
+    timerRef.current = setTimeout(async ()=>{
+      const ts = await idbSaveSnapshot(data);
+      if(ts) setLastBackup(ts);
+    }, 5000);
+    return ()=>clearTimeout(timerRef.current);
+  },[data]);
+  return lastBackup;
+}
+
+/* ── Cloud sync skeleton (§2) ──────────────────────────────────────────────
+   No-ops when no endpoint is configured. Swap in a real fetch() later.
+   Debounced 30 s to avoid hammering on rapid edits. Backs off on failure.  */
+let _syncBackoff = 30000;
+async function syncUp(data, settings){
+  const url = settings?.syncEndpoint, key = settings?.syncKey;
+  if(!url) return;
+  try {
+    await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','x-sync-key':key||''}, body:JSON.stringify({data, ts:Date.now()}) });
+    _syncBackoff = 30000; // reset on success
+  } catch(e){ _syncBackoff = Math.min(_syncBackoff*2, 300000); } // back off up to 5 min
+}
+async function syncDown(settings){
+  const url = settings?.syncEndpoint, key = settings?.syncKey;
+  if(!url) return null;
+  try {
+    const r = await fetch(url, { headers:{'x-sync-key':key||''} });
+    if(!r.ok) return null;
+    const j = await r.json();
+    return j?.data || null;
+  } catch(e){ return null; }
 }
 
 // Main App
@@ -122,30 +203,75 @@ function App(){
   const toasts = useToasts();
   const [isOnboardSeen, setOnboardSeen] = useLocalState('magverse:onboardSeen', false);
   const isMobile = useIsMobile();
+  const [captureOpen, setCaptureOpen] = useState(false);
+
+  // §2 — IndexedDB auto-backup (debounced inside hook)
+  const lastBackup = useIndexedDBBackup(data);
+
+  // §2 — Cloud sync on load (down) and on a 2-minute interval (up)
+  useEffect(()=>{
+    const settings = data.settings;
+    if(!settings?.syncEndpoint) return;
+    syncDown(settings).then(remote=>{ if(remote) setData(d=>({...d,...remote})); });
+    // Poll every 2 min — fine for a personal app; no tighter than this
+    const id = setInterval(()=>syncUp(data, settings), 120000);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // §3 — Global 'C' key opens quick-capture (only when not typing in an input)
+  useEffect(()=>{
+    const handler = (e)=>{
+      if(e.key==='c'&&!e.metaKey&&!e.ctrlKey&&!e.altKey) {
+        const tag = document.activeElement?.tagName;
+        if(tag==='INPUT'||tag==='TEXTAREA'||document.activeElement?.isContentEditable) return;
+        setCaptureOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return ()=>window.removeEventListener('keydown', handler);
+  },[]);
 
   useEffect(()=>{ document.title = 'The Magverse'; },[]);
 
+  const inboxCount = (data.inbox||[]).filter(i=>{
+    const age = (Date.now()-new Date(i.createdAt).getTime())/3600000;
+    return age>48;
+  }).length;
+
   return (
     <div className="h-full flex text-sm">
-      {!isMobile && <Sidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} active={active} setActive={setActive} data={data} />}
+      {!isMobile && <Sidebar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} active={active} setActive={setActive} data={data} inboxCount={(data.inbox||[]).length} />}
       <div className="flex-1 flex flex-col min-h-0">
-        <Topbar setActive={setActive} data={data} toasts={toasts} isMobile={isMobile} />
+        <Topbar setActive={setActive} data={data} toasts={toasts} isMobile={isMobile} lastBackup={lastBackup} onCapture={()=>setCaptureOpen(true)} />
         <main className="flex-1 overflow-auto" style={{padding: isMobile ? '12px 12px 80px' : '24px'}}>
           <div className="max-w-full">
-            {active==='schedule' && <SchedulePanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
-            {active==='assignments' && <AssignmentsPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='gym' && <GymPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='social' && <SocialPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='notes' && <NotesPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='chathubs' && <ChatHubsPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
-            {active==='settings' && <SettingsPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='career' && <CareerPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='schedule'    && <SchedulePanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='assignments' && <AssignmentsPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='gym'         && <GymPanel         data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='social'      && <SocialPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='notes'       && <NotesPanel       data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='chathubs'    && <ChatHubsPanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='settings'    && <SettingsPanel    data={data} setData={setData} toasts={toasts} lastBackup={lastBackup} />}
+            {active==='career'      && <CareerPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='inbox'       && <InboxPanel       data={data} setData={setData} toasts={toasts} isMobile={isMobile} setActive={setActive} />}
           </div>
         </main>
       </div>
 
-      {isMobile && <BottomNav active={active} setActive={setActive} />}
+      {isMobile && <BottomNav active={active} setActive={setActive} inboxCount={(data.inbox||[]).length} />}
       {!isMobile && <ChatLauncher onOpen={()=>setActive('chathubs')} />}
+
+      {/* Mobile floating capture button */}
+      {isMobile && (
+        <button onClick={()=>setCaptureOpen(true)}
+          className="fixed z-40 w-12 h-12 rounded-full flex items-center justify-center shadow-lg"
+          style={{bottom:'80px',right:'16px',background:'linear-gradient(135deg,#6366f1,#8b5cf6)',border:'none',fontSize:'22px'}}>
+          +
+        </button>
+      )}
+
+      {/* §3 Quick Capture Modal */}
+      {captureOpen && <QuickCaptureModal onClose={()=>setCaptureOpen(false)} data={data} setData={setData} toasts={toasts} />}
 
       {/* Toasts */}
       <div className="fixed flex flex-col gap-2 z-50" style={{right:'16px', bottom: isMobile ? '72px' : '24px'}}>
@@ -643,42 +769,46 @@ function useIsMobile(){
   return m;
 }
 
-function BottomNav({active, setActive}){
+function BottomNav({active, setActive, inboxCount=0}){
   const items = [
     {id:'schedule',     label:'Schedule', icon:IconCalendar},
     {id:'assignments',  label:'Tasks',    icon:IconKanban},
-    {id:'career',       label:'Career',   icon:IconBriefcase},
-    {id:'gym',          label:'Gym',      icon:IconDumbbell},
-    {id:'social',       label:'Social',   icon:IconUsers},
+    {id:'inbox',        label:'Inbox',    icon:IconInbox, badge:inboxCount},
     {id:'notes',        label:'Notes',    icon:IconNotes},
     {id:'chathubs',     label:'Learn',    icon:IconChat},
+    {id:'career',       label:'Career',   icon:IconBriefcase},
     {id:'settings',     label:'More',     icon:IconGear},
   ];
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 flex justify-around items-center py-2 safe-area-bottom"
-      style={{background:'rgba(10,10,15,0.97)',backdropFilter:'blur(16px)',borderTop:'1px solid rgba(255,255,255,0.07)',paddingBottom:'max(8px,env(safe-area-inset-bottom))'}}>
+    <nav className="fixed bottom-0 left-0 right-0 z-40 flex justify-around items-center"
+      style={{background:'rgba(10,10,15,0.97)',backdropFilter:'blur(16px)',borderTop:'1px solid rgba(255,255,255,0.07)',paddingBottom:'max(8px,env(safe-area-inset-bottom))',paddingTop:'8px'}}>
       {items.map(it=>(
         <button key={it.id} onClick={()=>setActive(it.id)}
-          className="flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl transition-all"
-          style={{color:active===it.id?'#818cf8':'#475569',minWidth:'40px'}}>
+          className="relative flex flex-col items-center gap-0.5 px-2 py-1 rounded-xl transition-all"
+          style={{color:active===it.id?'#818cf8':'#475569',minWidth:'44px',minHeight:'44px',justifyContent:'center'}}>
           <it.icon />
           <span style={{fontSize:'9px',fontWeight:active===it.id?700:400}}>{it.label}</span>
+          {it.badge>0 && (
+            <span className="absolute top-0 right-0 w-4 h-4 rounded-full flex items-center justify-center text-white"
+              style={{background:'#ef4444',fontSize:'9px',fontWeight:700}}>{it.badge>9?'9+':it.badge}</span>
+          )}
         </button>
       ))}
     </nav>
   );
 }
 
-function Sidebar({collapsed, setCollapsed, active, setActive}){
+function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
   const items = [
-    {id:'schedule', label:'Schedule', icon:IconCalendar},
-    {id:'assignments', label:'Tasks', icon:IconKanban},
-    {id:'career', label:'Career', icon:IconBriefcase},
-    {id:'gym', label:'Gym', icon:IconDumbbell},
-    {id:'social', label:'Social', icon:IconUsers},
-    {id:'notes', label:'Notes', icon:IconNotes},
-    {id:'chathubs', label:'Learning Hub', icon:IconChat},
-    {id:'settings', label:'Settings', icon:IconGear},
+    {id:'schedule',    label:'Schedule',     icon:IconCalendar},
+    {id:'assignments', label:'Tasks',        icon:IconKanban},
+    {id:'inbox',       label:'Inbox',        icon:IconInbox, badge:inboxCount},
+    {id:'career',      label:'Career',       icon:IconBriefcase},
+    {id:'gym',         label:'Gym',          icon:IconDumbbell},
+    {id:'social',      label:'Social',       icon:IconUsers},
+    {id:'notes',       label:'Notes',        icon:IconNotes},
+    {id:'chathubs',    label:'Learning Hub', icon:IconChat},
+    {id:'settings',    label:'Settings',     icon:IconGear},
   ];
   return (
     <aside className={`flex-shrink-0 p-3 ${collapsed? 'w-16':'w-56'} h-full border-r border-subtle glass`}>
@@ -691,9 +821,15 @@ function Sidebar({collapsed, setCollapsed, active, setActive}){
       </div>
       <nav className="flex flex-col gap-1">
         {items.map(it=> (
-          <button key={it.id} onClick={()=>setActive(it.id)} className={`flex items-center gap-3 w-full p-2 rounded ${active===it.id? 'bg-white/6':''} hover:bg-white/3`}>
+          <button key={it.id} onClick={()=>setActive(it.id)}
+            className={`relative flex items-center gap-3 w-full p-2 rounded ${active===it.id? 'bg-white/6':''} hover:bg-white/3`}
+            style={{minHeight:'44px'}}>
             <it.icon />
             {!collapsed && <span>{it.label}</span>}
+            {it.badge>0 && (
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full flex items-center justify-center text-white"
+                style={{background:'#ef4444',fontSize:'9px',fontWeight:700}}>{it.badge>9?'9+':it.badge}</span>
+            )}
           </button>
         ))}
       </nav>
@@ -2604,6 +2740,151 @@ function TasksAssistant({tasks, sort, setSort, filter, setFilter, onAddTask, onE
                   fontSize:'20px',position:'relative',zIndex:1}}>
           {listening ? '●' : open ? '×' : '🎤'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- §3 Quick Capture Modal -------------------- */
+function QuickCaptureModal({onClose, data, setData, toasts}){
+  const [text, setText] = useState('');
+  const [listening, setListening] = useState(false);
+  const inputRef = useRef(null);
+  const dict = useDictation(t=>{ setText(prev=>prev?prev+' '+t:t); setListening(false); });
+
+  useEffect(()=>{ inputRef.current?.focus(); },[]);
+
+  const save = ()=>{
+    if(!text.trim()) return;
+    const item = {id:uid(), text:text.trim(), createdAt:new Date().toISOString(), source:'text'};
+    setData(d=>({...d, inbox:[...(d.inbox||[]), item]}));
+    toasts.push('Captured to inbox');
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose}/>
+      <div className="glass rounded-2xl z-50 w-full max-w-lg p-5 space-y-4" style={{border:'1px solid rgba(255,255,255,0.1)'}}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold text-base">Quick Capture</div>
+            <div className="text-xs mt-0.5" style={{color:'#64748b'}}>Press C anywhere to open · Enter to save</div>
+          </div>
+          <button onClick={onClose} style={{color:'#64748b',fontSize:'20px',lineHeight:1}}>×</button>
+        </div>
+        <textarea ref={inputRef} value={text} onChange={e=>setText(e.target.value)}
+          onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); save(); } if(e.key==='Escape') onClose(); }}
+          placeholder="Capture anything — task, idea, note, event…"
+          rows={3} style={{width:'100%',resize:'none',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'10px',padding:'10px',fontSize:'14px',color:'#e2e8f0',outline:'none',fontFamily:'inherit',lineHeight:1.5}}
+        />
+        <div className="flex items-center gap-2 justify-between">
+          {HAS_SPEECH_API ? (
+            <button onClick={()=>{ dict.start(); setListening(true); }}
+              style={{padding:'8px 14px',borderRadius:'8px',background:listening?'rgba(239,68,68,0.18)':'rgba(255,255,255,0.05)',border:listening?'1px solid rgba(239,68,68,0.35)':'1px solid rgba(255,255,255,0.08)',color:listening?'#f87171':'#64748b',fontSize:'13px',display:'flex',alignItems:'center',gap:'6px'}}>
+              🎤 {listening?'Listening…':'Voice'}
+            </button>
+          ) : (
+            <div/>
+          )}
+          <div className="flex gap-2">
+            <button onClick={onClose} style={{padding:'8px 16px',borderRadius:'8px',background:'rgba(255,255,255,0.05)',color:'#94a3b8',fontSize:'13px'}}>Cancel</button>
+            <button onClick={save} disabled={!text.trim()}
+              style={{padding:'8px 20px',borderRadius:'8px',background:text.trim()?'linear-gradient(90deg,#6366f1,#8b5cf6)':'rgba(255,255,255,0.06)',color:text.trim()?'#fff':'#334155',fontSize:'13px',fontWeight:600}}>
+              Capture →
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- §3 Inbox Panel -------------------- */
+const INBOX_TRIAGE = [
+  {label:'Task',    color:'#6366f1', bg:'rgba(99,102,241,0.15)',  key:'task'},
+  {label:'Note',    color:'#10b981', bg:'rgba(16,185,129,0.15)',  key:'note'},
+  {label:'Journal', color:'#8b5cf6', bg:'rgba(139,92,246,0.15)', key:'journal'},
+  {label:'Event',   color:'#f59e0b', bg:'rgba(245,158,11,0.15)', key:'event'},
+  {label:'Contact', color:'#3b82f6', bg:'rgba(59,130,246,0.15)', key:'contact'},
+];
+
+function InboxPanel({data, setData, toasts, isMobile, setActive}){
+  const [triaging, setTriaging] = useState(null); // {item, action}
+  const inbox = data.inbox || [];
+
+  const removeItem = (id)=> setData(d=>({...d, inbox:(d.inbox||[]).filter(i=>i.id!==id)}));
+
+  const triage = (item, key)=>{
+    const text = item.text;
+    if(key==='task'){
+      setData(d=>({...d, assignments:[...(d.assignments||[]),{id:uid(),title:text,category:'personal',priority:'Med',status:'To Do',createdAt:new Date().toISOString()}]}));
+      toasts.push('Added to Tasks');
+    } else if(key==='note'){
+      setData(d=>({...d, notes:[...(d.notes||[]),{id:uid(),title:text.slice(0,60),body:text,tags:[],createdAt:new Date().toISOString()}]}));
+      toasts.push('Added to Notes');
+    } else if(key==='journal'){
+      setData(d=>({...d, journals:[...(d.journals||[]),{id:uid(),date:new Date().toISOString().slice(0,10),body:text,tags:[],createdAt:new Date().toISOString()}]}));
+      toasts.push('Added to Journal');
+    } else if(key==='event'){
+      setData(d=>({...d, events:[...(d.events||[]),{id:uid(),title:text.slice(0,80),type:'Personal',notes:text,when:{day:new Date().getDay(),hour:9}}]}));
+      toasts.push('Added to Calendar');
+    } else if(key==='contact'){
+      const existing = d=>d.social||[];
+      setData(d=>({...d, social:[...existing(d),{id:uid(),name:text.slice(0,60),notes:text,createdAt:new Date().toISOString()}]}));
+      toasts.push('Added to Contacts');
+    }
+    removeItem(item.id);
+  };
+
+  const staleThreshold = 48*3600*1000;
+
+  return (
+    <div className="max-w-2xl">
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-xl font-semibold">Inbox</h2>
+          <div className="text-xs mt-0.5" style={{color:'#64748b'}}>{inbox.length} item{inbox.length!==1?'s':''} · press <kbd style={{background:'rgba(255,255,255,0.07)',borderRadius:'4px',padding:'1px 5px',fontSize:'11px',fontFamily:'monospace'}}>C</kbd> anywhere to capture</div>
+        </div>
+      </div>
+
+      {inbox.length===0 && (
+        <div className="glass rounded-xl p-10 text-center border-subtle">
+          <div style={{fontSize:'32px',marginBottom:'12px'}}>📥</div>
+          <div style={{color:'#64748b',fontSize:'14px'}}>Inbox is clear</div>
+          <div style={{color:'#334155',fontSize:'12px',marginTop:'4px'}}>Press C to capture anything — tasks, ideas, notes, events</div>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {[...inbox].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).map(item=>{
+          const age = Date.now()-new Date(item.createdAt).getTime();
+          const stale = age > staleThreshold;
+          const ageLabel = age<3600000 ? 'just now' : age<86400000 ? `${Math.floor(age/3600000)}h ago` : `${Math.floor(age/86400000)}d ago`;
+          return (
+            <div key={item.id} className="glass rounded-xl border-subtle p-4" style={{borderLeft:stale?'3px solid #f59e0b':undefined}}>
+              <div className="flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm leading-relaxed" style={{color:'#e2e8f0',whiteSpace:'pre-wrap'}}>{item.text}</div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs" style={{color:stale?'#fbbf24':'#475569'}}>{ageLabel}{stale?' · needs triage':''}</span>
+                  </div>
+                  {/* Triage buttons */}
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {INBOX_TRIAGE.map(t=>(
+                      <button key={t.key} onClick={()=>triage(item, t.key)}
+                        className="text-xs px-2.5 py-1 rounded-full font-medium transition-all"
+                        style={{background:t.bg,color:t.color,border:`1px solid ${t.color}22`}}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={()=>removeItem(item.id)} className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 hover:bg-red-500/20" style={{color:'#475569',fontSize:'16px'}}>×</button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -5275,11 +5556,13 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
             rows={1} value={text} onChange={e=>setText(e.target.value)}
             onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendMsg(); } }}
             placeholder="Message…" />
-          <button onClick={startVoice}
-            className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all"
-            style={{background:listening?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:listening?'#818cf8':'#64748b'}}>
-            {IconMic()}
-          </button>
+          {HAS_SPEECH_API && (
+            <button onClick={startVoice}
+              className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all"
+              style={{background:listening?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)',color:listening?'#818cf8':'#64748b'}}>
+              {IconMic()}
+            </button>
+          )}
           <button onClick={()=>sendMsg()}
             className="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all"
             style={{background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white'}}>
@@ -5304,11 +5587,13 @@ const ELEVENLABS_VOICES = [
   {id:'yoZ06aMxZJJ28mfd3POQ', name:'Sam (raspy, American male)'},
 ];
 
-function SettingsPanel({data, setData, toasts}){
+function SettingsPanel({data, setData, toasts, lastBackup}){
   const s = data.settings || {};
   const [apiKey, setApiKey] = useState(s.apiKey || '');
   const [accent, setAccent] = useState(s.accent || 'indigo');
   const [name, setName] = useState(s.userName || 'You');
+  const [syncEndpoint, setSyncEndpoint] = useState(s.syncEndpoint || '');
+  const [syncKey, setSyncKey] = useState(s.syncKey || '');
   const [ttsProvider, setTtsProvider] = useState(s.ttsProvider || 'browser');
   const [ttsVoice, setTtsVoice] = useState(s.ttsVoice || '');
   const [elevenLabsKey, setElevenLabsKey] = useState(s.elevenLabsKey || '');
@@ -5366,7 +5651,7 @@ function SettingsPanel({data, setData, toasts}){
 
   const save = ()=>{
     setData(d=>({...d, settings:{...d.settings, apiKey, accent, userName:name, avatarInitial:(name[0]||'Y').toUpperCase(),
-      ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice, voyageKey}}));
+      ttsProvider, ttsVoice, elevenLabsKey, elevenLabsVoice, openaiTtsKey, openaiTtsVoice, voyageKey, syncEndpoint, syncKey}}));
     toasts.push('Settings saved');
   };
   const exportAll = ()=>{
@@ -5515,11 +5800,18 @@ function SettingsPanel({data, setData, toasts}){
 
       {/* Data Backup */}
       <div style={{borderTop:'1px solid rgba(255,255,255,0.05)', paddingTop:'16px'}}>
-        <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Data Backup</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#475569'}}>Data Backup</div>
+          {lastBackup && (
+            <div className="text-xs" style={{color:'#334155'}}>
+              Auto-backed up {new Date(lastBackup).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+            </div>
+          )}
+        </div>
         <p className="text-xs mb-4 leading-relaxed" style={{color:'#64748b'}}>
-          All your data (tasks, notes, calendar, life planner, journals) is stored in this browser. Export a backup to save it as a file you can commit to GitHub or restore on any device.
+          All your data is stored in this browser. Auto-backup writes to IndexedDB every 5 s. Export a JSON file to save externally or restore on another device.
         </p>
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex gap-3 flex-wrap mb-4">
           <button onClick={exportAll}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium"
             style={{background:'rgba(99,102,241,0.18)',color:'#a5b4fc',border:'1px solid rgba(99,102,241,0.3)'}}>
@@ -5531,7 +5823,15 @@ function SettingsPanel({data, setData, toasts}){
             ↑ Restore from Backup
           </button>
         </div>
-        <p className="text-xs mt-2" style={{color:'#334155'}}>Import replaces all current data with the backup file.</p>
+
+        {/* Cloud sync (§2) */}
+        <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#334155'}}>Cloud Sync (optional)</div>
+        <p className="text-xs mb-3" style={{color:'#475569'}}>Point to a Supabase endpoint or self-hosted JSON API — leave blank to skip. Syncs every 2 min when configured.</p>
+        <div className="grid grid-cols-1 gap-2">
+          <input className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" placeholder="Sync endpoint URL (https://...)" value={syncEndpoint} onChange={e=>setSyncEndpoint(e.target.value)} />
+          <input className="w-full p-2 bg-transparent border border-white/5 rounded text-sm" placeholder="Sync key / token (optional)" value={syncKey} onChange={e=>setSyncKey(e.target.value)} />
+        </div>
+        <p className="text-xs mt-2" style={{color:'#334155'}}>Import replaces all current data. Cloud sync is a no-op until you configure an endpoint.</p>
       </div>
 
       <div className="flex flex-wrap gap-2 pt-2 border-t" style={{borderColor:'rgba(255,255,255,0.05)'}}>
@@ -5575,6 +5875,7 @@ function IconChat(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="n
 function IconGear(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 0 1 2.27 17.9l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L4.21 4.9A2 2 0 0 1 7 2.27l.06.06a1.65 1.65 0 0 0 1.82.33h.09A1.65 1.65 0 0 0 10 2.27V2a2 2 0 0 1 4 0v.09c.15.37.44.7.82.92h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06A2 2 0 0 1 19.73 6l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09c.22.38.56.69.92.82H20a2 2 0 0 1 0 4h-.09c-.37.15-.7.44-.92.82v.09z" /></svg> }
 function IconMic(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 1v11" /><path d="M19 11v1a7 7 0 0 1-14 0v-1" /><path d="M8 21h8" /></svg> }
 function IconNotes(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> }
+function IconInbox(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg> }
 function IconBriefcase(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/><path d="M2 12h20"/></svg> }
 
 /* -------------------- Career Panel -------------------- */

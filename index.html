@@ -7,6 +7,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Magverse" />
+    <meta name="theme-color" content="#6366f1" />
+    <link rel="manifest" href="/manifest.json" />
     <title>The Magverse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,6 +78,9 @@
 
       /* Mic pulse */
       @keyframes pulse{ 0%{transform:scale(1);opacity:0.7} 50%{transform:scale(1.55);opacity:0} 100%{transform:scale(1.55);opacity:0} }
+
+      /* Safe area padding for mobile notch/home bar */
+      .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
     </style>
   </head>
   <body>
@@ -89,6 +94,35 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-presets="react" src="./App.jsx?v=55"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=57"></script>
+    <script>
+      // Register service worker after page loads
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+      // Generate placeholder PWA icons via canvas (no external PNG needed)
+      function makeIcon(size) {
+        const c = document.createElement('canvas'); c.width = c.height = size;
+        const ctx = c.getContext('2d');
+        const g = ctx.createLinearGradient(0,0,size,size);
+        g.addColorStop(0,'#6366f1'); g.addColorStop(1,'#8b5cf6');
+        ctx.fillStyle = g; ctx.beginPath();
+        ctx.roundRect(0,0,size,size,size*0.2); ctx.fill();
+        ctx.fillStyle='#fff'; ctx.font=`bold ${size*0.45}px Inter,sans-serif`;
+        ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText('M',size/2,size/2+size*0.04);
+        return c.toDataURL('image/png');
+      }
+      // Patch manifest icon srcs with generated data URIs
+      window.addEventListener('load',()=>{
+        [192,512].forEach(s=>{
+          const link=document.createElement('link');
+          link.rel='apple-touch-icon'; link.sizes=`${s}x${s}`; link.href=makeIcon(s);
+          document.head.appendChild(link);
+        });
+      });
+    </script>
   </body>
 </html>
