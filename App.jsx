@@ -10612,7 +10612,7 @@ async function getScoreJson(apiKey,prompt,response,feedbackText){
 }
 
 /* ----------- Consulting Home ----------- */
-function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab}){
+function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDrillFromError}){
   const drills=consulting.drills||[];
   const cases=consulting.cases||[];
   const errorLog=consulting.errorLog||[];
@@ -10683,7 +10683,7 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab}){
                     <span className="text-sm">{C_DIM_LABELS[dim]}</span>
                     <span className="text-xs ml-2" style={{color:'#64748b'}}>— {drill.label}</span>
                   </div>
-                  <button onClick={()=>setSubtab('drills')} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>Practice</button>
+                  <button onClick={()=>onDrillFromError?onDrillFromError(dim):setSubtab('drills')} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>Drill →</button>
                 </div>
               );
             })}
@@ -10717,10 +10717,10 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab}){
 }
 
 /* ----------- Drills ----------- */
-function DrillsSubtab({consulting,setConsulting,apiKey,toasts}){
+function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initType=''}){
   const [phase,setPhase]=useState('pick'); // pick | drill | grading | result
-  const [selDim,setSelDim]=useState('');
-  const [selType,setSelType]=useState('');
+  const [selDim,setSelDim]=useState(initDim);
+  const [selType,setSelType]=useState(initType);
   const [activeDrill,setActiveDrill]=useState(null);
   const [prompt,setPrompt]=useState('');
   const [response,setResponse]=useState('');
@@ -10874,21 +10874,58 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts}){
 const CASE_STATES=['opening','clarify','structure','exploration','synthesis','recommendation','debrief','done'];
 const CASE_STATE_LABELS={opening:'Opening',clarify:'Clarification',structure:'Structure',exploration:'Analysis',synthesis:'Synthesis',recommendation:'Recommendation',debrief:'Debrief',done:'Complete'};
 
-const CASE_SYSTEM_BASE=`You are a professional case interview coach playing the role of a McKinsey senior interviewer. You are running a profitability case study. Be realistic but instructive. Stay in character as the interviewer. Give information only when asked — don't volunteer it. When the candidate makes a logical move, acknowledge it briefly and provide the next piece of requested data. When they struggle, ask a guiding question rather than giving the answer. Keep your responses concise (2-4 sentences typically).
+const CASES_CATALOG=[
+  {id:'profitability',label:'Profitability',difficulty:'Intermediate',estimatedMin:20,
+    title:'Specialty Retail Profitability',industry:'Retail',
+    description:'A specialty retailer\'s margin fell from 8% to 3%. Revenue held flat at $800M. Find the root cause and a fix.',
+    setup:'Our client is a mid-size specialty retail chain with 200 stores across the US. Their net profit margin has declined from 8% to 3% over the past two years, despite revenue holding flat at approximately $800M. The CEO wants to understand why margins fell and what they should do about it.',
+    explorationData:'COGS margin expanded 6pp due to raw material cost increases and supplier pricing changes. Labor costs rose 2pp from wage inflation and increased overtime. Rent and D&A are flat. Revenue is flat in aggregate, but transaction volume fell 12% — offset by an 8% price increase. The online channel grew 40% but carries a 3pp lower gross margin than stores.',
+  },
+  {id:'market-entry',label:'Market Entry',difficulty:'Intermediate',estimatedMin:25,
+    title:'EV Charging Market Entry',industry:'Energy & Transportation',
+    description:'A major oil company with 4,000 gas stations considers entering EV charging. Should they, and how?',
+    setup:'Our client is one of the largest petroleum companies in the US with $12B in annual revenue and a network of approximately 4,000 owned and operated gas stations. They are evaluating whether to enter the electric vehicle (EV) charging market. They want to know: should they enter, and if so, how and where?',
+    explorationData:'US EV charging market: $5B today, projected $40B by 2030 (35% CAGR). The leading network holds 35% share. DC fast chargers cost $50K–$200K per station; Level 2 chargers $5K–$20K. Average public fast-charger utilization is currently 28%. The client\'s highway and high-traffic suburban locations are ideal for fast charging. Competitors (BP Pulse, EVgo) are already spending aggressively. The client has no EV charging technology or brand today.',
+  },
+  {id:'growth',label:'Growth Strategy',difficulty:'Advanced',estimatedMin:30,
+    title:'Regional Bank Revenue Growth',industry:'Financial Services',
+    description:'A regional bank growing at 2% needs a path to 7% revenue growth in 3 years.',
+    setup:'Our client is a regional bank headquartered in Atlanta with $20B in assets and operations across six states in the Southeast US. They have grown revenue at approximately 2% per year, well below the regional banking industry average of 5% and their own target of 7%. The new CEO has engaged us to identify the best path to 7% revenue growth within three years.',
+    explorationData:'Revenue mix: retail banking 60% ($480M), growing 1% YoY; commercial banking 30% ($240M), declining 3% YoY; wealth management 10% ($80M), growing 15% YoY. Digital banking adoption is 40% vs. industry average of 68% — the gap drives higher branch servicing costs. Net interest margin compressed 30bps from deposit repricing. The client has not entered the mortgage market (a gap vs. peers). Geographic footprint is concentrated in metro areas while peer banks expanded into fast-growing secondary cities.',
+  },
+  {id:'ma',label:'M&A',difficulty:'Advanced',estimatedMin:30,
+    title:'Software Acquisition Decision',industry:'Technology',
+    description:'An enterprise software firm considers acquiring a B2B SaaS startup at $800M. Worth it?',
+    setup:'Our client is a large enterprise software company with $5B in revenue serving Fortune 1000 firms. They are considering acquiring a B2B SaaS startup called Flowdesk, which provides project management and workflow automation tools. Flowdesk is privately held and asking $800M. The client needs to decide: should they acquire Flowdesk at this valuation, and if so, how should they integrate it?',
+    explorationData:'Flowdesk: $50M ARR, growing 60% YoY, 120% net revenue retention (excellent), -15% EBITDA margin. Average contract $62K; 800 customers. Our client\'s current PM module generates $120M in revenue growing only 5% and has been losing deals to Flowdesk. Our client has 3,000 enterprise customers with no Flowdesk overlap — significant cross-sell potential, estimated $30–50M ARR within 2 years. At $800M, the acquisition is priced at 16x ARR. Integration risk: Flowdesk\'s team is 120 people, engineering-heavy, and culture is startup-oriented.',
+  },
+  {id:'operations',label:'Operations',difficulty:'Intermediate',estimatedMin:25,
+    title:'Manufacturing Plant Efficiency',industry:'Consumer Goods',
+    description:'A production plant at 68% utilization with 4.2% defects needs to hit 90% / 1.5% in 18 months.',
+    setup:'Our client is a consumer goods manufacturer with $1.2B in annual revenue. Their flagship plant, responsible for 40% of total output, is running at 68% capacity utilization with a 4.2% defect rate. The industry best-in-class benchmark is 90% utilization and 1.5% defects. The COO has given the plant manager 18 months to reach those benchmarks or the plant faces downsizing.',
+    explorationData:'Three production lines: Line A (85% utilization, 1.8% defects — best performer), Line B (65% utilization, 4.5% defects — HVAC failure causing temperature variance on heat-sensitive components), Line C (55% utilization, 6.5% defects — 2005-vintage equipment, unplanned downtime averaging 18 hours/month). Changeover time averages 4.2 hours across all lines vs. the benchmark of 1.8 hours — root cause is manual calibration procedures not yet digitized. No predictive maintenance system in place.',
+  },
+];
 
-The case: "Our client is a mid-size specialty retail chain with 200 stores. Their net profit margin has declined from 8% to 3% over the past two years. Revenue has held flat at $800M. The CEO wants to know why margins fell and what to do."`;
+function getCaseConfig(type){return CASES_CATALOG.find(c=>c.id===type)||CASES_CATALOG[0];}
 
-function buildCaseSystemPrompt(caseState){
+function buildCaseSystemPrompt(caseConfig,caseState){
   const stateGuide={
-    opening:'You have just introduced the case. Wait for the candidate to ask clarifying questions.',
-    clarify:'Respond to clarifying questions with concise, specific answers. Only reveal information that is asked for.',
-    structure:'The candidate will present their structure. Evaluate it briefly and say you\'re ready to dive in.',
-    exploration:'Provide data when asked. Guide the candidate to dig into cost drivers (COGS up 6pp, labor up 2pp, rent flat, D&A flat). Revenue is flat but transaction volume fell 12% offset by price increases.',
-    synthesis:'Prompt the candidate to synthesize what they\'ve found into 2-3 key findings.',
-    recommendation:'Ask for a clear recommendation with rationale.',
-    debrief:'Give honest coaching feedback on what the candidate did well and where they could improve. Be specific.',
+    opening:'Introduce the case naturally as a real McKinsey interviewer would — name the client, industry, and central question. Do not volunteer any data yet.',
+    clarify:'Answer clarifying questions with concise specific answers. Reveal only what is directly asked. Typical questions: timeframe, client description, geography, competitive context.',
+    structure:'The candidate will present their structure. Give honest brief feedback on whether it is MECE and complete, then move into exploration.',
+    exploration:'Provide data from the exploration dataset only when directly asked. Guide toward the key insight without giving it away. If they pursue an unproductive branch, let them spend 1-2 turns before redirecting.',
+    synthesis:'Ask the candidate to summarize findings in 2-3 sentences. Push back if they are vague or missing a key driver.',
+    recommendation:'Ask for a clear actionable recommendation with quantitative rationale. Push back if it is too generic or ignores risk.',
+    debrief:'Give specific coaching: what they did well, where they lost time or missed key issues, and one concrete thing to practice next.',
   };
-  return CASE_SYSTEM_BASE+'\n\nCurrent interview phase: '+CASE_STATE_LABELS[caseState]+'.\nYour role in this phase: '+(stateGuide[caseState]||'Continue the interview naturally.');
+  return `You are a professional case interview coach playing the role of a McKinsey senior interviewer. You are conducting a ${caseConfig.label} case interview. Be realistic but instructive. Stay in character throughout. Give information only when directly asked — never volunteer data. When the candidate makes a sound move, acknowledge briefly and continue. When they struggle, ask a guiding question. Keep responses concise (2–4 sentences typically).
+
+Case: "${caseConfig.setup}"
+
+Exploration data (reveal only when asked): ${caseConfig.explorationData}
+
+Current phase: ${CASE_STATE_LABELS[caseState]||caseState}. Your role now: ${stateGuide[caseState]||'Continue the interview naturally.'}`;
 }
 
 function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
@@ -10902,18 +10939,21 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
 
   useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[activeCase?.sessionLog,streamText]);
 
-  const startCase=()=>{
-    const nc={id:uid('cs'),title:'Specialty Retail Profitability',industry:'Retail',type:'profitability',state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],startedAt:Date.now(),finishedAt:null};
+  const startCase=(cfg)=>{
+    const nc={id:uid('cs'),title:cfg.title,industry:cfg.industry,type:cfg.id,state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],startedAt:Date.now(),finishedAt:null};
     setConsulting(c=>({...c,cases:[...(c.cases||[]),nc]}));
     setActiveCase(nc);setView('active');setStreamText('');
-    sendInterviewerOpener(nc);
+    sendInterviewerOpener(nc,cfg);
   };
 
-  const sendInterviewerOpener=async(nc)=>{
-    if(!apiKey){const updated={...nc,sessionLog:[{role:'interviewer',content:'Please add your OpenAI API key in Settings to start.',at:Date.now()}]};setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));return;}
+  const resumeCase=(c)=>{setActiveCase(c);setView('active');};
+
+  const sendInterviewerOpener=async(nc,cfg)=>{
+    const caseConfig=cfg||getCaseConfig(nc.type);
+    if(!apiKey){const updated={...nc,sessionLog:[{role:'interviewer',content:'Add your OpenAI API key in Settings to start.',at:Date.now()}]};setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));return;}
     setStreaming(true);
     try{
-      const opener=await streamFeedback(apiKey,buildCaseSystemPrompt('opening'),'Please introduce the case to the candidate now.',t=>setStreamText(t));
+      const opener=await streamFeedback(apiKey,buildCaseSystemPrompt(caseConfig,'opening'),'Introduce the case to the candidate now.',t=>setStreamText(t));
       const updated={...nc,sessionLog:[{role:'interviewer',content:opener,at:Date.now()}]};
       setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));
       setStreamText('');
@@ -10924,20 +10964,20 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
   const sendMessage=async()=>{
     if(!input.trim()||streaming||!activeCase)return;
     if(!apiKey){toasts.push('Add API key in Settings');return;}
+    const caseConfig=getCaseConfig(activeCase.type);
     const userMsg={role:'candidate',content:input.trim(),at:Date.now()};
     const updatedLog=[...activeCase.sessionLog,userMsg];
     const uc={...activeCase,sessionLog:updatedLog};
     setActiveCase(uc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===uc.id?uc:x)}));
     setInput('');setStreaming(true);setStreamText('');
     try{
-      const history=updatedLog.slice(-12).map(m=>({role:m.role==='interviewer'?'assistant':'user',content:m.content}));
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(uc.state)},...history]})});
+      const history=updatedLog.slice(-14).map(m=>({role:m.role==='interviewer'?'assistant':'user',content:m.content}));
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(caseConfig,uc.state)},...history]})});
       if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
       const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
       while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;setStreamText(out);}}catch{}}}
       const aiMsg={role:'interviewer',content:out,at:Date.now()};
-      const finalLog=[...updatedLog,aiMsg];
-      const fc={...uc,sessionLog:finalLog};
+      const fc={...uc,sessionLog:[...updatedLog,aiMsg]};
       setActiveCase(fc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===fc.id?fc:x)}));
       setStreamText('');
     }catch(e){toasts.push('Error: '+e.message);}
@@ -10948,7 +10988,7 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     const cur=CASE_STATES.indexOf(activeCase.state);
     if(cur<0||cur>=CASE_STATES.length-2)return;
     const next=CASE_STATES[cur+1];
-    const nc={...activeCase,state:next,finishedAt:next==='done'?Date.now():null};
+    const nc={...activeCase,state:next};
     setActiveCase(nc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===nc.id?nc:x)}));
     if(next==='debrief')runDebrief(nc);
   };
@@ -10958,14 +10998,14 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     setStreaming(true);
     try{
       const transcript=nc.sessionLog.map(m=>`${m.role==='interviewer'?'Interviewer':'Candidate'}: ${m.content}`).join('\n\n');
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:600,messages:[{role:'system',content:'You are a case coach. Score the candidate on each dimension 1-10 based on this transcript. Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0},"weaknesses":["specific weakness 1","specific weakness 2"],"insight":"1 sentence summary of performance"}'},{role:'user',content:transcript}]})});
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:600,messages:[{role:'system',content:'You are a case coach. Score the candidate 1-10 on each dimension based on the transcript. Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0,"CaseManagement":0},"weaknesses":["specific weakness 1","specific weakness 2"],"strengths":["strength 1"],"insight":"1 sentence overall summary"}'},{role:'user',content:`Case type: ${nc.type}\n\nTranscript:\n${transcript}`}]})});
       const j=await resp.json();
       const parsed=JSON.parse(j.choices[0].message.content);
       const weak=Object.entries(parsed.competencyScores||{}).filter(([,v])=>v<6).map(([k])=>k);
-      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},weaknesses:parsed.weaknesses||weak,finishedAt:Date.now()};
+      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},weaknesses:parsed.weaknesses||weak,strengths:parsed.strengths||[],debriefInsight:parsed.insight||'',finishedAt:Date.now()};
       setActiveCase(finished);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===finished.id?finished:x)}));
       for(const dim of weak){
-        const errEntry={id:uid('er'),dimension:dim,drillId:null,caseId:nc.id,description:parsed.weaknesses?.[0]||'Below threshold in '+dim,feedback:parsed.insight||'',createdAt:Date.now(),resolved:false};
+        const errEntry={id:uid('er'),dimension:dim,drillId:null,caseId:nc.id,description:(parsed.weaknesses||[]).find(w=>w.toLowerCase().includes(dim.toLowerCase()))||'Below threshold in '+dim,feedback:parsed.insight||'',createdAt:Date.now(),resolved:false};
         setConsulting(cc=>({...cc,errorLog:[...(cc.errorLog||[]),errEntry]}));
       }
       setView('debrief');
@@ -10973,61 +11013,104 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     setStreaming(false);
   };
 
-  if(view==='lobby') return (
-    <div className="max-w-xl">
-      <div className="glass rounded-xl p-6 border-subtle mb-5">
-        <div className="text-sm font-semibold mb-1">Profitability Case</div>
-        <div className="text-xs mb-4" style={{color:'#64748b'}}>Full 20–30 min mock interview. AI plays the interviewer. Voice + text input supported.</div>
-        <button onClick={startCase} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start New Case</button>
-      </div>
-      {(consulting.cases||[]).filter(c=>c.state==='done').length>0&&(
-        <div className="glass rounded-xl p-4 border-subtle">
-          <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>PAST CASES</div>
-          {(consulting.cases||[]).filter(c=>c.state==='done').slice(-5).reverse().map(c=>(
-            <div key={c.id} className="py-2 border-b border-white/3 last:border-0">
-              <div className="flex justify-between items-center">
-                <span className="text-sm">{c.title}</span>
-                <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
+  const DIFF_COLORS={Intermediate:'#f59e0b',Advanced:'#f87171'};
+
+  if(view==='lobby'){
+    const inProgress=(consulting.cases||[]).filter(c=>c.state!=='done'&&c.state!=='debrief');
+    const pastDone=(consulting.cases||[]).filter(c=>c.state==='done').slice(-5).reverse();
+    return (
+      <div style={{maxWidth:'800px'}}>
+        {inProgress.length>0&&(
+          <div className="glass rounded-xl p-4 border-subtle mb-5" style={{borderLeft:'3px solid #f59e0b'}}>
+            <div className="text-xs font-semibold mb-3" style={{color:'#f59e0b'}}>IN PROGRESS</div>
+            {inProgress.map(c=>(
+              <div key={c.id} className="flex items-center justify-between py-2">
+                <div>
+                  <span className="text-sm font-medium">{c.title}</span>
+                  <span className="text-xs ml-2 px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{CASE_STATE_LABELS[c.state]||c.state}</span>
+                </div>
+                <button onClick={()=>resumeCase(c)} className="text-xs px-3 py-1 rounded-lg font-semibold" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b'}}>Resume →</button>
               </div>
-              {c.competencyScores&&<div className="flex gap-2 flex-wrap mt-1">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,4)}: {v}</span>)}</div>}
+            ))}
+          </div>
+        )}
+        <div className="text-sm font-semibold mb-3">Choose a case</div>
+        <div className="grid gap-3 mb-6" style={{gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))'}}>
+          {CASES_CATALOG.map(cfg=>(
+            <div key={cfg.id} className="glass rounded-xl p-5 border-subtle flex flex-col gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{cfg.label}</span>
+                    <span className="text-xs" style={{color:DIFF_COLORS[cfg.difficulty]||'#64748b'}}>{cfg.difficulty}</span>
+                    <span className="text-xs" style={{color:'#475569'}}>~{cfg.estimatedMin}min</span>
+                  </div>
+                  <div className="text-sm font-semibold">{cfg.title}</div>
+                  <div className="text-xs mt-0.5" style={{color:'#64748b'}}>{cfg.industry}</div>
+                </div>
+              </div>
+              <div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{cfg.description}</div>
+              <button onClick={()=>startCase(cfg)} className="py-2 rounded-lg text-sm font-semibold mt-auto" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Case</button>
             </div>
           ))}
         </div>
-      )}
-    </div>
-  );
+        {pastDone.length>0&&(
+          <div className="glass rounded-xl p-4 border-subtle">
+            <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>RECENT COMPLETIONS</div>
+            {pastDone.map(c=>(
+              <div key={c.id} className="py-2 border-b border-white/3 last:border-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm">{c.title}</span>
+                  <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
+                </div>
+                {c.competencyScores&&<div className="flex gap-3 flex-wrap mt-1">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,5)}:{v}</span>)}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if(view==='debrief'&&activeCase) return (
     <div className="max-w-2xl">
       <div className="glass rounded-xl p-6 border-subtle mb-4">
-        <div className="text-sm font-semibold mb-4">Case Debrief — {activeCase.title}</div>
+        <div className="text-sm font-semibold mb-1">Debrief — {activeCase.title}</div>
+        {activeCase.debriefInsight&&<div className="text-xs mb-4 p-3 rounded-lg" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{activeCase.debriefInsight}</div>}
         {activeCase.competencyScores&&(
-          <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="grid grid-cols-2 gap-2 mb-4">
             {Object.entries(activeCase.competencyScores).map(([k,v])=>(
               <div key={k} className="flex items-center justify-between p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
-                <span className="text-xs" style={{color:'#94a3b8'}}>{k}</span>
+                <span className="text-xs" style={{color:'#94a3b8'}}>{C_DIM_LABELS[k]||k}</span>
                 <span className="text-sm font-bold" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{v}/10</span>
               </div>
             ))}
           </div>
         )}
-        {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-2" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
+        {activeCase.strengths?.length>0&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#34d399'}}>STRENGTHS</div><ul className="space-y-1">{activeCase.strengths.map((s,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>+ {s}</li>)}</ul></div>}
+        {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-1" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
       </div>
-      <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← Back to Cases</button>
+      <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← All Cases</button>
     </div>
   );
 
   // active case view
+  const caseStateIdx=CASE_STATES.indexOf(activeCase?.state||'opening');
   return (
     <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
       <div className="flex items-center justify-between mb-3 flex-shrink-0">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium">{activeCase?.title}</span>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{CASE_STATE_LABELS[activeCase?.state]||'Active'}</span>
+          <div className="flex gap-0.5">
+            {CASE_STATES.slice(0,-1).map((s,i)=>(
+              <div key={s} className="w-2 h-2 rounded-full" style={{background:i<=caseStateIdx?'#6366f1':'rgba(255,255,255,0.1)'}}/>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          {activeCase&&CASE_STATES.indexOf(activeCase.state)<CASE_STATES.length-2&&(
-            <button onClick={advanceState} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b'}}>Advance Phase →</button>
+          {activeCase&&caseStateIdx<CASE_STATES.length-2&&(
+            <button onClick={advanceState} disabled={streaming} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b',opacity:streaming?0.4:1}}>Next Phase →</button>
           )}
           <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
         </div>
@@ -11053,7 +11136,7 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
       <div className="flex-shrink-0 flex gap-2">
         <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}} rows={2} placeholder="Your response… (Enter to send, Shift+Enter for newline)" className="flex-1 px-3 py-2 rounded-xl text-sm bg-transparent resize-none outline-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}} />
         <div className="flex flex-col gap-1">
-          <button onClick={()=>dict.start()} className="px-3 rounded-lg text-xs" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',height:'50%'}}>🎙</button>
+          <button onClick={()=>dict.start()} title="Dictate" className="px-3 rounded-lg text-xs" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',height:'50%'}}>🎙</button>
           <button onClick={sendMessage} disabled={streaming||!input.trim()} className="px-3 rounded-lg text-xs font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',height:'50%',opacity:streaming||!input.trim()?0.4:1}}>Send</button>
         </div>
       </div>
@@ -11238,7 +11321,7 @@ function LearnSubtab(){
 }
 
 /* ----------- Review ----------- */
-function ReviewSubtab({consulting,setConsulting,apiKey,toasts}){
+function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError}){
   const [dimFilter,setDimFilter]=useState('');
   const [genPlan,setGenPlan]=useState(false);
   const errorLog=consulting.errorLog||[];
@@ -11315,7 +11398,10 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts}){
                   <div className="text-sm">{e.description}</div>
                   {e.feedback&&<div className="text-xs mt-1" style={{color:'#64748b'}}>{e.feedback.slice(0,150)}{e.feedback.length>150?'…':''}</div>}
                 </div>
-                <button onClick={()=>resolve(e.id)} className="text-xs px-2 py-1 rounded flex-shrink-0" style={{color:'#34d399',background:'rgba(52,211,153,0.1)'}}>Resolve</button>
+                <div className="flex flex-col gap-1 flex-shrink-0">
+                  {onDrillFromError&&<button onClick={()=>onDrillFromError(e.dimension)} className="text-xs px-2 py-1 rounded whitespace-nowrap" style={{color:'#818cf8',background:'rgba(99,102,241,0.12)'}}>Drill →</button>}
+                  <button onClick={()=>resolve(e.id)} className="text-xs px-2 py-1 rounded" style={{color:'#34d399',background:'rgba(52,211,153,0.1)'}}>Resolve</button>
+                </div>
               </div>
             </div>
           ))}
@@ -11361,9 +11447,12 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts}){
 /* ----------- Main ConsultingPanel ----------- */
 function ConsultingPanel({data, setData, toasts, isMobile}){
   const [subtab,setSubtab]=useState('home');
+  const [drillInit,setDrillInit]=useState({dim:'',type:''});
   const consulting=data.consulting||getDefaultConsulting();
   const setConsulting=patch=>setData(d=>({...d,consulting:{...(d.consulting||getDefaultConsulting()),...(typeof patch==='function'?patch(d.consulting||getDefaultConsulting()):patch)}}));
   const apiKey=data.settings?.apiKey||'';
+
+  const goToDrill=(dim,type='')=>{setDrillInit({dim,type});setSubtab('drills');};
 
   const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
 
@@ -11384,12 +11473,12 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
           </button>
         ))}
       </div>
-      {subtab==='home'       &&<ConsultingHome consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} setSubtab={setSubtab}/>}
-      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='home'       &&<ConsultingHome consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} setSubtab={setSubtab} onDrillFromError={goToDrill}/>}
+      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} initDim={drillInit.dim} initType={drillInit.type}/>}
       {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
       {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
       {subtab==='learn'      &&<LearnSubtab/>}
-      {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onDrillFromError={goToDrill}/>}
     </div>
   );
 }
