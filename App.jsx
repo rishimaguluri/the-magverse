@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v76 executing');
+console.log('[Magverse] App.jsx v77 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -157,6 +157,7 @@ const defaultState = () => ({
   hubs: DEFAULT_HUBS(),
   career: { contacts: [], questions: [], applications: [] },
   resumeEditor: null,
+  consulting: null,
   seenDeals: [],
   inbox: [], // §3 universal capture
   // §7 Research panels
@@ -527,9 +528,8 @@ function App(){
           <div className="max-w-full">
             {active==='schedule'    && <SchedulePanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='assignments' && <AssignmentsPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
-            {active==='gym'         && <GymPanel         data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
-            {active==='social'      && <SocialPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='notes'       && <NotesPanel       data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='consulting'  && <ConsultingPanel  data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='chathubs'    && <ChatHubsPanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='settings'    && <SettingsPanel    data={data} setData={setData} toasts={toasts} lastBackup={lastBackup} />}
             {active==='career'      && <CareerPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
@@ -1138,16 +1138,16 @@ function useIsMobile(){
 
 function BottomNav({active, setActive, inboxCount=0}){
   const items = [
-    {id:'schedule',     label:'Schedule', icon:IconCalendar},
-    {id:'assignments',  label:'Tasks',    icon:IconKanban},
-    {id:'inbox',        label:'Inbox',    icon:IconInbox, badge:inboxCount},
-    {id:'notes',        label:'Notes',    icon:IconNotes},
-    {id:'chathubs',     label:'Learn',    icon:IconChat},
-    {id:'golden-egg',   label:'Fund',     icon:IconEgg},
-    {id:'research',     label:'Research', icon:IconResearch},
-    {id:'ramp',         label:'Ramp',     icon:IconRamp},
-    {id:'review',       label:'Review',   icon:IconReview},
-    {id:'settings',     label:'More',     icon:IconGear},
+    {id:'schedule',     label:'Schedule',    icon:IconCalendar},
+    {id:'assignments',  label:'Tasks',       icon:IconKanban},
+    {id:'inbox',        label:'Inbox',       icon:IconInbox, badge:inboxCount},
+    {id:'consulting',   label:'Consulting',  icon:IconConsulting},
+    {id:'chathubs',     label:'Learn',       icon:IconChat},
+    {id:'golden-egg',   label:'Fund',        icon:IconEgg},
+    {id:'research',     label:'Research',    icon:IconResearch},
+    {id:'ramp',         label:'Ramp',        icon:IconRamp},
+    {id:'review',       label:'Review',      icon:IconReview},
+    {id:'settings',     label:'More',        icon:IconGear},
   ];
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 flex justify-around items-center"
@@ -1174,13 +1174,12 @@ function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
     {id:'assignments', label:'Tasks',        icon:IconKanban},
     {id:'inbox',       label:'Inbox',        icon:IconInbox, badge:inboxCount},
     {id:'career',      label:'Career',       icon:IconBriefcase},
+    {id:'consulting',  label:'Consulting',   icon:IconConsulting},
     {id:'golden-egg',  label:'Golden Egg',   icon:IconEgg},
     {id:'research',    label:'Research',     icon:IconResearch},
     {id:'mental-models',label:'Models',      icon:IconBrain},
     {id:'ramp',        label:'Deep Work',    icon:IconRamp},
     {id:'review',      label:'Review',       icon:IconReview},
-    {id:'gym',         label:'Gym',          icon:IconDumbbell},
-    {id:'social',      label:'Social',       icon:IconUsers},
     {id:'notes',       label:'Notes',        icon:IconNotes},
     {id:'chathubs',    label:'Learning Hub', icon:IconChat},
     {id:'settings',    label:'Settings',     icon:IconGear},
@@ -3412,7 +3411,6 @@ const INBOX_TRIAGE = [
   {label:'Note',    color:'#10b981', bg:'rgba(16,185,129,0.15)',  key:'note'},
   {label:'Journal', color:'#8b5cf6', bg:'rgba(139,92,246,0.15)', key:'journal'},
   {label:'Event',   color:'#f59e0b', bg:'rgba(245,158,11,0.15)', key:'event'},
-  {label:'Contact', color:'#3b82f6', bg:'rgba(59,130,246,0.15)', key:'contact'},
 ];
 
 function InboxPanel({data, setData, toasts, isMobile, setActive}){
@@ -3435,10 +3433,6 @@ function InboxPanel({data, setData, toasts, isMobile, setActive}){
     } else if(key==='event'){
       setData(d=>({...d, events:[...(d.events||[]),{id:uid(),title:text.slice(0,80),type:'Personal',notes:text,when:{day:new Date().getDay(),hour:9}}]}));
       toasts.push('Added to Calendar');
-    } else if(key==='contact'){
-      const existing = d=>d.social||[];
-      setData(d=>({...d, social:[...existing(d),{id:uid(),name:text.slice(0,60),notes:text,createdAt:new Date().toISOString()}]}));
-      toasts.push('Added to Contacts');
     }
     removeItem(item.id);
   };
@@ -3451,6 +3445,13 @@ function InboxPanel({data, setData, toasts, isMobile, setActive}){
         <div>
           <h2 className="text-xl font-semibold">Inbox</h2>
           <div className="text-xs mt-0.5" style={{color:'#64748b'}}>{inbox.length} item{inbox.length!==1?'s':''} · press <kbd style={{background:'rgba(255,255,255,0.07)',borderRadius:'4px',padding:'1px 5px',fontSize:'11px',fontFamily:'monospace'}}>C</kbd> anywhere to capture</div>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 mb-5 border-subtle" style={{borderLeft:'3px solid #6366f1'}}>
+        <div className="text-sm font-medium mb-1" style={{color:'#818cf8'}}>How to use Inbox</div>
+        <div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>
+          Press <kbd style={{background:'rgba(255,255,255,0.07)',borderRadius:'3px',padding:'0 4px',fontFamily:'monospace'}}>C</kbd> anywhere in the app to drop a quick capture — a raw thought, task, link, or idea — without interrupting what you're doing. Items land here for triage. Once something arrives, use the colored buttons to route it: <strong>Task</strong> moves it to your task board, <strong>Note</strong> saves it to Notes, <strong>Journal</strong> adds it to your journal, <strong>Event</strong> puts it on the calendar. Items older than 48 hours are flagged in amber so nothing stagnates.
         </div>
       </div>
 
@@ -3496,114 +3497,6 @@ function InboxPanel({data, setData, toasts, isMobile, setActive}){
   );
 }
 
-/* -------------------- Gym Panel -------------------- */
-function GymPanel({data, setData, toasts}){
-  const [logOpen, setLogOpen] = useState(false);
-  const addLog = (entry)=>{ setData(d=> ({ ...d, workouts:[...(d.workouts||[]), {...entry,id:uid()}] })); toasts.push('Workout logged'); };
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Gym & Fitness</h2>
-        <div>
-          <button className="px-3 py-1 rounded bg-emerald-600" onClick={()=>setLogOpen(true)}>Log Workout</button>
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-4">
-        <div className="glass p-4 rounded border-subtle">{/* Log */}
-          <h3 className="font-semibold mb-2">Log</h3>
-          {(data.workouts||[]).slice().reverse().map(w=> (
-            <div key={w.id} className="p-2 border-b border-white/3">{w.name}  -  {w.exercises?.length||0} exercises</div>
-          ))}
-        </div>
-        <div className="glass p-4 rounded border-subtle">{/* Program */}
-          <h3 className="font-semibold mb-2">Program</h3>
-          <div className="text-sm opacity-80">Push / Pull / Legs / Rest template</div>
-        </div>
-        <div className="glass p-4 rounded border-subtle">{/* Progress */}
-          <h3 className="font-semibold mb-2">Progress</h3>
-          <div className="text-sm opacity-80">Simple SVG charts show here</div>
-        </div>
-      </div>
-
-      {logOpen && <WorkoutModal onClose={()=>setLogOpen(false)} onSave={(w)=>{ addLog(w); setLogOpen(false); }} />}
-    </div>
-  );
-}
-
-function WorkoutModal({onClose, onSave}){
-  const [name, setName] = useState('Workout');
-  const [exercises, setExercises] = useState([{id:uid(), name:'Bench Press', sets:4, reps:8, weight:135}]);
-  const addEx = ()=> setExercises(s=>[...s, {id:uid(),name:'',sets:3,reps:10,weight:0}]);
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose}></div>
-      <div className="glass p-4 rounded z-50 w-96 max-h-[80vh] overflow-auto">
-        <h3 className="font-semibold mb-2">Log Workout</h3>
-        <input className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" value={name} onChange={e=>setName(e.target.value)} />
-        <div className="flex flex-col gap-2">
-          {exercises.map((ex,idx)=> (
-            <div key={ex.id} className="p-2 border rounded">
-              <input className="w-full p-1 mb-1 bg-transparent border border-white/5 rounded" placeholder="Exercise" value={ex.name} onChange={e=>{ const v=e.target.value; setExercises(s=>s.map(x=>x.id===ex.id?{...x,name:v}:x)); }} />
-              <div className="flex gap-2 text-xs">
-                <input className="p-1 w-1/3 bg-transparent border border-white/5 rounded" value={ex.sets} onChange={e=>setExercises(s=>s.map(x=>x.id===ex.id?{...x,sets:e.target.value}:x))} />
-                <input className="p-1 w-1/3 bg-transparent border border-white/5 rounded" value={ex.reps} onChange={e=>setExercises(s=>s.map(x=>x.id===ex.id?{...x,reps:e.target.value}:x))} />
-                <input className="p-1 w-1/3 bg-transparent border border-white/5 rounded" value={ex.weight} onChange={e=>setExercises(s=>s.map(x=>x.id===ex.id?{...x,weight:e.target.value}:x))} />
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-2">
-          <button className="px-3 py-1 rounded" onClick={addEx}>Add Exercise</button>
-          <div className="flex-1" />
-          <button className="px-3 py-1 rounded" onClick={onClose}>Cancel</button>
-          <button className="px-3 py-1 rounded bg-emerald-600" onClick={()=>onSave({name,exercises,date:new Date().toISOString()})}>Save</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------- Social Panel -------------------- */
-function SocialPanel({data, setData, toasts}){
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Social</h2>
-        <div>
-          <button className="px-3 py-1 rounded bg-purple-600" onClick={()=>setOpen(true)}>New Event</button>
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-4">
-        <div className="glass p-4 rounded border-subtle">Events</div>
-        <div className="glass p-4 rounded border-subtle">People</div>
-        <div className="glass p-4 rounded border-subtle">Reminders</div>
-      </div>
-      {open && <SocialModal onClose={()=>setOpen(false)} onSave={(e)=>{ setData(d=>({...d, social:[...(d.social||[]), {...e,id:uid()}]})); toasts.push('Social event added'); setOpen(false); }} />}
-    </div>
-  );
-}
-
-function SocialModal({onClose, onSave}){
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState('');
-  const [place, setPlace] = useState('');
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose}></div>
-      <div className="glass p-4 rounded z-50 w-96">
-        <h3 className="font-semibold mb-2">New Social Event</h3>
-        <input className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" placeholder="Title" value={title} onChange={e=>setTitle(e.target.value)} />
-        <input className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" placeholder="Date" value={date} onChange={e=>setDate(e.target.value)} />
-        <input className="w-full p-2 mb-2 bg-transparent border border-white/5 rounded" placeholder="Place" value={place} onChange={e=>setPlace(e.target.value)} />
-        <div className="flex justify-end gap-2">
-          <button className="px-3 py-1 rounded" onClick={onClose}>Cancel</button>
-          <button className="px-3 py-1 rounded bg-purple-600" onClick={()=>onSave({title,date,place})}>Save</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* -------------------- Notes / Journal / Habits Panel -------------------- */
 function NotesPanel({data, setData, toasts}){
@@ -6545,6 +6438,7 @@ function IconResearch(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fil
 function IconBrain(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-4.66"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-4.66"/></svg> }
 function IconRamp(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> }
 function IconReview(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg> }
+function IconConsulting(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><path d="M12 11l-4 4"/><path d="M12 11l4 4"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/></svg> }
 
 /* -------------------- Career Panel -------------------- */
 
@@ -6573,6 +6467,11 @@ function followUpStatus(lastContacted, followUpDays=14){
   if(days > followUpDays)         return {color:'#ef4444', label:`${days}d ago — overdue`, urgent:true};
   if(days > followUpDays * 0.6)   return {color:'#f59e0b', label:`${days}d ago — follow up soon`, urgent:false};
   return {color:'#10b981', label:`${days}d ago`, urgent:false};
+}
+
+// ---- Consulting ----
+function getDefaultConsulting(){
+  return {drills:[],cases:[],errorLog:[],practiceplan:null};
 }
 
 // ---- Resume Editor ----
@@ -10654,6 +10553,843 @@ function ReviewPanel({data, toasts}){
           </Section>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ================== CONSULTING PANEL ================== */
+
+const C_DIMS = ['Structuring','Ideation','Quant','Charts','BusinessJudgment','Hypothesis','Prioritization','Synthesis','Communication','CaseManagement'];
+const C_DIM_LABELS = {Structuring:'Structuring',Ideation:'Ideation',Quant:'Quant',Charts:'Charts',BusinessJudgment:'Business Judgment',Hypothesis:'Hypothesis',Prioritization:'Prioritization',Synthesis:'Synthesis',Communication:'Communication',CaseManagement:'Case Mgmt'};
+
+const DRILL_CATALOG = [
+  {dimension:'Structuring',type:'framework-gen',label:'Framework Generation',timeLimit:120,
+    prompts:['A mid-size retailer\'s profits fell 15% over two years while revenue held flat. Walk through how you\'d structure this problem.','A SaaS company\'s churn rate doubled last quarter. How would you structure diagnosing and fixing this?','A regional hospital network wants to grow revenue 20% in three years. Outline your structure.']},
+  {dimension:'Structuring',type:'framework-critique',label:'Framework Critique',timeLimit:90,
+    prompts:['A consultant proposes diagnosing a profit decline using only the income statement. What is wrong with this approach and what would you add?','A team plans to analyze market entry by only looking at market size and competition. What critical dimensions are missing?','An analyst breaks down a cost problem as fixed vs. variable. What\'s missing from this structure?']},
+  {dimension:'Quant',type:'estimation',label:'Market Estimation',timeLimit:180,
+    prompts:['Estimate the annual revenue of all coffee shops in New York City.','Estimate the US market size for electric vehicle charging stations.','How many commercial flights take off from US airports on an average day?']},
+  {dimension:'Quant',type:'mental-math',label:'Mental Math',timeLimit:60,
+    prompts:['A factory produces 850 units/day and operates 5.5 days/week. What is the annual output (52 weeks)?','Revenue is $240M and growing 15% per year. What will revenue be in 3 years?','A company has 12,000 employees: 60% full-time at $85K, 40% contractors at $70K. What is the annual wage bill?']},
+  {dimension:'Ideation',type:'brainstorm',label:'Brainstorm Sprint',timeLimit:60,
+    prompts:['List as many ways as possible that a grocery chain could increase revenue.','What are all the reasons a customer might stop using a streaming service?','List every possible growth lever for a mid-market hotel chain.']},
+  {dimension:'Charts',type:'chart-read',label:'Chart Interpretation',timeLimit:90,
+    prompts:['Q1–Q4 revenue: Product A: $4M, $4.5M, $4.8M, $3.9M. Product B: $2M, $2.8M, $3.9M, $5.2M. What is the headline insight and what two questions would you ask the CEO?','COGS margin went from 42% to 51% over 8 quarters while gross revenue grew 18%. What does this tell you and what would you investigate first?','Customer acquisition cost rose steadily for 6 quarters (+60% total) while new customer volume fell 20%. Headline insight and your first hypothesis?']},
+  {dimension:'BusinessJudgment',type:'profit-decline',label:'Profit Decline Diagnosis',timeLimit:150,
+    prompts:['A convenience store chain\'s operating margin fell from 8% to 4% in 18 months while revenue grew 5%. What is your leading hypothesis?','A software company\'s net income fell 25% while revenue rose 12%. What are the three most likely causes?','A retailer\'s gross margin expanded but EBIT fell. What structure would you use to find the cause?']},
+  {dimension:'Hypothesis',type:'hyp-gen',label:'Hypothesis Generation',timeLimit:90,
+    prompts:['A restaurant chain\'s same-store sales fell 8% in Q2. State your leading hypothesis specifically, and explain why it leads.','A B2B SaaS company\'s trial-to-paid conversion dropped from 40% to 22% in one quarter. What is your leading hypothesis?','A manufacturer\'s defect rate doubled in 60 days. State your most specific hypothesis and the first thing you would check.']},
+  {dimension:'Prioritization',type:'issue-rank',label:'Issue Prioritization',timeLimit:120,
+    prompts:['For diagnosing a B2B SaaS company\'s 30% decline in new logos, rank from most to least likely and explain: (1) product-market fit degraded, (2) sales underperformance, (3) competitive pressure, (4) pricing issues, (5) marketing funnel problems.','A restaurant chain is losing money. Rank these workstreams by urgency: (1) menu pricing, (2) labor cost, (3) food waste, (4) traffic decline, (5) lease costs.','A hospital system wants to cut costs. Rank from highest to lowest expected impact: (1) staffing, (2) supply chain, (3) facility utilization, (4) billing efficiency, (5) IT systems.']},
+  {dimension:'Synthesis',type:'conclusion',label:'Conclusion Writing',timeLimit:90,
+    prompts:['Revenue is up 8% but net income fell 12%. COGS increased 20% driven by raw material costs. Write a one-sentence synthesis of the situation.','Customer acquisition cost doubled while LTV held flat and churn is stable at 5%. Write a one-sentence synthesis of the key issue.','Market share fell from 32% to 28% while the industry grew 10% and the company\'s revenue is flat. Write a one-sentence competitive diagnosis.']},
+  {dimension:'Communication',type:'verbal-answer',label:'Structured Response',timeLimit:120,
+    prompts:['Answer as you would in a case interview: "How would you think about whether our client should enter the electric vehicle charging market?"','Structure a response to: "Our largest customer asked for a 15% price reduction. Should we agree? Walk me through your thinking."','Answer concisely and top-down: "What factors would you weigh in deciding whether to acquire a competitor?"']},
+  {dimension:'CaseManagement',type:'client-question',label:'Client Question Handling',timeLimit:120,
+    prompts:['Your client interrupts your structure: "We already know costs are fine — can\'t we just focus on revenue?" How do you respond?','The CEO says: "I don\'t need a full analysis. Just tell me right now: should we cut headcount?" How do you handle this?','A client asks mid-case: "Your framework seems generic. How is this specific to our situation?" How do you respond?']},
+];
+
+function getActiveDrill(dim,type){
+  return DRILL_CATALOG.find(d=>(!dim||d.dimension===dim)&&(!type||d.type===type))||DRILL_CATALOG[0];
+}
+function getDrillPrompt(drill){
+  const arr=drill.prompts;
+  return arr[Math.floor(Math.random()*arr.length)];
+}
+
+async function streamFeedback(apiKey,system,userMsg,onChunk){
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:600,messages:[{role:'system',content:system},{role:'user',content:userMsg}]})});
+  if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
+  const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
+  while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;onChunk(out);}}catch{}}}
+  return out;
+}
+
+async function getScoreJson(apiKey,prompt,response,feedbackText){
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:200,messages:[{role:'system',content:'Return JSON only: {"score":0-10,"improvements":["specific fix 1","specific fix 2"]}'},{role:'user',content:`Prompt: ${prompt}\nResponse: ${response}\nFeedback: ${feedbackText}`}]})});
+  const j=await resp.json();
+  try{return JSON.parse(j.choices[0].message.content);}catch{return {score:6,improvements:['Review your structure for completeness','Add specificity to your analysis']};}
+}
+
+/* ----------- Consulting Home ----------- */
+function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab}){
+  const drills=consulting.drills||[];
+  const cases=consulting.cases||[];
+  const errorLog=consulting.errorLog||[];
+
+  const dimScores=C_DIMS.reduce((acc,d)=>{
+    const dimDrills=drills.filter(x=>x.dimension===d).slice(-5);
+    const dimCases=cases.flatMap(c=>c.competencyScores?Object.entries(c.competencyScores).filter(([k])=>k===d).map(([,v])=>v):[]).slice(-5);
+    const all=[...dimDrills.map(x=>x.score),...dimCases];
+    acc[d]=all.length?Math.round(all.reduce((s,v)=>s+v,0)/all.length*10)/10:null;
+    return acc;
+  },{});
+
+  const openErrors=errorLog.filter(e=>!e.resolved).slice(0,10);
+  const recommended=[...new Set(openErrors.map(e=>e.dimension))].slice(0,3);
+  const recentDrills=drills.slice(-5).reverse();
+  const streak=(()=>{let s=0;const today=new Date().toISOString().slice(0,10);const dates=[...new Set([...drills,...cases.filter(c=>c.finishedAt)].map(x=>(x.at||x.finishedAt||'').slice(0,10)).filter(Boolean).sort().reverse())];for(let i=0;i<dates.length;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(dates[i]===d.toISOString().slice(0,10))s++;else break;}return s;})();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="glass rounded-xl p-4 border-subtle flex-1 min-w-40">
+          <div className="text-xs mb-1" style={{color:'#64748b'}}>Practice streak</div>
+          <div className="text-3xl font-bold" style={{color:'#818cf8'}}>{streak}<span className="text-base ml-1" style={{color:'#64748b'}}>days</span></div>
+        </div>
+        <div className="glass rounded-xl p-4 border-subtle flex-1 min-w-40">
+          <div className="text-xs mb-1" style={{color:'#64748b'}}>Drills completed</div>
+          <div className="text-3xl font-bold" style={{color:'#34d399'}}>{drills.length}</div>
+        </div>
+        <div className="glass rounded-xl p-4 border-subtle flex-1 min-w-40">
+          <div className="text-xs mb-1" style={{color:'#64748b'}}>Cases completed</div>
+          <div className="text-3xl font-bold" style={{color:'#f59e0b'}}>{cases.filter(c=>c.state==='done').length}</div>
+        </div>
+        <div className="glass rounded-xl p-4 border-subtle flex-1 min-w-40">
+          <div className="text-xs mb-1" style={{color:'#64748b'}}>Open weaknesses</div>
+          <div className="text-3xl font-bold" style={{color:'#f87171'}}>{openErrors.length}</div>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-5 border-subtle">
+        <div className="text-sm font-semibold mb-4">Competency Radar</div>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+          {C_DIMS.map(d=>{
+            const score=dimScores[d];
+            const pct=score!=null?score*10:0;
+            return (
+              <div key={d} className="flex items-center gap-3">
+                <div className="text-xs w-28 flex-shrink-0" style={{color:'#94a3b8'}}>{C_DIM_LABELS[d]}</div>
+                <div className="flex-1 h-1.5 rounded-full" style={{background:'rgba(255,255,255,0.06)'}}>
+                  <div className="h-full rounded-full transition-all" style={{width:`${pct}%`,background:pct>=70?'#34d399':pct>=50?'#f59e0b':'#f87171'}}></div>
+                </div>
+                <div className="text-xs w-8 text-right" style={{color:'#64748b'}}>{score!=null?score.toFixed(1):'—'}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {recommended.length>0 && (
+        <div className="glass rounded-xl p-5 border-subtle">
+          <div className="text-sm font-semibold mb-3">Recommended Practice</div>
+          <div className="space-y-2">
+            {recommended.map((dim,i)=>{
+              const drill=DRILL_CATALOG.find(d=>d.dimension===dim)||DRILL_CATALOG[0];
+              return (
+                <div key={dim} className="flex items-center justify-between p-3 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
+                  <div>
+                    <span className="text-xs px-2 py-0.5 rounded-full mr-2" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>#{i+1}</span>
+                    <span className="text-sm">{C_DIM_LABELS[dim]}</span>
+                    <span className="text-xs ml-2" style={{color:'#64748b'}}>— {drill.label}</span>
+                  </div>
+                  <button onClick={()=>setSubtab('drills')} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>Practice</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {recentDrills.length>0 && (
+        <div className="glass rounded-xl p-5 border-subtle">
+          <div className="text-sm font-semibold mb-3">Recent Drills</div>
+          <div className="space-y-2">
+            {recentDrills.map(d=>(
+              <div key={d.id} className="flex items-center justify-between text-sm">
+                <div><span style={{color:'#94a3b8'}}>{C_DIM_LABELS[d.dimension]}</span><span className="mx-2" style={{color:'#334155'}}>·</span><span style={{color:'#64748b'}}>{d.drillType}</span></div>
+                <span className="font-semibold" style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171'}}>{d.score}/10</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {drills.length===0&&cases.length===0&&(
+        <div className="glass rounded-xl p-10 text-center border-subtle">
+          <div style={{fontSize:'40px',marginBottom:'12px'}}>🎯</div>
+          <div className="font-semibold mb-1">Start your practice</div>
+          <div className="text-sm" style={{color:'#64748b'}}>Use Drills to build individual skills, or Cases for a full mock interview. Both track your progress automatically.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------- Drills ----------- */
+function DrillsSubtab({consulting,setConsulting,apiKey,toasts}){
+  const [phase,setPhase]=useState('pick'); // pick | drill | grading | result
+  const [selDim,setSelDim]=useState('');
+  const [selType,setSelType]=useState('');
+  const [activeDrill,setActiveDrill]=useState(null);
+  const [prompt,setPrompt]=useState('');
+  const [response,setResponse]=useState('');
+  const [timeLeft,setTimeLeft]=useState(0);
+  const [timerActive,setTimerActive]=useState(false);
+  const [feedback,setFeedback]=useState('');
+  const [scoreData,setScoreData]=useState(null);
+  const [grading,setGrading]=useState(false);
+  const dict=useDictation(t=>{setResponse(p=>p?p+' '+t:t);});
+
+  useEffect(()=>{
+    if(!timerActive)return;
+    if(timeLeft<=0){setTimerActive(false);return;}
+    const id=setTimeout(()=>setTimeLeft(t=>t-1),1000);
+    return()=>clearTimeout(id);
+  },[timerActive,timeLeft]);
+
+  const startDrill=()=>{
+    const drill=getActiveDrill(selDim,selType)||DRILL_CATALOG[0];
+    const p=getDrillPrompt(drill);
+    setActiveDrill(drill);setPrompt(p);setResponse('');setFeedback('');setScoreData(null);
+    setTimeLeft(drill.timeLimit);setTimerActive(true);
+    setPhase('drill');
+  };
+
+  const submitDrill=async()=>{
+    if(!response.trim()){toasts.push('Enter a response first');return;}
+    if(!apiKey){toasts.push('Add API key in Settings');return;}
+    setTimerActive(false);setGrading(true);setPhase('grading');
+    const dimLabel=activeDrill.dimension;
+    const system=`You are an expert McKinsey/BCG case coach. Grade the candidate's response to this ${dimLabel} drill with specific, actionable feedback. Be honest — most responses have real gaps. Lead with what was done well, then name the 1-2 most important improvements. Be specific: quote the response if needed. 3-4 sentences max.`;
+    try{
+      const fbText=await streamFeedback(apiKey,system,`Drill: ${activeDrill.label}\nPrompt: ${prompt}\nCandidate response: ${response}`,setFeedback);
+      const sd=await getScoreJson(apiKey,prompt,response,fbText);
+      setScoreData(sd);
+      const attempt={id:uid('dr'),dimension:activeDrill.dimension,drillType:activeDrill.type,prompt,response,score:sd.score,feedback:fbText,improvements:sd.improvements||[],at:Date.now()};
+      setConsulting(c=>({...c,drills:[...(c.drills||[]),attempt]}));
+      if(sd.score<7){
+        const errEntry={id:uid('er'),dimension:activeDrill.dimension,drillId:attempt.id,caseId:null,description:sd.improvements?.[0]||'Score below threshold',feedback:fbText,createdAt:Date.now(),resolved:false};
+        setConsulting(c=>({...c,errorLog:[...(c.errorLog||[]),errEntry]}));
+      }
+    }catch(e){toasts.push('Grading failed: '+e.message);}
+    setGrading(false);setPhase('result');
+  };
+
+  const nextDrill=()=>{setPhase('drill');startDrill();};
+  const backToPick=()=>{setPhase('pick');setActiveDrill(null);setPrompt('');setResponse('');setFeedback('');setScoreData(null);};
+
+  const dimOptions=[{value:'',label:'Any dimension'},...C_DIMS.map(d=>({value:d,label:C_DIM_LABELS[d]}))];
+  const typeOptions=selDim?[{value:'',label:'Any type'},...DRILL_CATALOG.filter(d=>d.dimension===selDim).map(d=>({value:d.type,label:d.label}))]:[{value:'',label:'Pick a dimension first'}];
+
+  const timerColor=timeLeft>30?'#34d399':timeLeft>10?'#f59e0b':'#f87171';
+  const mm=Math.floor(timeLeft/60),ss=timeLeft%60;
+
+  if(phase==='pick') return (
+    <div className="max-w-xl">
+      <div className="glass rounded-xl p-6 border-subtle mb-4">
+        <div className="text-sm font-semibold mb-4">Configure drill</div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs mb-1 block" style={{color:'#64748b'}}>Dimension</label>
+            <select value={selDim} onChange={e=>{setSelDim(e.target.value);setSelType('');}} className="w-full px-3 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}}>
+              {dimOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs mb-1 block" style={{color:'#64748b'}}>Drill type</label>
+            <select value={selType} onChange={e=>setSelType(e.target.value)} disabled={!selDim} className="w-full px-3 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none'}}>
+              {typeOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <button onClick={startDrill} className="mt-5 w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Drill</button>
+      </div>
+      {(consulting.drills||[]).length>0&&(
+        <div className="glass rounded-xl p-4 border-subtle">
+          <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>RECENT</div>
+          {(consulting.drills||[]).slice(-5).reverse().map(d=>(
+            <div key={d.id} className="flex justify-between items-center text-sm py-1.5 border-b border-white/3 last:border-0">
+              <span style={{color:'#94a3b8'}}>{C_DIM_LABELS[d.dimension]} · {d.drillType}</span>
+              <span style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171',fontWeight:600}}>{d.score}/10</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  if(phase==='drill') return (
+    <div className="max-w-2xl">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <span className="text-xs px-2 py-0.5 rounded-full mr-2" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{C_DIM_LABELS[activeDrill.dimension]}</span>
+          <span className="text-sm font-medium">{activeDrill.label}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-lg font-mono font-bold" style={{color:timerColor}}>{mm}:{ss.toString().padStart(2,'0')}</span>
+          <button onClick={backToPick} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>✕ Exit</button>
+        </div>
+      </div>
+      <div className="glass rounded-xl p-5 border-subtle mb-4">
+        <div className="text-sm font-medium mb-1" style={{color:'#64748b'}}>Prompt</div>
+        <div className="text-sm leading-relaxed">{prompt}</div>
+      </div>
+      <div className="glass rounded-xl p-4 border-subtle mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs" style={{color:'#64748b'}}>Your response</label>
+          <button onClick={()=>dict.start()} title="Dictate" className="text-xs px-2 py-1 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>🎙 Voice</button>
+        </div>
+        <textarea value={response} onChange={e=>setResponse(e.target.value)} rows={6} placeholder="Type or dictate your response..." className="w-full bg-transparent text-sm resize-none outline-none" style={{color:'#e2e8f0'}} />
+      </div>
+      <button onClick={submitDrill} disabled={!response.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:response.trim()?1:0.4}}>Submit for Feedback</button>
+    </div>
+  );
+
+  if(phase==='grading') return (
+    <div className="max-w-2xl">
+      <div className="glass rounded-xl p-6 border-subtle">
+        <div className="text-sm font-semibold mb-4">Grading your response…</div>
+        <div className="text-sm leading-relaxed" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback||'Analyzing…'}</div>
+        {!grading&&scoreData&&<div className="mt-4 text-2xl font-bold" style={{color:scoreData.score>=7?'#34d399':scoreData.score>=5?'#f59e0b':'#f87171'}}>{scoreData.score}/10</div>}
+      </div>
+    </div>
+  );
+
+  // result
+  return (
+    <div className="max-w-2xl">
+      <div className="glass rounded-xl p-6 border-subtle mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-sm font-semibold">Result</div>
+          <div className="text-3xl font-bold" style={{color:scoreData?.score>=7?'#34d399':scoreData?.score>=5?'#f59e0b':'#f87171'}}>{scoreData?.score??'—'}<span className="text-base" style={{color:'#64748b'}}>/10</span></div>
+        </div>
+        <div className="text-sm leading-relaxed mb-4" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback}</div>
+        {scoreData?.improvements?.length>0&&(
+          <div>
+            <div className="text-xs font-semibold mb-2" style={{color:'#f59e0b'}}>KEY IMPROVEMENTS</div>
+            <ul className="space-y-1">{scoreData.improvements.map((imp,i)=><li key={i} className="text-sm" style={{color:'#e2e8f0'}}>• {imp}</li>)}</ul>
+          </div>
+        )}
+      </div>
+      <div className="flex gap-3">
+        <button onClick={nextDrill} className="flex-1 py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Next Drill</button>
+        <button onClick={backToPick} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>Pick Different Drill</button>
+      </div>
+    </div>
+  );
+}
+
+/* ----------- Cases ----------- */
+const CASE_STATES=['opening','clarify','structure','exploration','synthesis','recommendation','debrief','done'];
+const CASE_STATE_LABELS={opening:'Opening',clarify:'Clarification',structure:'Structure',exploration:'Analysis',synthesis:'Synthesis',recommendation:'Recommendation',debrief:'Debrief',done:'Complete'};
+
+const CASE_SYSTEM_BASE=`You are a professional case interview coach playing the role of a McKinsey senior interviewer. You are running a profitability case study. Be realistic but instructive. Stay in character as the interviewer. Give information only when asked — don't volunteer it. When the candidate makes a logical move, acknowledge it briefly and provide the next piece of requested data. When they struggle, ask a guiding question rather than giving the answer. Keep your responses concise (2-4 sentences typically).
+
+The case: "Our client is a mid-size specialty retail chain with 200 stores. Their net profit margin has declined from 8% to 3% over the past two years. Revenue has held flat at $800M. The CEO wants to know why margins fell and what to do."`;
+
+function buildCaseSystemPrompt(caseState){
+  const stateGuide={
+    opening:'You have just introduced the case. Wait for the candidate to ask clarifying questions.',
+    clarify:'Respond to clarifying questions with concise, specific answers. Only reveal information that is asked for.',
+    structure:'The candidate will present their structure. Evaluate it briefly and say you\'re ready to dive in.',
+    exploration:'Provide data when asked. Guide the candidate to dig into cost drivers (COGS up 6pp, labor up 2pp, rent flat, D&A flat). Revenue is flat but transaction volume fell 12% offset by price increases.',
+    synthesis:'Prompt the candidate to synthesize what they\'ve found into 2-3 key findings.',
+    recommendation:'Ask for a clear recommendation with rationale.',
+    debrief:'Give honest coaching feedback on what the candidate did well and where they could improve. Be specific.',
+  };
+  return CASE_SYSTEM_BASE+'\n\nCurrent interview phase: '+CASE_STATE_LABELS[caseState]+'.\nYour role in this phase: '+(stateGuide[caseState]||'Continue the interview naturally.');
+}
+
+function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
+  const [view,setView]=useState('lobby'); // lobby | active | debrief
+  const [activeCase,setActiveCase]=useState(null);
+  const [input,setInput]=useState('');
+  const [streaming,setStreaming]=useState(false);
+  const [streamText,setStreamText]=useState('');
+  const scrollRef=useRef(null);
+  const dict=useDictation(t=>{setInput(p=>p?p+' '+t:t);});
+
+  useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[activeCase?.sessionLog,streamText]);
+
+  const startCase=()=>{
+    const nc={id:uid('cs'),title:'Specialty Retail Profitability',industry:'Retail',type:'profitability',state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],startedAt:Date.now(),finishedAt:null};
+    setConsulting(c=>({...c,cases:[...(c.cases||[]),nc]}));
+    setActiveCase(nc);setView('active');setStreamText('');
+    sendInterviewerOpener(nc);
+  };
+
+  const sendInterviewerOpener=async(nc)=>{
+    if(!apiKey){const updated={...nc,sessionLog:[{role:'interviewer',content:'Please add your OpenAI API key in Settings to start.',at:Date.now()}]};setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));return;}
+    setStreaming(true);
+    try{
+      const opener=await streamFeedback(apiKey,buildCaseSystemPrompt('opening'),'Please introduce the case to the candidate now.',t=>setStreamText(t));
+      const updated={...nc,sessionLog:[{role:'interviewer',content:opener,at:Date.now()}]};
+      setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));
+      setStreamText('');
+    }catch(e){toasts.push('Error: '+e.message);}
+    setStreaming(false);
+  };
+
+  const sendMessage=async()=>{
+    if(!input.trim()||streaming||!activeCase)return;
+    if(!apiKey){toasts.push('Add API key in Settings');return;}
+    const userMsg={role:'candidate',content:input.trim(),at:Date.now()};
+    const updatedLog=[...activeCase.sessionLog,userMsg];
+    const uc={...activeCase,sessionLog:updatedLog};
+    setActiveCase(uc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===uc.id?uc:x)}));
+    setInput('');setStreaming(true);setStreamText('');
+    try{
+      const history=updatedLog.slice(-12).map(m=>({role:m.role==='interviewer'?'assistant':'user',content:m.content}));
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(uc.state)},...history]})});
+      if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
+      const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
+      while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;setStreamText(out);}}catch{}}}
+      const aiMsg={role:'interviewer',content:out,at:Date.now()};
+      const finalLog=[...updatedLog,aiMsg];
+      const fc={...uc,sessionLog:finalLog};
+      setActiveCase(fc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===fc.id?fc:x)}));
+      setStreamText('');
+    }catch(e){toasts.push('Error: '+e.message);}
+    setStreaming(false);
+  };
+
+  const advanceState=()=>{
+    const cur=CASE_STATES.indexOf(activeCase.state);
+    if(cur<0||cur>=CASE_STATES.length-2)return;
+    const next=CASE_STATES[cur+1];
+    const nc={...activeCase,state:next,finishedAt:next==='done'?Date.now():null};
+    setActiveCase(nc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===nc.id?nc:x)}));
+    if(next==='debrief')runDebrief(nc);
+  };
+
+  const runDebrief=async(nc)=>{
+    if(!apiKey)return;
+    setStreaming(true);
+    try{
+      const transcript=nc.sessionLog.map(m=>`${m.role==='interviewer'?'Interviewer':'Candidate'}: ${m.content}`).join('\n\n');
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:600,messages:[{role:'system',content:'You are a case coach. Score the candidate on each dimension 1-10 based on this transcript. Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0},"weaknesses":["specific weakness 1","specific weakness 2"],"insight":"1 sentence summary of performance"}'},{role:'user',content:transcript}]})});
+      const j=await resp.json();
+      const parsed=JSON.parse(j.choices[0].message.content);
+      const weak=Object.entries(parsed.competencyScores||{}).filter(([,v])=>v<6).map(([k])=>k);
+      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},weaknesses:parsed.weaknesses||weak,finishedAt:Date.now()};
+      setActiveCase(finished);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===finished.id?finished:x)}));
+      for(const dim of weak){
+        const errEntry={id:uid('er'),dimension:dim,drillId:null,caseId:nc.id,description:parsed.weaknesses?.[0]||'Below threshold in '+dim,feedback:parsed.insight||'',createdAt:Date.now(),resolved:false};
+        setConsulting(cc=>({...cc,errorLog:[...(cc.errorLog||[]),errEntry]}));
+      }
+      setView('debrief');
+    }catch(e){toasts.push('Debrief error: '+e.message);}
+    setStreaming(false);
+  };
+
+  if(view==='lobby') return (
+    <div className="max-w-xl">
+      <div className="glass rounded-xl p-6 border-subtle mb-5">
+        <div className="text-sm font-semibold mb-1">Profitability Case</div>
+        <div className="text-xs mb-4" style={{color:'#64748b'}}>Full 20–30 min mock interview. AI plays the interviewer. Voice + text input supported.</div>
+        <button onClick={startCase} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start New Case</button>
+      </div>
+      {(consulting.cases||[]).filter(c=>c.state==='done').length>0&&(
+        <div className="glass rounded-xl p-4 border-subtle">
+          <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>PAST CASES</div>
+          {(consulting.cases||[]).filter(c=>c.state==='done').slice(-5).reverse().map(c=>(
+            <div key={c.id} className="py-2 border-b border-white/3 last:border-0">
+              <div className="flex justify-between items-center">
+                <span className="text-sm">{c.title}</span>
+                <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
+              </div>
+              {c.competencyScores&&<div className="flex gap-2 flex-wrap mt-1">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,4)}: {v}</span>)}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  if(view==='debrief'&&activeCase) return (
+    <div className="max-w-2xl">
+      <div className="glass rounded-xl p-6 border-subtle mb-4">
+        <div className="text-sm font-semibold mb-4">Case Debrief — {activeCase.title}</div>
+        {activeCase.competencyScores&&(
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {Object.entries(activeCase.competencyScores).map(([k,v])=>(
+              <div key={k} className="flex items-center justify-between p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
+                <span className="text-xs" style={{color:'#94a3b8'}}>{k}</span>
+                <span className="text-sm font-bold" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{v}/10</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-2" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
+      </div>
+      <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← Back to Cases</button>
+    </div>
+  );
+
+  // active case view
+  return (
+    <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
+      <div className="flex items-center justify-between mb-3 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium">{activeCase?.title}</span>
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{CASE_STATE_LABELS[activeCase?.state]||'Active'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {activeCase&&CASE_STATES.indexOf(activeCase.state)<CASE_STATES.length-2&&(
+            <button onClick={advanceState} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b'}}>Advance Phase →</button>
+          )}
+          <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
+        </div>
+      </div>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 mb-3 pr-1">
+        {(activeCase?.sessionLog||[]).map((m,i)=>(
+          <div key={i} className={`flex ${m.role==='candidate'?'justify-end':''}`}>
+            <div className="max-w-lg rounded-xl px-4 py-3 text-sm" style={{background:m.role==='interviewer'?'rgba(255,255,255,0.04)':'rgba(99,102,241,0.15)',color:'#e2e8f0'}}>
+              <div className="text-xs mb-1 font-semibold" style={{color:m.role==='interviewer'?'#64748b':'#818cf8'}}>{m.role==='interviewer'?'Interviewer':'You'}</div>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {streaming&&streamText&&(
+          <div className="flex">
+            <div className="max-w-lg rounded-xl px-4 py-3 text-sm" style={{background:'rgba(255,255,255,0.04)',color:'#94a3b8'}}>
+              <div className="text-xs mb-1 font-semibold" style={{color:'#64748b'}}>Interviewer</div>
+              {streamText}<span className="animate-pulse">▋</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="flex-shrink-0 flex gap-2">
+        <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}} rows={2} placeholder="Your response… (Enter to send, Shift+Enter for newline)" className="flex-1 px-3 py-2 rounded-xl text-sm bg-transparent resize-none outline-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}} />
+        <div className="flex flex-col gap-1">
+          <button onClick={()=>dict.start()} className="px-3 rounded-lg text-xs" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',height:'50%'}}>🎙</button>
+          <button onClick={sendMessage} disabled={streaming||!input.trim()} className="px-3 rounded-lg text-xs font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',height:'50%',opacity:streaming||!input.trim()?0.4:1}}>Send</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------- Unprompted ----------- */
+function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts}){
+  const [mode,setMode]=useState('structured'); // structured | rapid-brief
+  const [phase,setPhase]=useState('setup'); // setup | reading | responding | grading | result
+  const [situation,setSituation]=useState('');
+  const [readTimer,setReadTimer]=useState(15);
+  const [respTimer,setRespTimer]=useState(90);
+  const [timerActive,setTimerActive]=useState(false);
+  const [response,setResponse]=useState('');
+  const [feedback,setFeedback]=useState('');
+  const [scoreData,setScoreData]=useState(null);
+  const dict=useDictation(t=>{setResponse(p=>p?p+' '+t:t);});
+
+  const SITUATIONS=[
+    'A fast-food chain\'s same-store sales fell 11% in Q1. Traffic is down 15%, but average ticket is up. Costs are flat.',
+    'A logistics company\'s margins compressed from 12% to 6% in 18 months. Volume grew 20%. No price changes.',
+    'A mid-market software firm doubled its sales team but missed revenue targets by 30%. Win rate held stable.',
+    'An e-commerce retailer\'s return rate jumped from 18% to 31% over six months with no product changes.',
+    'A hotel chain\'s RevPAR fell 14% despite industry RevPAR growing 8% in the same period.',
+    'A healthcare network\'s cost per patient visit rose 22% while patient volume held flat.',
+  ];
+
+  useEffect(()=>{
+    if(!timerActive)return;
+    const setter=phase==='reading'?setReadTimer:setRespTimer;
+    const cur=phase==='reading'?readTimer:respTimer;
+    if(cur<=0){setTimerActive(false);if(phase==='reading'){setPhase('responding');setRespTimer(mode==='structured'?90:60);setTimerActive(true);}else{setPhase('grading');submitResponse();}return;}
+    const id=setTimeout(()=>setter(t=>t-1),1000);
+    return()=>clearTimeout(id);
+  },[timerActive,phase,readTimer,respTimer]);
+
+  const startSession=()=>{
+    const sit=SITUATIONS[Math.floor(Math.random()*SITUATIONS.length)];
+    setSituation(sit);setResponse('');setFeedback('');setScoreData(null);
+    setReadTimer(15);setRespTimer(mode==='structured'?90:60);
+    setPhase('reading');setTimerActive(true);
+  };
+
+  const submitResponse=async()=>{
+    setTimerActive(false);setPhase('grading');
+    if(!apiKey){setFeedback('Add API key in Settings.');setPhase('result');return;}
+    const modeLabel=mode==='structured'?'Structured Response (90s)':'Rapid Brief (60s)';
+    const system=mode==='structured'
+      ?'You are a case coach. Grade this structured response on: (1) top-down structure (2) MECE categories (3) synthesis quality. 3-4 sentences. Be specific and honest.'
+      :'You are a case coach. Grade this rapid brief on: (1) concision (2) clarity (3) whether the headline insight is stated first. 2-3 sentences. Be blunt.';
+    try{
+      const fb=await streamFeedback(apiKey,system,`Mode: ${modeLabel}\nSituation: ${situation}\nResponse: ${response||'(no response)'}`,setFeedback);
+      const sd=await getScoreJson(apiKey,situation,response||'(no response)',fb);
+      setScoreData(sd);
+    }catch(e){toasts.push('Error: '+e.message);}
+    setPhase('result');
+  };
+
+  const timerDisplay=(t)=>`${Math.floor(t/60)}:${(t%60).toString().padStart(2,'0')}`;
+  const timerColor=(t)=>t>15?'#34d399':t>5?'#f59e0b':'#f87171';
+
+  if(phase==='setup') return (
+    <div className="max-w-xl">
+      <div className="glass rounded-xl p-6 border-subtle">
+        <div className="text-sm font-semibold mb-4">Unprompted Practice</div>
+        <div className="flex gap-2 mb-5">
+          {[['structured','Structured Response (90s)'],['rapid-brief','Rapid Brief (60s)']].map(([m,label])=>(
+            <button key={m} onClick={()=>setMode(m)} className="flex-1 py-2 rounded-lg text-xs font-medium transition-all" style={{background:mode===m?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:mode===m?'#818cf8':'#94a3b8',border:'1px solid rgba(255,255,255,0.06)'}}>{label}</button>
+          ))}
+        </div>
+        <div className="text-xs mb-5 leading-relaxed" style={{color:'#64748b'}}>
+          {mode==='structured'?'You\'ll have 15 seconds to read a business situation, then 90 seconds to structure a response. AI grades for top-down structure, MECE categories, and synthesis.':'You\'ll have 15 seconds to read a business situation, then 60 seconds to give a rapid headline-first brief. AI grades for concision, clarity, and whether you led with the insight.'}
+        </div>
+        <button onClick={startSession} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Session</button>
+      </div>
+    </div>
+  );
+
+  if(phase==='reading') return (
+    <div className="max-w-2xl">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm font-medium" style={{color:'#f59e0b'}}>Read the situation</div>
+        <span className="text-2xl font-mono font-bold" style={{color:timerColor(readTimer)}}>{readTimer}s</span>
+      </div>
+      <div className="glass rounded-xl p-6 border-subtle text-sm leading-relaxed">{situation}</div>
+    </div>
+  );
+
+  if(phase==='responding') return (
+    <div className="max-w-2xl">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm font-medium">Your response</div>
+        <span className="text-2xl font-mono font-bold" style={{color:timerColor(respTimer)}}>{timerDisplay(respTimer)}</span>
+      </div>
+      <div className="glass rounded-xl p-3 border-subtle mb-3 text-xs" style={{color:'#64748b'}}>{situation}</div>
+      <div className="glass rounded-xl p-4 border-subtle mb-4">
+        <div className="flex justify-between mb-2">
+          <span className="text-xs" style={{color:'#64748b'}}>Response</span>
+          <button onClick={()=>dict.start()} className="text-xs px-2 py-0.5 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>🎙 Voice</button>
+        </div>
+        <textarea value={response} onChange={e=>setResponse(e.target.value)} rows={5} placeholder="Start speaking or typing…" className="w-full bg-transparent text-sm resize-none outline-none" style={{color:'#e2e8f0'}} />
+      </div>
+      <button onClick={()=>{setTimerActive(false);setPhase('grading');submitResponse();}} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Submit Early</button>
+    </div>
+  );
+
+  if(phase==='grading') return (
+    <div className="max-w-2xl glass rounded-xl p-6 border-subtle">
+      <div className="text-sm font-semibold mb-4">Grading…</div>
+      <div className="text-sm leading-relaxed" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback||'Analyzing your response…'}</div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-2xl">
+      <div className="glass rounded-xl p-6 border-subtle mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-sm font-semibold">Result</div>
+          <div className="text-3xl font-bold" style={{color:scoreData?.score>=7?'#34d399':scoreData?.score>=5?'#f59e0b':'#f87171'}}>{scoreData?.score??'—'}<span className="text-base" style={{color:'#64748b'}}>/10</span></div>
+        </div>
+        <div className="text-sm leading-relaxed mb-4" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback}</div>
+        {scoreData?.improvements?.length>0&&<ul className="space-y-1">{scoreData.improvements.map((imp,i)=><li key={i} className="text-sm" style={{color:'#e2e8f0'}}>• {imp}</li>)}</ul>}
+      </div>
+      <button onClick={()=>setPhase('setup')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← New Session</button>
+    </div>
+  );
+}
+
+/* ----------- Learn ----------- */
+const LEARN_CARDS=[
+  {id:'mece',title:'MECE',tag:'Foundation',body:'Mutually Exclusive, Collectively Exhaustive. Every good structure covers all relevant space with no overlap. Test: does adding more items change the total, or just move it between buckets?'},
+  {id:'issue-tree',title:'Issue Trees',tag:'Structuring',body:'A top-down decomposition of a problem. The root is the question; each branch is a potential cause or component; leaves are the facts you need. Good trees are MECE at every level.'},
+  {id:'hyp-led',title:'Hypothesis-Led Thinking',tag:'Hypothesis',body:'State your best answer first, then test it. Don\'t explore a problem with an open mind — explore it with a specific prediction you are actively trying to disprove. McKinsey calls this "point of view from day one."'},
+  {id:'profit',title:'Profitability Framework',tag:'Frameworks',body:'Profit = Revenue − Cost. Revenue = Price × Volume. Costs split into fixed and variable. Always check both sides. Within each: segment by product, channel, geography, or customer to find where the divergence is.'},
+  {id:'market-entry',title:'Market Entry Framework',tag:'Frameworks',body:'Assess: (1) Market attractiveness — size, growth, competition, profitability. (2) Competitive position — can our client win? (3) Entry mode — build, buy, partner. (4) Financials — does it meet the hurdle rate?'},
+  {id:'ma',title:'M&A Framework',tag:'Frameworks',body:'Assess: (1) Strategic rationale — why this deal, why now? (2) Target quality — business, financials, culture. (3) Valuation — what is it worth, what are we paying? (4) Integration risk — can we actually capture synergies?'},
+  {id:'charts',title:'Chart Reading',tag:'Charts',body:'Four steps: (1) State what the chart shows (axes, units, time range). (2) State the headline number or trend. (3) State the key insight (what is surprising or actionable). (4) State what you would investigate first.'},
+  {id:'synthesis',title:'Top-Down Communication',tag:'Communication',body:'Lead with the conclusion, then support it. Never narrate your analysis first. The Pyramid Principle: Answer → Key arguments → Evidence. In a case: "The root cause is X. This is supported by A, B, and C."'},
+  {id:'estimation',title:'Estimation Technique',tag:'Quant',body:'Segment, estimate each segment, multiply. Anchor on facts you know (US population ≈ 330M, avg household ≈ 2.5 people). Show your math explicitly. State your key assumptions. Sanity-check the answer.'},
+  {id:'case-mgmt',title:'Managing the Case',tag:'Case Management',body:'You run the conversation: summarize what you\'ve learned, state what you will do next, ask one focused question at a time. If the client pushes back, acknowledge the constraint and redirect — never freeze.'},
+];
+
+function LearnSubtab(){
+  const [seen,setSeen]=useLocalState('magverse:learnSeen',{});
+  const [open,setOpen]=useState(null);
+  const tags=[...new Set(LEARN_CARDS.map(c=>c.tag))];
+  const [filterTag,setFilterTag]=useState('');
+  const filtered=filterTag?LEARN_CARDS.filter(c=>c.tag===filterTag):LEARN_CARDS;
+
+  return (
+    <div>
+      <div className="flex gap-2 flex-wrap mb-5">
+        <button onClick={()=>setFilterTag('')} className="text-xs px-3 py-1 rounded-full" style={{background:!filterTag?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:!filterTag?'#818cf8':'#64748b'}}>All</button>
+        {tags.map(t=><button key={t} onClick={()=>setFilterTag(t)} className="text-xs px-3 py-1 rounded-full" style={{background:filterTag===t?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:filterTag===t?'#818cf8':'#64748b'}}>{t}</button>)}
+      </div>
+      <div className="grid grid-cols-1 gap-3" style={{maxWidth:'720px'}}>
+        {filtered.map(card=>(
+          <div key={card.id} className="glass rounded-xl p-4 border-subtle cursor-pointer hover:bg-white/2" onClick={()=>setOpen(open===card.id?null:card.id)}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{card.tag}</span>
+                <span className="text-sm font-medium">{card.title}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {seen[card.id]&&<span className="text-xs" style={{color:'#34d399'}}>✓</span>}
+                <span className="text-xs" style={{color:'#475569'}}>{open===card.id?'▲':'▼'}</span>
+              </div>
+            </div>
+            {open===card.id&&(
+              <div className="mt-3">
+                <div className="text-sm leading-relaxed mb-3" style={{color:'#94a3b8'}}>{card.body}</div>
+                <button onClick={e=>{e.stopPropagation();setSeen(s=>({...s,[card.id]:true}));}} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(52,211,153,0.15)',color:'#34d399'}}>Mark as reviewed</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ----------- Review ----------- */
+function ReviewSubtab({consulting,setConsulting,apiKey,toasts}){
+  const [dimFilter,setDimFilter]=useState('');
+  const [genPlan,setGenPlan]=useState(false);
+  const errorLog=consulting.errorLog||[];
+  const cases=consulting.cases||[];
+  const plan=consulting.practiceplan;
+
+  const filtered=dimFilter?errorLog.filter(e=>e.dimension===dimFilter):errorLog;
+  const open=filtered.filter(e=>!e.resolved).sort((a,b)=>b.createdAt-a.createdAt);
+  const resolved=filtered.filter(e=>e.resolved);
+
+  const resolve=(id)=>setConsulting(c=>({...c,errorLog:(c.errorLog||[]).map(e=>e.id===id?{...e,resolved:true}:e)}));
+
+  const generatePlan=async()=>{
+    if(!apiKey){toasts.push('Add API key in Settings');return;}
+    setGenPlan(true);
+    try{
+      const logSummary=(consulting.errorLog||[]).slice(-30).map(e=>`${e.dimension}: ${e.description}`).join('\n');
+      const drillSummary=(consulting.drills||[]).slice(-20).map(d=>`${d.dimension} ${d.drillType}: ${d.score}/10`).join('\n');
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:400,messages:[{role:'system',content:'You are a case coach. Return JSON: {"drills":[{"dimension":"","drillType":"","rationale":"","priority":1},{"dimension":"","drillType":"","rationale":"","priority":2},{"dimension":"","drillType":"","rationale":"","priority":3}],"insight":"1 sentence summary of current weakness pattern"}'},{role:'user',content:`Error log (recent):\n${logSummary||'(none)'}\n\nDrill history:\n${drillSummary||'(none)'}`}]})});
+      const j=await resp.json();
+      const parsed=JSON.parse(j.choices[0].message.content);
+      setConsulting(c=>({...c,practiceplan:{...parsed,generatedAt:Date.now(),weekOf:new Date().toISOString().slice(0,10)}}));
+      toasts.push('Practice plan updated');
+    }catch(e){toasts.push('Error: '+e.message);}
+    setGenPlan(false);
+  };
+
+  return (
+    <div className="space-y-6" style={{maxWidth:'720px'}}>
+      {plan&&(
+        <div className="glass rounded-xl p-5 border-subtle" style={{borderLeft:'3px solid #6366f1'}}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold">This Week's Practice Plan</div>
+            <span className="text-xs" style={{color:'#64748b'}}>Generated {new Date(plan.generatedAt).toLocaleDateString()}</span>
+          </div>
+          {plan.insight&&<div className="text-xs mb-3 p-2 rounded" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{plan.insight}</div>}
+          <div className="space-y-2">
+            {(plan.drills||[]).map((d,i)=>(
+              <div key={i} className="flex items-start gap-3 p-3 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
+                <span className="text-xs w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 font-bold" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>#{d.priority||i+1}</span>
+                <div>
+                  <span className="text-sm font-medium">{C_DIM_LABELS[d.dimension]||d.dimension}</span>
+                  <span className="text-xs ml-2" style={{color:'#64748b'}}>— {d.drillType}</span>
+                  {d.rationale&&<div className="text-xs mt-0.5" style={{color:'#64748b'}}>{d.rationale}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={()=>setDimFilter('')} className="text-xs px-3 py-1 rounded-full" style={{background:!dimFilter?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:!dimFilter?'#818cf8':'#64748b'}}>All</button>
+          {[...new Set(errorLog.map(e=>e.dimension))].map(d=><button key={d} onClick={()=>setDimFilter(d)} className="text-xs px-3 py-1 rounded-full" style={{background:dimFilter===d?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:dimFilter===d?'#818cf8':'#64748b'}}>{C_DIM_LABELS[d]||d}</button>)}
+        </div>
+        <button onClick={generatePlan} disabled={genPlan} className="text-xs px-4 py-1.5 rounded-lg font-medium" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:genPlan?0.5:1}}>
+          {genPlan?'Generating…':'Generate Practice Plan'}
+        </button>
+      </div>
+
+      <div>
+        <div className="text-xs font-semibold mb-3" style={{color:'#f87171'}}>OPEN WEAKNESSES ({open.length})</div>
+        {open.length===0&&<div className="text-sm" style={{color:'#64748b'}}>No open weaknesses{dimFilter?' in this dimension':''}. Complete drills and cases to populate this.</div>}
+        <div className="space-y-2">
+          {open.map(e=>(
+            <div key={e.id} className="glass rounded-xl p-4 border-subtle">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(248,113,113,0.15)',color:'#f87171'}}>{C_DIM_LABELS[e.dimension]||e.dimension}</span>
+                    <span className="text-xs" style={{color:'#475569'}}>{new Date(e.createdAt).toLocaleDateString()}</span>
+                  </div>
+                  <div className="text-sm">{e.description}</div>
+                  {e.feedback&&<div className="text-xs mt-1" style={{color:'#64748b'}}>{e.feedback.slice(0,150)}{e.feedback.length>150?'…':''}</div>}
+                </div>
+                <button onClick={()=>resolve(e.id)} className="text-xs px-2 py-1 rounded flex-shrink-0" style={{color:'#34d399',background:'rgba(52,211,153,0.1)'}}>Resolve</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {resolved.length>0&&(
+        <div>
+          <div className="text-xs font-semibold mb-3" style={{color:'#34d399'}}>RESOLVED ({resolved.length})</div>
+          <div className="space-y-2">
+            {resolved.slice(0,5).map(e=>(
+              <div key={e.id} className="glass rounded-xl p-3 border-subtle opacity-50">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(52,211,153,0.1)',color:'#34d399'}}>{C_DIM_LABELS[e.dimension]||e.dimension}</span>
+                  <span className="text-sm">{e.description}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cases.filter(c=>c.state==='done').length>0&&(
+        <div>
+          <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>CASE HISTORY</div>
+          <div className="space-y-2">
+            {cases.filter(c=>c.state==='done').slice(-10).reverse().map(c=>(
+              <div key={c.id} className="glass rounded-xl p-4 border-subtle">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">{c.title}</span>
+                  <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
+                </div>
+                {c.competencyScores&&<div className="flex gap-2 flex-wrap">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,4)}:{v}</span>)}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------- Main ConsultingPanel ----------- */
+function ConsultingPanel({data, setData, toasts, isMobile}){
+  const [subtab,setSubtab]=useState('home');
+  const consulting=data.consulting||getDefaultConsulting();
+  const setConsulting=patch=>setData(d=>({...d,consulting:{...(d.consulting||getDefaultConsulting()),...(typeof patch==='function'?patch(d.consulting||getDefaultConsulting()):patch)}}));
+  const apiKey=data.settings?.apiKey||'';
+
+  const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h2 className="text-xl font-semibold">Consulting Practice</h2>
+          <div className="text-xs mt-0.5" style={{color:'#64748b'}}>Case interview and consulting skill builder</div>
+        </div>
+      </div>
+      <div className="flex gap-1 p-1 rounded-xl mb-6" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',overflowX:'auto',width:'fit-content',maxWidth:'100%'}}>
+        {SUBTABS.map(t=>(
+          <button key={t.id} onClick={()=>setSubtab(t.id)}
+            className="px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap"
+            style={{background:subtab===t.id?'rgba(99,102,241,0.25)':'transparent',color:subtab===t.id?'#818cf8':'#94a3b8'}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {subtab==='home'       &&<ConsultingHome consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} setSubtab={setSubtab}/>}
+      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='learn'      &&<LearnSubtab/>}
+      {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
     </div>
   );
 }
