@@ -1,15 +1,18 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
+console.log('[Magverse] App.jsx v76 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
 const uid = (p = '') => Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + p;
 function ls(k, v) {
   if (typeof v !== 'undefined') {
-    localStorage.setItem(k, JSON.stringify(v));
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
     return;
   }
-  const t = localStorage.getItem(k);
-  return t ? JSON.parse(t) : null;
+  try {
+    const t = localStorage.getItem(k);
+    return t ? JSON.parse(t) : null;
+  } catch(e) { return null; }
 }
 
 // Hub system prompts
@@ -153,8 +156,25 @@ const defaultState = () => ({
   social: [],
   hubs: DEFAULT_HUBS(),
   career: { contacts: [], questions: [], applications: [] },
+  resumeEditor: null,
   seenDeals: [],
   inbox: [], // §3 universal capture
+  // §7 Research panels
+  theses: [],
+  companyWatchlist: [],
+  decisionJournal: [],
+  // §8 Mental models library
+  mentalModels: [
+    {id:'mm1',name:'Variant Perception',description:'An investment thesis only generates alpha if it differs from consensus in a way that is correct. The goal is to find cases where the market is wrong and you know why.',whenToUse:'Before any investment: what is the market pricing in, and how does my view differ specifically?',example:'Market thinks growth is mean-reverting; variant view: structural tailwind makes this durable.',tags:['investing']},
+    {id:'mm2',name:"Porter's Five Forces",description:'Framework for analyzing competitive intensity: threat of new entrants, supplier power, buyer power, threat of substitutes, competitive rivalry.',whenToUse:'Sector analysis, business quality assessment.',example:'High supplier power + high rivalry = poor industry economics. Seek industries with structural barriers.',tags:['strategy','investing']},
+    {id:'mm3',name:'Margin of Safety',description:'Buy assets at a significant discount to intrinsic value to protect against estimation errors and bad luck.',whenToUse:'Valuation and position sizing.',example:'Intrinsic value $100 → only buy at $60-70. The gap absorbs mistakes.',tags:['investing','valuation']},
+    {id:'mm4',name:'Economic Moats',description:'Durable competitive advantages: network effects, switching costs, cost advantages, efficient scale, intangible assets. Moats determine whether high returns on capital are sustainable.',whenToUse:'Business quality analysis.',example:'Software with high switching costs → evaluate depth of integration, not current margins alone.',tags:['investing','strategy']},
+    {id:'mm5',name:'Core-Satellite Portfolio',description:'Stable core (diversified, low-turnover) + smaller satellite of higher-conviction active ideas. Core limits catastrophic error; satellite captures upside of concentrated research.',whenToUse:'Portfolio construction and risk management.',example:'70% core exposure, 30% satellite of 5-10 high-conviction small-cap positions.',tags:['portfolio','investing']},
+    {id:'mm6',name:'Uncorrelated Return Streams',description:"Dalio: combining 15-20 genuinely uncorrelated return streams reduces portfolio risk ~75% while keeping expected return constant. Diversification only works when correlations are truly low.",whenToUse:'Portfolio construction, risk budgeting.',example:'Domestic equity + EM + commodities + TIPS + alternatives — check correlation matrix, not just asset class labels.',tags:['portfolio','investing']},
+  ],
+  // §12 Deep Work Ramp
+  rampSessions: [],
+  rampRitual: { cue: '', timerMin: 75 },
   /* §10 — Philosophy briefing (seeded from session state as of Aug 2026) */
   philosophyBriefing: {
     currentTheme:"The Good Life — Happiness, Flow & Deep Focus",
@@ -320,6 +340,13 @@ const defaultState = () => ({
       {name:"Environmental / waste services",notes:"",status:"exploring"},{name:"Education & workforce services",notes:"",status:"exploring"},
     ],
     watchlist:[],
+    aiCourse:{
+      startDate:null,
+      weeks: GE_COURSE_WEEKS.map(w=>({...w})),
+      firstFourteen: GE_COURSE_DAYS14.map(d=>({...d})),
+      weekProgress: {},
+      courseVersion: 2,
+    },
   },
   planner: {
     areas:[
@@ -507,7 +534,11 @@ function App(){
             {active==='settings'    && <SettingsPanel    data={data} setData={setData} toasts={toasts} lastBackup={lastBackup} />}
             {active==='career'      && <CareerPanel      data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='inbox'       && <InboxPanel       data={data} setData={setData} toasts={toasts} isMobile={isMobile} setActive={setActive} />}
-            {active==='golden-egg'  && <GoldenEggPanel   data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='golden-egg'    && <GoldenEggPanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='research'      && <ResearchPanel     data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
+            {active==='mental-models' && <MentalModelsPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='ramp'          && <DeepWorkRampPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='review'        && <ReviewPanel       data={data} toasts={toasts} />}
           </div>
         </main>
       </div>
@@ -557,12 +588,15 @@ function MainAssistant({data, setData, toasts, isMobile}){
     if(apiKey){
       try{
         toasts.push('Sending to assistant...');
-        const resp = await fetch('https://api.anthropic.com/v1/complete',{
-          method:'POST', headers:{'Content-Type':'application/json','x-api-key':apiKey},
-          body: JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,prompt:'You are a planning assistant. Parse user intent and return JSON actions. User: '+msg})
+        const resp = await fetch('https://api.openai.com/v1/chat/completions',{
+          method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+          body: JSON.stringify({model:'gpt-4o-mini',max_tokens:800,messages:[
+            {role:'system',content:'You are a planning assistant. Parse user intent and return JSON with an "actions" array.'},
+            {role:'user',content:msg}
+          ]})
         });
         const j = await resp.json();
-        const out = j?.completion || j?.output || '';
+        const out = j?.choices?.[0]?.message?.content || '';
         // naive JSON extraction
         try{
           const maybe = JSON.parse(out);
@@ -708,10 +742,69 @@ const DAY_MAP = [
 function normAmPm(s){
   return s
     .replace(/\ba\.m\./gi,'am').replace(/\bp\.m\./gi,'pm')
-    // "930 am" / "1045pm" → "9:30 am" / "10:45 pm"
     .replace(/\b(\d{1,2})([0-5]\d)\s*(am|pm)/gi, (_,h,m,ap)=>`${h}:${m} ${ap}`)
-    // "from 930" / "to 1030" / "at 900" without am/pm
-    .replace(/\b(from|to|at)\s+(\d{1,2})([0-5]\d)\b/gi, (_,prep,h,m)=>`${prep} ${h}:${m}`);
+    .replace(/\b(from|to|at)\s+(\d{1,2})([0-5]\d)\b/gi, (_,prep,h,m)=>`${prep} ${h}:${m}`)
+    .replace(/\bnoon\b/gi,'12:00 pm')
+    .replace(/\bmidday\b/gi,'12:00 pm')
+    .replace(/\bmidnight\b/gi,'12:00 am');
+}
+
+// Insert am/pm for bare hour numbers preceded by time prepositions.
+// Uses context words + simple hour-range heuristics, then sequence order.
+function insertAmPm(s){
+  const eveningCtx = /\b(dinner|supper|movie|film|show|game|party|date|evening|tonight|night|drinks|bar|club|concert)\b/i;
+  const morningCtx = /\b(breakfast|morning|wake|woke|gym|workout|jog|run|commute|class|lecture|meeting|standup)\b/i;
+
+  // Collect all bare-time occurrences in order
+  const bareRe = /\b(at|from|to|until|till|around|by)\s+(\d{1,2}(?::\d{2})?)(?!\s*(?:am|pm|:\d))\b/gi;
+  const hits = [];
+  let m;
+  while((m = bareRe.exec(s)) !== null){
+    hits.push({ index: m.index, len: m[0].length, prep: m[1], time: m[2], h: parseInt(m[2], 10) });
+  }
+  if(!hits.length) return s;
+
+  let lastFull = -1;
+  const assigned = hits.map(hit => {
+    const { h, index, len } = hit;
+    const ctx = s.slice(Math.max(0, index - 80), index + len + 80);
+    const isEvening = eveningCtx.test(ctx);
+    const isMorning = morningCtx.test(ctx);
+
+    let fullH;
+    if(h === 12)        { fullH = 12; }           // noon
+    else if(h >= 13)    { fullH = h; }             // 24h already
+    else if(h >= 7 && h <= 11){
+      // Morning range: default am, but push to pm if evening context
+      const amH = h, pmH = h + 12;
+      if(lastFull >= 12 && amH < lastFull - 12)    { fullH = pmH; } // keep sequence
+      else if(isEvening && !isMorning)              { fullH = pmH; }
+      else                                          { fullH = amH; }
+    }
+    else if(h >= 1 && h <= 6){
+      // Afternoon range: default pm, but if sequence is still in am keep am
+      const amH = h, pmH = h + 12;
+      if(lastFull < 7 && lastFull > 0 && amH > lastFull){ fullH = amH; } // still morning
+      else                                                { fullH = pmH; }
+    }
+    else { fullH = h; }
+
+    // Sequence guard: if result < last, try switching am↔pm
+    if(lastFull >= 0 && fullH < lastFull){
+      const alt = fullH < 12 ? fullH + 12 : fullH - 12;
+      if(alt > lastFull) fullH = alt;
+    }
+    lastFull = fullH;
+    return { ...hit, ap: fullH >= 12 ? 'pm' : 'am' };
+  });
+
+  // Rebuild string in reverse order to preserve offsets
+  let result = s;
+  for(let i = assigned.length - 1; i >= 0; i--){
+    const { index, len, prep, time, ap } = assigned[i];
+    result = result.slice(0, index) + `${prep} ${time} ${ap}` + result.slice(index + len);
+  }
+  return result;
 }
 
 function parseDay(s){
@@ -753,17 +846,30 @@ function parseHour(s){
 function cleanTitle(seg){
   return seg
     .replace(/\ba\.m\./gi,'').replace(/\bp\.m\./gi,'')
-    .replace(/\b(i want to|i need to|i will|i'm going to|i am going to|i'm planning to|please|can you|add|schedule|put|block|set up|then|afterwards|after that)\b/gi,'')
-    .replace(/\band\s+then\b/gi,'').replace(/\bI'm going to\b/gi,'')
+    // Spoken intent phrases
+    .replace(/\bi(?:'ll|'m going to| will| am going to| plan to| want to| need to|'m planning to)\s+/gi,'')
+    .replace(/\b(i want to|i need to|i will|i'm going to|i am going to|i'm planning to|i should|i gotta|i got to)\b/gi,'')
+    // Motion verbs with destination
+    .replace(/\b(head|go|walk|drive|run|get|make it)\s+to\s+(the\s+|a\s+)?/gi,'')
+    .replace(/\b(go|head|walk|drive)\b\s*/gi,'')
+    // Possession / consumption verbs at segment start (strip only when followed by noun)
+    .replace(/^(grab|have|eat|pick\s+up|take|do)\s+/i,'')
+    // Scheduling helper words
+    .replace(/\b(please|can you|add|schedule|put|block|set up|then|afterwards|after that|followed by|next|also|just|maybe|probably|hopefully)\b/gi,'')
+    .replace(/\band\s+then\b/gi,'')
+    // Duration expressions (kept from title)
+    .replace(/\bfor\s+\d+\.?\d*\s*(and\s+a\s+half\s+)?(hour|hours|hr|hrs|minute|minutes|min|mins)\b/gi,'')
+    // Day references
     .replace(/\bon\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,'')
-    .replace(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/gi,'')
-    .replace(/\b(at|by|around|from|to)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/gi,'')
+    .replace(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/gi,'')
+    // Time references
+    .replace(/\b(at|by|around|from|to|until|till)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/gi,'')
     .replace(/\d{1,2}\s*:\s*\d{2}\s*(am|pm)?/gi,'')
     .replace(/\d{1,2}\s*(am|pm)/gi,'')
-    .replace(/\bjust\b/gi,'')
-    .replace(/^[\s,;.]+|[\s,;.]+$/g,'') // trim leading/trailing punctuation
-    .replace(/^\s*(and|but|or|so)\s+/i,'') // strip leading conjunctions
-    .replace(/\s+(and|or|but)\s*$/i,'')    // strip trailing conjunctions
+    // Punctuation and conjunction cleanup
+    .replace(/^[\s,;.:!?]+|[\s,;.:!?]+$/g,'')
+    .replace(/^\s*(and|but|or|so|then)\s+/i,'')
+    .replace(/\s+(and|or|but)\s*$/i,'')
     .replace(/\s+/g,' ').trim();
 }
 
@@ -882,19 +988,23 @@ function heuristicParse(text, _depth=0){
   const clearAction = parseClearCommand(text);
   if(clearAction) return [clearAction];
 
-  const norm = normAmPm(text);
+  // Preprocess: normalize spoken words, then insert am/pm for bare times
+  const norm = insertAmPm(normAmPm(text));
   const globalDay = parseDay(norm);
 
-  // Bulk schedule detection: 3+ time expressions OR 2+ "from…to" ranges → split
+  // Bulk schedule detection: 2+ time expressions OR 2+ "from…to" ranges → split
   if(_depth === 0){
     const allTimes  = [...norm.matchAll(/\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)/gi)];
     const allRanges = [...norm.matchAll(/\bfrom\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s+to\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi)];
-    if(allTimes.length >= 3 || allRanges.length >= 2){
-      // Split on "then [after that] I/at/from/around" boundaries
+    if(allTimes.length >= 2 || allRanges.length >= 1){
+      // Split on natural speech boundaries:
+      // - newlines
+      // - "then [after that]" / "after that" / "next" / "followed by" / "and then"
+      // - comma or semicolon followed by time preposition or activity verb
       const chunks = norm
-        .split(/\n+|(?:\s+(?:and\s+)?)then\s+(?:after\s+(?:that\s+))?(?=(?:at|from|around|i)\b)/i)
+        .split(/\n+|(?:,\s*(?=(?:at|from|around|then|after|next|I|go|head|grab|have|wake|study|lunch|dinner|breakfast|gym|class|\d{1,2}\s*(?:am|pm))\b))|(?:\s+(?:and\s+)?(?:then|after\s+that|next|followed\s+by)\s+(?=(?:at|from|around|i|go|head|\d{1,2}\s*(?:am|pm))\b))/i)
         .map(s => s
-          .replace(/^(?:then\s+|after\s+that\s+|,\s*)/i,'')
+          .replace(/^(?:then\s+|after\s+that\s+|next\s+|followed\s+by\s+|,\s*)/i,'')
           .replace(/\s+\b(and|or|but)\s*$/i,'')
           .trim())
         .filter(s => s.length > 2);
@@ -906,9 +1016,7 @@ function heuristicParse(text, _depth=0){
           const acts = heuristicParse(chunk, 1);
           for(const a of acts){
             if(a.type === 'event'){
-              // Skip events with no time (can't show on calendar)
               if(a.payload.when?.hour === undefined) continue;
-              // Skip chunks that are just day-name placeholders or have no real title
               if(DAY_NAMES.test((a.payload.title||'').trim())) continue;
               if((a.payload.title||'').trim().length < 2) continue;
               if(a.payload.when.day === undefined) a.payload.when = {...a.payload.when, day: inheritDay};
@@ -960,7 +1068,12 @@ function heuristicParse(text, _depth=0){
   if(timeMatches.length <= 1){
     const hour = timeMatches.length===1 ? timeMatches[0].hour : undefined;
     const day  = globalDay !== undefined ? globalDay : (hour !== undefined ? jsDayToMv(new Date().getDay()) : undefined);
-    const when = (day!==undefined||hour!==undefined) ? {day,hour} : undefined;
+    // Duration: "for N hours" or "for N and a half hours"
+    const durMatch = norm.match(/\bfor\s+(\d+(?:\.\d+)?)\s*(and\s+a\s+half\s+)?(hour|hours|hr|hrs)\b/i)
+      || norm.match(/\bfor\s+(\d+)\s+and\s+a\s+half\s+(hour|hours)\b/i);
+    const durH = durMatch ? (parseFloat(durMatch[1]) + (durMatch[2] ? 0.5 : 0)) : undefined;
+    const endHour = hour !== undefined && durH !== undefined ? hour + durH : undefined;
+    const when = (day!==undefined||hour!==undefined) ? {day, hour, ...(endHour!==undefined?{endHour}:{})} : undefined;
     const rawTitle = cleanTitle(norm);
     const title = rawTitle.length>1 ? rawTitle.charAt(0).toUpperCase()+rawTitle.slice(1) : text.trim();
     const type = detectType(norm);
@@ -1031,6 +1144,9 @@ function BottomNav({active, setActive, inboxCount=0}){
     {id:'notes',        label:'Notes',    icon:IconNotes},
     {id:'chathubs',     label:'Learn',    icon:IconChat},
     {id:'golden-egg',   label:'Fund',     icon:IconEgg},
+    {id:'research',     label:'Research', icon:IconResearch},
+    {id:'ramp',         label:'Ramp',     icon:IconRamp},
+    {id:'review',       label:'Review',   icon:IconReview},
     {id:'settings',     label:'More',     icon:IconGear},
   ];
   return (
@@ -1059,6 +1175,10 @@ function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
     {id:'inbox',       label:'Inbox',        icon:IconInbox, badge:inboxCount},
     {id:'career',      label:'Career',       icon:IconBriefcase},
     {id:'golden-egg',  label:'Golden Egg',   icon:IconEgg},
+    {id:'research',    label:'Research',     icon:IconResearch},
+    {id:'mental-models',label:'Models',      icon:IconBrain},
+    {id:'ramp',        label:'Deep Work',    icon:IconRamp},
+    {id:'review',      label:'Review',       icon:IconReview},
     {id:'gym',         label:'Gym',          icon:IconDumbbell},
     {id:'social',      label:'Social',       icon:IconUsers},
     {id:'notes',       label:'Notes',        icon:IconNotes},
@@ -1272,7 +1392,7 @@ function DailyInsightsSubtab({data}){
   const navigate=dir=>{const d=new Date(date+'T12:00:00');d.setDate(d.getDate()+dir);setDate(d.toISOString().slice(0,10));};
 
   async function analyze(force=false){
-    if(!apiKey){setError('Add your Anthropic API key in Settings.');return;}
+    if(!apiKey){setError('Add your OpenAI API key in Settings.');return;}
     if(!force){
       const cached=ls(cacheKey);
       if(cached&&cached.hash===computeHash()&&Date.now()-(cached.at||0)<(isFuture?6*3600000:Infinity)){
@@ -1304,10 +1424,10 @@ Output exactly these 5 sections in order, each wrapped in XML tags. 2-4 sentence
     const userMsg=`Date: ${dateLabel} (${dayName})\n\nSCHEDULE:\n${evText}\n\nWEATHER:\n${wxText}\n\n${jrnText}\n\nPAST SIMILAR ${dayName.toUpperCase()}S (last 3 months with journal):\n${pastText}`;
 
     try{
-      const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{
         method:'POST',
-        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1400,stream:true,system,messages:[{role:'user',content:userMsg}]})
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+        body:JSON.stringify({model:'gpt-4o-mini',max_tokens:1400,stream:true,messages:[{role:'system',content:system},{role:'user',content:userMsg}]})
       });
       if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
       const reader=resp.body.getReader(),dec=new TextDecoder();
@@ -1321,7 +1441,7 @@ Output exactly these 5 sections in order, each wrapped in XML tags. 2-4 sentence
           if(!line.startsWith('data:')) continue;
           const raw=line.slice(5).trim();
           if(raw==='[DONE]') break;
-          try{const ev=JSON.parse(raw);if(ev.type==='content_block_delta'&&ev.delta?.type==='text_delta'){full+=ev.delta.text;setSections(extractInsightSections(full));}}catch(e){}
+          try{const ev=JSON.parse(raw);if(ev.choices?.[0]?.delta?.content){full+=ev.choices[0].delta.content;setSections(extractInsightSections(full));}}catch(e){}
         }
       }
       const final=extractInsightSections(full);
@@ -1445,6 +1565,11 @@ function SchedulePanel({data, setData, toasts, isMobile}){
   const [expandedEvent, setExpandedEvent] = useState(null);
   const [removingIds, setRemovingIds] = useState([]);
   const [scheduleSubtab, setScheduleSubtab] = useState('calendar');
+  // Voice bar state machine: idle | listening | reviewing
+  const [dayVoicePhase, setDayVoicePhase] = useState('idle');
+  const [dayTranscript, setDayTranscript] = useState('');
+  const [reviewItems, setReviewItems] = useState([]); // parsed actions with preview ids
+  const dayRecogRef = useRef(null);
   const pendingRef = useRef({});
   const events = data.events || [];
 
@@ -1492,6 +1617,83 @@ function SchedulePanel({data, setData, toasts, isMobile}){
     const d = new Date(now.getFullYear(), now.getMonth()+offset, 1);
     return d.toLocaleDateString('en',{month:'long',year:'numeric'});
   };
+
+  const DAY_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  function fmtReviewTime(hour, endHour){
+    if(hour === undefined) return 'No time';
+    const fmt = h => {
+      const wh = Math.floor(h), mins = Math.round((h - wh)*60);
+      const ap = wh >= 12 ? 'PM' : 'AM';
+      const d = wh > 12 ? wh - 12 : wh === 0 ? 12 : wh;
+      return mins > 0 ? `${d}:${String(mins).padStart(2,'0')} ${ap}` : `${d} ${ap}`;
+    };
+    return endHour !== undefined ? `${fmt(hour)} – ${fmt(endHour)}` : fmt(hour);
+  }
+  function fmtReviewDay(day){
+    const todayDi = jsDayToMv(new Date().getDay());
+    const tomorrowDi = jsDayToMv(new Date(Date.now()+86400000).getDay());
+    if(day === undefined) return 'Today';
+    if(day === todayDi) return 'Today';
+    if(day === tomorrowDi) return 'Tomorrow';
+    return DAY_LABELS[day] || 'Today';
+  }
+  const TYPE_EMOJI = {Gym:'🏋️', Assignments:'📚', Social:'🍽️', Manual:'📅'};
+
+  function toggleDayMic(){
+    if(dayVoicePhase === 'listening'){
+      dayRecogRef.current && dayRecogRef.current.stop();
+      setDayVoicePhase('idle');
+      return;
+    }
+    if(dayVoicePhase === 'reviewing'){
+      setDayVoicePhase('idle');
+      setDayTranscript('');
+      setReviewItems([]);
+      return;
+    }
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!R){ toasts.push('Speech recognition not supported in this browser'); return; }
+    const r = new R();
+    r.lang = 'en-US';
+    r.interimResults = true;
+    r.continuous = true;
+    r.maxAlternatives = 1;
+    dayRecogRef.current = r;
+    let finalAccum = '';
+    r.onresult = (e) => {
+      let interim = '';
+      for(let i = e.resultIndex; i < e.results.length; i++){
+        const t = e.results[i][0].transcript;
+        if(e.results[i].isFinal) finalAccum += t + ' ';
+        else interim += t;
+      }
+      setDayTranscript((finalAccum + interim).trimStart());
+    };
+    r.onend = () => {
+      const full = finalAccum.trim();
+      if(!full){ setDayVoicePhase('idle'); return; }
+      const acts = heuristicParse(full);
+      const eventActs = acts.filter(a => a.type === 'event');
+      if(!eventActs.length){ toasts.push('No events recognized — try again'); setDayVoicePhase('idle'); return; }
+      // Attach a review-id to each for individual removal
+      setReviewItems(eventActs.map((a,i) => ({...a, _rid: `r${i}`})));
+      setDayVoicePhase('reviewing');
+    };
+    r.onerror = () => { setDayVoicePhase('idle'); };
+    r.start();
+    setDayVoicePhase('listening');
+    setDayTranscript('');
+    setReviewItems([]);
+    finalAccum = '';
+  }
+
+  function confirmReview(){
+    if(!reviewItems.length) return;
+    applyActions(reviewItems, setData, toasts);
+    setDayVoicePhase('idle');
+    setDayTranscript('');
+    setReviewItems([]);
+  }
 
   return (
     <div>
@@ -1546,6 +1748,102 @@ function SchedulePanel({data, setData, toasts, isMobile}){
             + Add Event
           </button>
         </div>
+      </div>
+
+      {/* ── Voice Day Bar ── */}
+      <div className="mb-5 rounded-2xl overflow-hidden" style={{
+        border:`1px solid ${dayVoicePhase==='listening'?'rgba(99,102,241,0.45)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.35)':'rgba(255,255,255,0.06)'}`,
+        background:dayVoicePhase==='listening'?'rgba(99,102,241,0.05)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.03)':'rgba(255,255,255,0.01)',
+        transition:'all 0.25s ease'
+      }}>
+
+        {/* Top row: mic + transcript / idle hint */}
+        <div className="flex items-center gap-3 px-4 py-3">
+          <div style={{position:'relative',flexShrink:0}}>
+            {dayVoicePhase==='listening' && (
+              <span style={{position:'absolute',inset:'-7px',borderRadius:'50%',background:'rgba(99,102,241,0.2)',animation:'pulse 1s ease-in-out infinite',pointerEvents:'none'}}/>
+            )}
+            <button onClick={toggleDayMic}
+              className="w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all"
+              style={{
+                background:dayVoicePhase==='listening'?'rgba(99,102,241,0.35)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.05)',
+                border:dayVoicePhase==='listening'?'1px solid rgba(99,102,241,0.5)':dayVoicePhase==='reviewing'?'1px solid rgba(16,185,129,0.35)':'1px solid rgba(255,255,255,0.1)',
+                color:dayVoicePhase==='listening'?'#a5b4fc':dayVoicePhase==='reviewing'?'#34d399':'#475569',
+                position:'relative',zIndex:1
+              }}>
+              {dayVoicePhase==='listening' ? '◉' : dayVoicePhase==='reviewing' ? '✓' : '🎤'}
+            </button>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {dayVoicePhase==='listening' ? (
+              dayTranscript
+                ? <div className="text-sm leading-relaxed" style={{color:'#c7d2fe'}}>{dayTranscript}<span style={{display:'inline-block',width:'2px',height:'13px',background:'#818cf8',marginLeft:'3px',verticalAlign:'middle',animation:'pulse 0.7s ease-in-out infinite'}}/></div>
+                : <div className="text-sm italic animate-item" style={{color:'#6366f1'}}>Listening — speak your full day…</div>
+            ) : dayVoicePhase==='reviewing' ? (
+              <div>
+                <div className="text-sm font-semibold" style={{color:'#34d399'}}>Review before adding</div>
+                <div className="text-xs mt-0.5" style={{color:'#475569'}}>Remove anything wrong, then confirm.</div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-sm font-medium" style={{color:'#64748b'}}>Plan your day by voice</div>
+                <div className="text-xs mt-0.5" style={{color:'#334155'}}>Speak naturally — <span style={{color:'#818cf8'}}>"gym at 7, class at 10, lunch at noon, study from 2 to 5, dinner at 6"</span></div>
+              </div>
+            )}
+          </div>
+
+          {dayVoicePhase==='idle' && dayTranscript && (
+            <button onClick={()=>setDayTranscript('')} className="flex-shrink-0 text-xs px-2 py-1 rounded" style={{color:'#334155',border:'1px solid rgba(255,255,255,0.06)'}}>Clear</button>
+          )}
+        </div>
+
+        {/* Review cards */}
+        {dayVoicePhase==='reviewing' && (
+          <div style={{borderTop:'1px solid rgba(255,255,255,0.05)'}}>
+            {/* Event chips */}
+            <div className="px-4 pt-3 pb-2 space-y-2">
+              {reviewItems.map(item => {
+                const p = item.payload;
+                const emoji = TYPE_EMOJI[p.type] || '📅';
+                const timeStr = fmtReviewTime(p.when?.hour, p.when?.endHour);
+                const dayStr  = fmtReviewDay(p.when?.day);
+                const noTime  = p.when?.hour === undefined;
+                return (
+                  <div key={item._rid} className="flex items-center gap-2 p-2.5 rounded-xl animate-item"
+                    style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${noTime?'rgba(245,158,11,0.25)':'rgba(255,255,255,0.06)'}`}}>
+                    <span style={{fontSize:'15px',flexShrink:0}}>{emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate" style={{color:'#e2e8f0'}}>{p.title || '(untitled)'}</div>
+                      <div className="text-xs mt-0.5" style={{color:noTime?'#f59e0b':'#475569'}}>
+                        {noTime ? '⚠ No time detected' : `${timeStr} · ${dayStr}`}
+                      </div>
+                    </div>
+                    <button onClick={()=>setReviewItems(prev=>prev.filter(x=>x._rid!==item._rid))}
+                      className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-sm transition-all hover:bg-white/10"
+                      style={{color:'#475569'}}>×</button>
+                  </div>
+                );
+              })}
+              {!reviewItems.length && (
+                <div className="text-sm text-center py-2" style={{color:'#334155'}}>All events removed — dismiss or try again.</div>
+              )}
+            </div>
+            {/* Confirm row */}
+            <div className="flex gap-2 px-4 pb-3">
+              <button onClick={confirmReview} disabled={!reviewItems.length}
+                className="flex-1 py-2 rounded-xl text-sm font-bold transition-all"
+                style={{background:reviewItems.length?'rgba(16,185,129,0.15)':'rgba(255,255,255,0.04)',color:reviewItems.length?'#10b981':'#334155',border:reviewItems.length?'1px solid rgba(16,185,129,0.3)':'1px solid rgba(255,255,255,0.06)'}}>
+                {reviewItems.length ? `✓ Add ${reviewItems.length} event${reviewItems.length>1?'s':''}` : 'Nothing to add'}
+              </button>
+              <button onClick={()=>{ setDayVoicePhase('idle'); setDayTranscript(''); setReviewItems([]); }}
+                className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
+                style={{color:'#475569',border:'1px solid rgba(255,255,255,0.06)'}}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Type legend */}
@@ -2336,12 +2634,29 @@ function TasksAIChatPanel({ tasks, apiKey, onAddTask, onUpdateTask, onDeleteTask
     }));
     return `You are Rishi's personal task assistant in Magverse. Help him manage tasks across 3 categories: classroom (academic work, assignments, homework), extracurricular (clubs/activities/sports), personal (life tasks/errands/habits).
 
-You can add tasks, update them, mark done, delete, reprioritize, give workload insights, and help plan what to tackle first.
+TASK TITLE NORMALIZATION — ALWAYS do this when creating tasks:
+Turn the user's raw input into a polished, professional task title.
+Rules: Title Case, start with a strong action verb, 3–8 words, concise and specific, preserve intent, fix grammar, remove filler, expand abbreviations when context is clear.
+Scale to task size — simple tasks stay simple, don't over-engineer.
 
-When performing actions, include them at the END of your response in <magverse-actions> tags:
-<magverse-actions>[{"type":"add_task","task":{"title":"...","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD","subject":"","notes":"","status":"To Do"}},{"type":"mark_done","taskId":"id"},{"type":"update_task","taskId":"id","patch":{"priority":"High","dueDate":"2026-05-25"}},{"type":"delete_task","taskId":"id"}]</magverse-actions>
+Examples (raw → polished):
+  "make pm resume"          → "Build & Polish Product Management Resume"
+  "study for econ midterm"  → "Prepare for Economics Midterm"
+  "finish python project"   → "Finish Python Project"
+  "call mom"                → "Call Mom"
+  "work on internship apps" → "Complete Internship Applications"
+  "fix resume bullets"      → "Strengthen Resume Bullet Points"
+  "research blackrock"      → "Research BlackRock Opportunities"
+  "email professor research"→ "Email Professor About Research"
+  "do laundry"              → "Do Laundry"
+  "make slides for pitch"   → "Build Investment Pitch Deck"
 
-Rules: dueDate = YYYY-MM-DD or null. category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low". Always explain briefly before acting. Be concise. Plain text only, no markdown.
+ACTIONS: When performing actions, you MUST include them at the END of your response in <magverse-actions> tags. Without this tag nothing will happen — it is required for every add, update, delete, or mark-done action.
+<magverse-actions>[{"type":"add_task","task":{"title":"Polished Title Here","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD","subject":"","notes":"","status":"To Do"}},{"type":"mark_done","taskId":"id"},{"type":"update_task","taskId":"id","patch":{"priority":"High"}},{"type":"delete_task","taskId":"id"}]</magverse-actions>
+
+Rules: dueDate = YYYY-MM-DD or null. category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
+Use the POLISHED title in both your response text and in the action tag — they must match.
+Be concise. Plain text only, no markdown.
 
 Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
@@ -2349,15 +2664,25 @@ TASKS: ${JSON.stringify(taskList)}`;
 
   function execActions(text) {
     const m = text.match(/<magverse-actions>([\s\S]*?)<\/magverse-actions>/);
-    if (!m) return;
+    if (!m) return { added: [], hasActions: false };
+    const added = [];
     try {
       JSON.parse(m[1]).forEach(a => {
-        if (a.type === 'add_task') onAddTask(a.task);
+        if (a.type === 'add_task') {
+          const t = a.task || {};
+          // Dedup: skip if same title+category already exists (prevents retry duplicates)
+          const exists = tasks.some(x =>
+            x.title.trim().toLowerCase() === (t.title||'').trim().toLowerCase() &&
+            x.category === t.category
+          );
+          if (!exists) { onAddTask(t); added.push(t); }
+        }
         else if (a.type === 'mark_done') onUpdateTask(a.taskId, { status: 'Done', doneAt: new Date().toISOString() });
         else if (a.type === 'update_task') onUpdateTask(a.taskId, a.patch);
         else if (a.type === 'delete_task') onDeleteTask(a.taskId);
       });
     } catch(e) {}
+    return { added, hasActions: true };
   }
 
   async function send() {
@@ -2369,12 +2694,16 @@ TASKS: ${JSON.stringify(taskList)}`;
     setMsgs(history);
     setLoading(true);
     try {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, stream: true, system: buildSystem(), messages: history.map(m => ({ role: m.role, content: m.content })) })
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1000, stream: true, messages: [{role:'system',content:buildSystem()}, ...history.map(m => ({ role: m.role, content: m.content }))] })
       });
-      if (!resp.ok) throw new Error('API error');
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => ({}));
+        const errMsg = errJson.error?.message || `HTTP ${resp.status}`;
+        throw new Error(errMsg);
+      }
       let full = '';
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
@@ -2386,16 +2715,20 @@ TASKS: ${JSON.stringify(taskList)}`;
           if (!line.startsWith('data: ')) continue;
           try {
             const j = JSON.parse(line.slice(6));
-            if (j.type === 'content_block_delta' && j.delta?.type === 'text_delta') {
-              full += j.delta.text;
+            if (j.choices?.[0]?.delta?.content) {
+              full += j.choices[0].delta.content;
               setMsgs(m => { const a = [...m]; a[a.length-1] = { role: 'assistant', content: full }; return a; });
             }
-          } catch(e) {}
+          } catch(_e) {}
         }
       }
-      execActions(full);
+      const { added } = execActions(full);
+      if (added.length > 0) {
+        // Attach confirmed-added tasks to the message for the confirmation card
+        setMsgs(m => { const c=[...m]; c[c.length-1]={...c[c.length-1], addedTasks:added}; return c; });
+      }
     } catch(e) {
-      setMsgs(m => [...m, { role: 'assistant', content: 'Could not reach AI. Check your API key in Settings.' }]);
+      setMsgs(m => [...m, { role: 'assistant', content: `Error: ${e.message || 'unknown'}. Check your OpenAI API key in Settings.` }]);
     } finally {
       setLoading(false);
     }
@@ -2424,18 +2757,36 @@ TASKS: ${JSON.stringify(taskList)}`;
         )}
         {msgs.map((m, i) => {
           const txt = displayText(m.content);
-          if (!txt && !(m.role === 'assistant' && loading && i === msgs.length - 1)) return null;
+          const hasCard = m.addedTasks?.length > 0;
+          if (!txt && !hasCard && !(m.role === 'assistant' && loading && i === msgs.length - 1)) return null;
           return (
-            <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
-              <div style={{
-                maxWidth:'88%', padding:'8px 11px',
-                borderRadius: m.role==='user' ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
-                background: m.role==='user' ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.05)',
-                border: `1px solid ${m.role==='user'?'rgba(99,102,241,0.28)':'rgba(255,255,255,0.07)'}`,
-                fontSize:'12px', color:'#e2e8f0', lineHeight:1.55, whiteSpace:'pre-wrap'
-              }}>
-                {txt || <span style={{color:'#475569'}}>...</span>}
-              </div>
+            <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:m.role==='user'?'flex-end':'flex-start', gap:'5px' }}>
+              {(txt || (m.role === 'assistant' && loading && i === msgs.length - 1)) && (
+                <div style={{
+                  maxWidth:'88%', padding:'8px 11px',
+                  borderRadius: m.role==='user' ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
+                  background: m.role==='user' ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.05)',
+                  border: `1px solid ${m.role==='user'?'rgba(99,102,241,0.28)':'rgba(255,255,255,0.07)'}`,
+                  fontSize:'12px', color:'#e2e8f0', lineHeight:1.55, whiteSpace:'pre-wrap'
+                }}>
+                  {txt || <span style={{color:'#475569'}}>...</span>}
+                </div>
+              )}
+              {hasCard && m.addedTasks.map((task, ti) => {
+                const catMeta = TASK_CATEGORIES.find(c=>c.id===task.category);
+                const priMeta = PRIORITY_META[task.priority];
+                return (
+                  <div key={ti} style={{ maxWidth:'88%', padding:'9px 12px', borderRadius:9, background:'rgba(16,185,129,0.08)', border:'1px solid rgba(16,185,129,0.22)' }}>
+                    <div style={{ fontSize:10, fontWeight:700, color:'#6ee7b7', letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:5 }}>✓ Task Added</div>
+                    <div style={{ fontSize:13, fontWeight:600, color:'#e2e8f0', marginBottom:6, lineHeight:1.3 }}>{task.title}</div>
+                    <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+                      {catMeta && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:20, background:catMeta.bg, color:catMeta.color }}>{catMeta.label.replace(' Tasks','')}</span>}
+                      {priMeta && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:20, background:priMeta.bg, color:priMeta.color }}>{priMeta.label} Priority</span>}
+                      {task.dueDate && <span style={{ fontSize:11, padding:'2px 8px', borderRadius:20, background:'rgba(255,255,255,0.06)', color:'#64748b' }}>Due {task.dueDate}</span>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -3716,14 +4067,14 @@ function JournalSubtab({data, setData, toasts}){
 
 // ---- Life Planner ----
 const PLANNER_TOOLS=[
-  {name:'add_area',description:'Create a new life area',input_schema:{type:'object',properties:{name:{type:'string'},description:{type:'string'},color:{type:'string',description:'CSS hex like #6366f1'}},required:['name']}},
-  {name:'add_goal',description:'Add a goal to a life area. Use when the user mentions something they want to achieve.',input_schema:{type:'object',properties:{areaId:{type:'string',description:'Life area ID'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string',description:'YYYY-MM-DD'},parentGoalId:{type:'string'},status:{type:'string',enum:['active','paused']}},required:['areaId','title']}},
-  {name:'update_goal',description:'Update an existing goal',input_schema:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string'},status:{type:'string',enum:['active','paused','done','archived']}},required:['goalId']}},
-  {name:'add_action',description:'Add a concrete action/task under a goal',input_schema:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},dueDate:{type:'string'},estimatedDuration:{type:'string',description:'e.g. "30min","2hr"'},people:{type:'array',items:{type:'string'}},notes:{type:'string'}},required:['goalId','title']}},
-  {name:'update_action',description:'Update or complete an action',input_schema:{type:'object',properties:{actionId:{type:'string'},title:{type:'string'},status:{type:'string',enum:['todo','done','skipped']},dueDate:{type:'string'},notes:{type:'string'}},required:['actionId']}},
-  {name:'add_person',description:'Add a person to the relationship tracker',input_schema:{type:'object',properties:{name:{type:'string'},relationship:{type:'string',description:'friend, mentor, family, colleague'},cadence:{type:'string',description:'weekly, biweekly, monthly, quarterly'},notes:{type:'string'}},required:['name']}},
-  {name:'update_person',description:'Update person info or log an interaction',input_schema:{type:'object',properties:{personId:{type:'string'},name:{type:'string'},relationship:{type:'string'},cadence:{type:'string'},lastInteraction:{type:'string',description:'ISO date YYYY-MM-DD'},notes:{type:'string'}},required:['personId']}},
-  {name:'log_checkin',description:'Log a reflection or weekly check-in',input_schema:{type:'object',properties:{summary:{type:'string'},areaUpdates:{type:'array',items:{type:'object',properties:{areaId:{type:'string'},note:{type:'string'}}}}},required:['summary']}},
+  {type:'function',function:{name:'add_area',description:'Create a new life area',parameters:{type:'object',properties:{name:{type:'string'},description:{type:'string'},color:{type:'string',description:'CSS hex like #6366f1'}},required:['name']}}},
+  {type:'function',function:{name:'add_goal',description:'Add a goal to a life area. Use when the user mentions something they want to achieve.',parameters:{type:'object',properties:{areaId:{type:'string',description:'Life area ID'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string',description:'YYYY-MM-DD'},parentGoalId:{type:'string'},status:{type:'string',enum:['active','paused']}},required:['areaId','title']}}},
+  {type:'function',function:{name:'update_goal',description:'Update an existing goal',parameters:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},description:{type:'string'},targetDate:{type:'string'},status:{type:'string',enum:['active','paused','done','archived']}},required:['goalId']}}},
+  {type:'function',function:{name:'add_action',description:'Add a concrete action/task under a goal',parameters:{type:'object',properties:{goalId:{type:'string'},title:{type:'string'},dueDate:{type:'string'},estimatedDuration:{type:'string',description:'e.g. "30min","2hr"'},people:{type:'array',items:{type:'string'}},notes:{type:'string'}},required:['goalId','title']}}},
+  {type:'function',function:{name:'update_action',description:'Update or complete an action',parameters:{type:'object',properties:{actionId:{type:'string'},title:{type:'string'},status:{type:'string',enum:['todo','done','skipped']},dueDate:{type:'string'},notes:{type:'string'}},required:['actionId']}}},
+  {type:'function',function:{name:'add_person',description:'Add a person to the relationship tracker',parameters:{type:'object',properties:{name:{type:'string'},relationship:{type:'string',description:'friend, mentor, family, colleague'},cadence:{type:'string',description:'weekly, biweekly, monthly, quarterly'},notes:{type:'string'}},required:['name']}}},
+  {type:'function',function:{name:'update_person',description:'Update person info or log an interaction',parameters:{type:'object',properties:{personId:{type:'string'},name:{type:'string'},relationship:{type:'string'},cadence:{type:'string'},lastInteraction:{type:'string',description:'ISO date YYYY-MM-DD'},notes:{type:'string'}},required:['personId']}}},
+  {type:'function',function:{name:'log_checkin',description:'Log a reflection or weekly check-in',parameters:{type:'object',properties:{summary:{type:'string'},areaUpdates:{type:'array',items:{type:'object',properties:{areaId:{type:'string'},note:{type:'string'}}}}},required:['summary']}}},
 ];
 
 function getDefaultPlanner(){
@@ -3852,7 +4203,7 @@ function LifePlannerSubtab({data,setData,toasts}){
   async function streamRound(messages,onText,onTool){
     const k=(ls('magverse:v1')?.settings||{}).apiKey||'';
     const ctx=buildContext();
-    const system=`You are a thoughtful life planner — direct, honest, and analytical. Reference the existing plan in every response. Push back on vague goals and unrealistic timelines. Surface conflicts. When someone is mentioned, check the People list. Never invent commitments the user didn't make.
+    const systemMsg=`You are a thoughtful life planner — direct, honest, and analytical. Reference the existing plan in every response. Push back on vague goals and unrealistic timelines. Surface conflicts. When someone is mentioned, check the People list. Never invent commitments the user didn't make.
 
 CURRENT PLAN:
 ${JSON.stringify(ctx.plan,null,2)}
@@ -3864,12 +4215,12 @@ RECENT JOURNAL (7 days):
 ${JSON.stringify(ctx.recentJournals,null,2)}
 
 Today: ${ctx.today} (${ctx.dayOfWeek})`;
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:2000,stream:true,system,tools:PLANNER_TOOLS,messages})});
+    const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},body:JSON.stringify({model:'gpt-4o',max_tokens:2000,stream:true,tools:PLANNER_TOOLS,messages:[{role:'system',content:systemMsg},...messages]})});
     if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
     const reader=resp.body.getReader(),dec=new TextDecoder();
-    let buf='',fullText='',stopReason='end_turn';
-    let curBlock=null,curInput='';
-    const toolCalls=[],rawContent=[];
+    let buf='',fullText='',finishReason='stop';
+    // tool_calls accumulator: index → {id, name, argsBuf}
+    const tcMap={};
     while(true){
       const{done,value}=await reader.read();if(done)break;
       buf+=dec.decode(value,{stream:true});
@@ -3879,19 +4230,37 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
         const raw=line.slice(5).trim();if(raw==='[DONE]')break;
         try{
           const ev=JSON.parse(raw);
-          if(ev.type==='message_delta'&&ev.delta?.stop_reason)stopReason=ev.delta.stop_reason;
-          else if(ev.type==='content_block_start'){curBlock=ev.content_block;curInput='';if(ev.content_block.type==='text')rawContent.push({type:'text',text:''});else if(ev.content_block.type==='tool_use')rawContent.push({...ev.content_block,input:{}});}
-          else if(ev.type==='content_block_delta'){
-            if(ev.delta.type==='text_delta'){fullText+=ev.delta.text;if(rawContent.length&&rawContent[rawContent.length-1].type==='text')rawContent[rawContent.length-1].text+=ev.delta.text;onText(fullText);}
-            else if(ev.delta.type==='input_json_delta')curInput+=ev.delta.partial_json;
-          }
-          else if(ev.type==='content_block_stop'&&curBlock?.type==='tool_use'){
-            try{const inp=JSON.parse(curInput||'{}');rawContent[rawContent.length-1].input=inp;const result=executeTool(curBlock.name,inp);const tc={id:curBlock.id,name:curBlock.name,input:inp,result};toolCalls.push(tc);onTool(tc);}catch(e){}
+          const delta=ev.choices?.[0]?.delta;
+          if(ev.choices?.[0]?.finish_reason)finishReason=ev.choices[0].finish_reason;
+          if(delta?.content){fullText+=delta.content;onText(fullText);}
+          if(delta?.tool_calls){
+            for(const tc of delta.tool_calls){
+              const i=tc.index;
+              if(!tcMap[i])tcMap[i]={id:tc.id||'',name:tc.function?.name||'',argsBuf:''};
+              if(tc.id)tcMap[i].id=tc.id;
+              if(tc.function?.name)tcMap[i].name=tc.function.name;
+              if(tc.function?.arguments)tcMap[i].argsBuf+=tc.function.arguments;
+            }
           }
         }catch(e){}
       }
     }
-    return{text:fullText,toolCalls,stopReason,rawContent};
+    const toolCalls=[];
+    const rawToolCalls=[];
+    if(finishReason==='tool_calls'){
+      for(const i of Object.keys(tcMap).sort((a,b)=>+a-+b)){
+        const tc=tcMap[i];
+        try{
+          const inp=JSON.parse(tc.argsBuf||'{}');
+          const result=executeTool(tc.name,inp);
+          const call={id:tc.id,name:tc.name,input:inp,result};
+          toolCalls.push(call);onTool(call);
+          rawToolCalls.push({id:tc.id,type:'function',function:{name:tc.name,arguments:tc.argsBuf}});
+        }catch(e){}
+      }
+    }
+    const rawAssistant={role:'assistant',content:fullText||null,tool_calls:rawToolCalls.length?rawToolCalls:undefined};
+    return{text:fullText,toolCalls,stopReason:finishReason==='tool_calls'?'tool_calls':'end_turn',rawAssistant};
   }
 
   async function sendMessage(text){
@@ -3900,7 +4269,7 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
     setData(d=>{const p=d.planner||getDefaultPlanner();return{...d,planner:{...p,chatHistory:[...(p.chatHistory||[]),userMsg]}};});
     setChatInput('');setStreamText('');setInFlightTools([]);
     if(!apiKey){
-      const e={role:'assistant',content:'Add your Anthropic API key in Settings.',id:uid(),at:Date.now()};
+      const e={role:'assistant',content:'Add your OpenAI API key in Settings.',id:uid(),at:Date.now()};
       setData(d=>({...d,planner:{...d.planner,chatHistory:[...d.planner.chatHistory,e]}}));return;
     }
     setStreaming(true);
@@ -3908,12 +4277,12 @@ Today: ${ctx.today} (${ctx.dayOfWeek})`;
     try{
       const history=(planner.chatHistory||[]).slice(-10).map(m=>({role:m.role,content:m.content}));
       const messages=[...history,{role:'user',content:text.trim()}];
-      const{text:t1,toolCalls:tc1,stopReason,rawContent}=await streamRound(messages,ft=>setStreamText(ft),tc=>{collected.push(tc);setInFlightTools([...collected]);});
+      const{text:t1,toolCalls:tc1,stopReason,rawAssistant}=await streamRound(messages,ft=>setStreamText(ft),tc=>{collected.push(tc);setInFlightTools([...collected]);});
       let finalText=t1;
-      if(tc1.length>0&&stopReason==='tool_use'){
-        const toolResults=tc1.map(tc=>({type:'tool_result',tool_use_id:tc.id,content:tc.result}));
+      if(tc1.length>0&&stopReason==='tool_calls'){
+        const toolResults=tc1.map(tc=>({role:'tool',tool_call_id:tc.id,content:String(tc.result)}));
         setStreamText('');
-        const{text:t2}=await streamRound([...messages,{role:'assistant',content:rawContent},{role:'user',content:toolResults}],ft=>setStreamText(ft),()=>{});
+        const{text:t2}=await streamRound([...messages,rawAssistant,...toolResults],ft=>setStreamText(ft),()=>{});
         finalText=t2;
       }
       const aMsg={role:'assistant',content:finalText,toolCalls:collected,id:uid(),at:Date.now()};
@@ -4114,9 +4483,9 @@ function PlannerAreaDetail({planner,area,onBack,onToggleGoal,onToggleAction,apiK
     };
     const system=`You are a focused advisor for the "${area.name}" area of the user's life plan.\n\nCURRENT STATE:\n${JSON.stringify(ctx,null,2)}\n\nBe specific, actionable, and direct. Reference their actual goals and actions by name. Today: ${now.toISOString().slice(0,10)}.`;
     try{
-      const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-opus-4-7',max_tokens:1200,stream:true,system,messages:[...msgs,userMsg].map(m=>({role:m.role,content:m.content}))})});
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',max_tokens:1200,stream:true,messages:[{role:'system',content:system},...[...msgs,userMsg].map(m=>({role:m.role,content:m.content}))]})});
       const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.type==='content_block_delta'&&j.delta?.type==='text_delta'){out+=j.delta.text;setStreamText(out);}}catch{}}}
+      while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;setStreamText(out);}}catch{}}}
       setMsgs(m=>[...m,{role:'assistant',id:uid(),content:out,at:Date.now()}]);
     }catch(e){setMsgs(m=>[...m,{role:'assistant',id:uid(),content:'Error: '+e.message,at:Date.now()}]);}
     setStreamText('');setStreaming(false);
@@ -5002,34 +5371,31 @@ function PhilosophyQuiz({ onClose, data }) {
     const savedSettings = ls('magverse:v1')?.settings || {};
     const apiKey = savedSettings.apiKey || '';
     if (!apiKey) {
-      setError('Add your Anthropic API key in Settings to enable grading.');
+      setError('Add your OpenAI API key in Settings to enable grading.');
       setPhase('review');
       return;
     }
     try {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
+          'Authorization': 'Bearer ' + apiKey,
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
+          model: 'gpt-4o-mini',
           max_tokens: 600,
-          system: `You are a demanding but fair philosophy professor grading a student's spoken answer to a philosophy question. Evaluate on: clarity of argument, philosophical depth, use of relevant concepts, and intellectual honesty. Then write a model answer showing what an excellent response looks like. Return ONLY valid JSON in exactly this shape, no extra text:
+          messages: [
+            {role:'system',content:`You are a demanding but fair philosophy professor grading a student's spoken answer to a philosophy question. Evaluate on: clarity of argument, philosophical depth, use of relevant concepts, and intellectual honesty. Then write a model answer showing what an excellent response looks like. Return ONLY valid JSON in exactly this shape, no extra text:
 {"score":7,"grade":"B","summary":"One sentence summary of overall quality.","strengths":"What they got right — 1-2 sentences.","improvements":"What they missed or could deepen — 1-2 sentences.","modelAnswer":"A model answer of 3-5 sentences that demonstrates the ideal philosophical response — covering key thinkers, core arguments, and nuances a strong student would address."}
-Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`,
-          messages: [{
-            role: 'user',
-            content: `Question: ${question}\n\nStudent's answer: ${transcript}`,
-          }],
+Scores: 9-10=A, 7-8=B, 5-6=C, 3-4=D, 1-2=F.`},
+            {role:'user',content:`Question: ${question}\n\nStudent's answer: ${transcript}`},
+          ],
         }),
       });
       if (!resp.ok) { const j = await resp.json(); throw new Error(j.error?.message || 'API error'); }
       const j = await resp.json();
-      const raw = j.content[0].text.trim();
+      const raw = j.choices[0].message.content.trim();
       const parsed = JSON.parse(raw);
       setResult(parsed);
       setPhase('result');
@@ -5294,26 +5660,23 @@ function useLiveDeals(){
     if(!apiKey) return;
 
     setLoading(true);
-    fetch('https://api.anthropic.com/v1/messages',{
+    fetch('https://api.openai.com/v1/chat/completions',{
       method:'POST',
       headers:{
         'Content-Type':'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true',
+        'Authorization':'Bearer '+apiKey,
       },
       body: JSON.stringify({
-        model:'claude-haiku-4-5-20251001',
+        model:'gpt-4o-mini',
         max_tokens:1200,
-        system:'You are a financial data assistant. Return ONLY valid JSON, no markdown, no explanation.',
-        messages:[{
-          role:'user',
-          content:`List 4 significant M&A, private equity, or major corporate deals announced or closed in the past 6 months (as of early 2025). Include real deals with accurate facts. Return a JSON array of objects with exactly these fields: id (string, prefix "live-"), title, announced (e.g. "Mar 4, 2025"), closed (e.g. "Jun 1, 2025" or "pending"), sector, value, type, summary (2-3 sentences), keyFacts (array of 3 strings). Prioritize deals over $5B.`
-        }]
+        messages:[
+          {role:'system',content:'You are a financial data assistant. Return ONLY valid JSON, no markdown, no explanation.'},
+          {role:'user',content:`List 4 significant M&A, private equity, or major corporate deals announced or closed in the past 6 months (as of early 2025). Include real deals with accurate facts. Return a JSON array of objects with exactly these fields: id (string, prefix "live-"), title, announced (e.g. "Mar 4, 2025"), closed (e.g. "Jun 1, 2025" or "pending"), sector, value, type, summary (2-3 sentences), keyFacts (array of 3 strings). Prioritize deals over $5B.`}
+        ]
       })
     }).then(r=>r.json()).then(j=>{
       try{
-        const text = j.content[0].text.trim();
+        const text = j.choices[0].message.content.trim();
         const parsed = JSON.parse(text);
         if(Array.isArray(parsed) && parsed.length){
           ls(cacheKey, parsed);
@@ -5470,7 +5833,7 @@ function ChatHubsPanel({data, setData, toasts, isMobile}){
           <div key={h.id} className="glass p-4 rounded cursor-pointer" onClick={()=>setOpenHub(h)}>
             <div className="text-3xl">{h.emoji}</div>
             <div className="font-semibold mt-2">{h.name}</div>
-            <div className="text-xs opacity-80 mt-1">{h.system.slice(0,80)}...</div>
+            <div className="text-xs opacity-80 mt-1">{(h.system||'').slice(0,80)}...</div>
           </div>
         ))}
       </div>
@@ -5643,23 +6006,22 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
       const useApiTts = (savedSettings.ttsProvider==='openai' && savedSettings.openaiTtsKey) ||
                         (savedSettings.ttsProvider==='elevenlabs' && savedSettings.elevenLabsKey);
 
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      const systemContent = hub.id==='hub-career' ? buildCareerHubSystem(hub.system, data)
+                : hub.id==='hub1' ? buildPhilosophyPrompt(data.philosophyBriefing)
+                : hub.id==='hub-acumen' ? buildAcumenPrompt(data.businessAcumenBriefing)
+                : hub.system;
+
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method:'POST',
         headers:{
           'Content-Type':'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
+          'Authorization': 'Bearer ' + apiKey,
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
+          model: 'gpt-4o',
           max_tokens: 1024,
-          ...(useApiTts && {stream: true}),
-          system: hub.id==='hub-career' ? buildCareerHubSystem(hub.system, data)
-                : hub.id==='hub1' ? buildPhilosophyPrompt(data.philosophyBriefing)
-                : hub.id==='hub-acumen' ? buildAcumenPrompt(data.businessAcumenBriefing)
-                : hub.system,
-          messages: history,
+          stream: useApiTts ? true : false,
+          messages: [{role:'system',content:systemContent}, ...history],
         })
       });
 
@@ -5709,8 +6071,8 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
               if(data==='[DONE]') break;
               try{
                 const ev = JSON.parse(data);
-                if(ev.type==='content_block_delta' && ev.delta?.type==='text_delta'){
-                  const token = ev.delta.text;
+                if(ev.choices?.[0]?.delta?.content){
+                  const token = ev.choices[0].delta.content;
                   fullRaw += token;
                   sentenceBuf += token;
                   // Fire TTS as soon as we hit a sentence boundary
@@ -5735,7 +6097,7 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
         // ── Non-streaming path (browser TTS or no TTS provider) ──
         const j = await resp.json();
         if(j.error) throw new Error(j.error.message||'API error');
-        const rawOut = j?.content?.[0]?.text || '(no response)';
+        const rawOut = j?.choices?.[0]?.message?.content || '(no response)';
         const out = cleanText(rawOut);
         setMessages(m=>[...m, {id:uid(), role:'ai', text:out, at:new Date().toISOString()}]);
         setTyping(false);
@@ -6005,8 +6367,8 @@ function SettingsPanel({data, setData, toasts, lastBackup}){
         <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>General</div>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs opacity-80 mb-1">Anthropic API Key</label>
-            <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-..." />
+            <label className="block text-xs opacity-80 mb-1">OpenAI API Key</label>
+            <input className="w-full p-2 bg-transparent border border-white/5 rounded" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-..." />
           </div>
           <div>
             <label className="block text-xs opacity-80 mb-1">Voyage AI Key <span className="opacity-50">(Journal graph — optional)</span></label>
@@ -6179,6 +6541,10 @@ function IconNotes(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="
 function IconInbox(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg> }
 function IconBriefcase(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/><path d="M2 12h20"/></svg> }
 function IconEgg(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2C8 2 4 8 4 13a8 8 0 0 0 16 0c0-5-4-11-8-11z"/></svg> }
+function IconResearch(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6"/><path d="M8 11h6"/></svg> }
+function IconBrain(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-4.66"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-4.66"/></svg> }
+function IconRamp(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> }
+function IconReview(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg> }
 
 /* -------------------- Career Panel -------------------- */
 
@@ -6209,6 +6575,878 @@ function followUpStatus(lastContacted, followUpDays=14){
   return {color:'#10b981', label:`${days}d ago`, urgent:false};
 }
 
+// ---- Resume Editor ----
+function getDefaultResumeEditor(){
+  return{versions:[],activeVersionId:null,originalDocxBase64:null,originalDocxXml:null,paragraphs:[],uploadMode:'text',jd:'',goals:[],interview:{questions:[],currentIdx:0,done:false},diagnosis:null,jobMatch:null,changes:[],chatHistory:[]};
+}
+const RESUME_GOALS=[
+  {id:'improve',  label:'Improve overall',          icon:'✨',desc:'Strengthen wording, structure, and impact across the board'},
+  {id:'tailor',   label:'Tailor to a specific job', icon:'🎯',desc:'Align language and emphasis with a target role'},
+  {id:'concise',  label:'Make more concise',         icon:'✂️',desc:'Tighten language, cut filler, improve density'},
+  {id:'impact',   label:'Stronger accomplishments',  icon:'💥',desc:'Transform task descriptions into outcome-driven bullets'},
+  {id:'ats',      label:'Optimize for ATS',          icon:'🤖',desc:'Improve keyword alignment and machine-parseable formatting'},
+  {id:'transition',label:'Career transition',        icon:'🔄',desc:'Reframe experience for a new domain or role type'},
+];
+const GEN_MSGS=['Reading your resume…','Identifying your strongest experience…','Comparing against the target role…','Reviewing bullet quality…','Checking for unsupported claims…','Targeting high-impact edits…','Preparing surgical improvements…'];
+
+async function resumeAICall(messages,apiKey,maxTokens=4096){
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+    body:JSON.stringify({model:'gpt-4o',max_tokens:maxTokens,response_format:{type:'json_object'},messages})});
+  if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
+  const j=await resp.json();
+  return JSON.parse(j.choices[0].message.content.trim());
+}
+
+function ResumeImportStep({onNext,data}){
+  const [text,setText]=useState('');
+  const [dragging,setDragging]=useState(false);
+  const [parsing,setParsing]=useState(false);
+  const [parseMode,setParseMode]=useState('text');
+  const [docxMeta,setDocxMeta]=useState(null);
+  const fileRef=useRef(null);
+
+  const readFile=async f=>{
+    const name=f.name.toLowerCase();
+    if(name.endsWith('.docx')&&window.JSZip){
+      setParsing(true);setParseMode('docx');
+      try{
+        const arrayBuffer=await f.arrayBuffer();
+        const bytes=new Uint8Array(arrayBuffer);
+        let binary='';bytes.forEach(b=>binary+=String.fromCharCode(b));
+        const base64=btoa(binary);
+        const zip=await JSZip.loadAsync(arrayBuffer);
+        const docXml=await zip.file('word/document.xml').async('string');
+        const NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+        const parser=new DOMParser();
+        const xmlDoc=parser.parseFromString(docXml,'application/xml');
+        const pNodes=xmlDoc.getElementsByTagNameNS(NS,'p');
+        const paragraphs=[];let plainText='';
+        for(let i=0;i<pNodes.length;i++){
+          const tns=pNodes[i].getElementsByTagNameNS(NS,'t');
+          let t='';for(let j=0;j<tns.length;j++)t+=tns[j].textContent;
+          if(t.trim()){paragraphs.push({id:`p-${i}`,text:t.trim()});plainText+=t.trim()+'\n';}
+        }
+        setText(plainText.trim());setDocxMeta({base64,docXml,paragraphs});
+      }catch(e){
+        setText('');setDocxMeta(null);setParseMode('text');
+        alert('Could not parse DOCX: '+e.message+'\n\nPlease paste your resume text instead.');
+      }
+      setParsing(false);
+    }else if(name.endsWith('.pdf')&&window.pdfjsLib){
+      setParsing(true);setParseMode('pdf');
+      try{
+        const buf=await f.arrayBuffer();
+        const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+        let out='';
+        for(let p=1;p<=pdf.numPages;p++){
+          const page=await pdf.getPage(p);const content=await page.getTextContent();
+          const lines={};
+          content.items.forEach(item=>{const y=Math.round(item.transform[5]);lines[y]=(lines[y]||[]);lines[y].push({x:item.transform[4],str:item.str});});
+          const sorted=Object.keys(lines).map(Number).sort((a,b)=>b-a);
+          sorted.forEach(y=>{const row=lines[y].sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').trim();if(row)out+=row+'\n';});
+          if(p<pdf.numPages)out+='\n';
+        }
+        setText(out.trim());
+      }catch(e){setText('PDF extraction failed: '+e.message+'\n\nPlease paste your resume text manually.');}
+      setParsing(false);
+    }else{
+      const r=new FileReader();r.onload=e=>{setText(e.target.result||'');setParseMode('text');setDocxMeta(null);};r.readAsText(f);
+    }
+  };
+
+  const onDrop=e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)readFile(f);};
+  const wc=text.trim().split(/\s+/).filter(Boolean).length;
+  const ok=wc>=30&&!parsing;
+
+  const handleContinue=()=>{
+    if(parseMode==='docx'&&docxMeta){
+      onNext(text,{mode:'docx',base64:docxMeta.base64,docXml:docxMeta.docXml,paragraphs:docxMeta.paragraphs});
+    }else{
+      onNext(text,{mode:parseMode});
+    }
+  };
+
+  const aiCourse=data.goldenEgg?.aiCourse;
+  const doneWeeks=(aiCourse?.weeks||[]).filter(w=>{const p=aiCourse?.weekProgress?.[w.id];return p?.deliverableDone;});
+  const appendProjects=()=>{
+    const lines=doneWeeks.map(w=>`• ${w.title} — completed project deliverable (Week ${w.week})`).join('\n');
+    setText(t=>(t?t+'\n\n':'')+'PROJECTS (from Magverse curriculum):\n'+lines);
+    setParseMode('text');setDocxMeta(null);
+  };
+
+  return(
+    <div style={{maxWidth:680,margin:'0 auto'}}>
+      <h3 style={{fontSize:22,fontWeight:700,color:'#e2e8f0',marginBottom:6}}>Start with your resume</h3>
+      <p style={{color:'#64748b',fontSize:14,marginBottom:12}}>Upload a <strong style={{color:'#a5b4fc'}}>DOCX</strong> to preserve your formatting — AI will apply surgical edits to the original. PDF and text work too.</p>
+
+      {parseMode==='docx'&&text&&(
+        <div style={{marginBottom:10,padding:'9px 14px',borderRadius:9,background:'rgba(16,185,129,0.07)',border:'1px solid rgba(16,185,129,0.2)',fontSize:13,color:'#6ee7b7'}}>
+          ✓ DOCX parsed — your original formatting is preserved. You'll download a real .docx file.
+        </div>
+      )}
+      {parseMode==='pdf'&&text&&(
+        <div style={{marginBottom:10,padding:'9px 14px',borderRadius:9,background:'rgba(245,158,11,0.07)',border:'1px solid rgba(245,158,11,0.2)',fontSize:13,color:'#fbbf24'}}>
+          ⚠ PDF text extracted — formatting cannot be preserved. Output will be downloadable as text.
+        </div>
+      )}
+
+      <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={onDrop} style={{position:'relative',marginBottom:10}}>
+        <textarea value={text} onChange={e=>{setText(e.target.value);setParseMode('text');setDocxMeta(null);}} placeholder="Paste resume text, or drag & drop a DOCX / PDF file…" rows={16}
+          style={{width:'100%',padding:'16px',borderRadius:12,resize:'vertical',fontFamily:'inherit',fontSize:13,lineHeight:1.6,color:'#e2e8f0',outline:'none',boxSizing:'border-box',
+            background:dragging?'rgba(99,102,241,0.08)':'rgba(255,255,255,0.03)',border:dragging?'1.5px solid rgba(99,102,241,0.5)':'1px solid rgba(255,255,255,0.08)',transition:'all 0.2s'}}/>
+        {dragging&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:12,background:'rgba(99,102,241,0.1)',pointerEvents:'none'}}>
+          <span style={{color:'#a5b4fc',fontWeight:600}}>Drop your DOCX, PDF, or .txt here</span></div>}
+        {parsing&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:12,background:'rgba(0,0,0,0.65)'}}>
+          <span style={{color:'#a5b4fc',fontSize:14,fontWeight:600}}>Reading file…</span></div>}
+      </div>
+
+      {doneWeeks.length>0&&!text&&(
+        <div style={{marginBottom:12,padding:'10px 14px',borderRadius:9,background:'rgba(99,102,241,0.07)',border:'1px solid rgba(99,102,241,0.15)',display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:13,color:'#a5b4fc'}}>📚 {doneWeeks.length} completed course project{doneWeeks.length>1?'s':''} detected</span>
+          <button onClick={appendProjects} style={{marginLeft:'auto',padding:'4px 12px',borderRadius:6,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(99,102,241,0.15)',border:'1px solid rgba(99,102,241,0.25)',color:'#a5b4fc'}}>Add to resume</button>
+        </div>
+      )}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button onClick={()=>fileRef.current?.click()} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',fontFamily:'inherit',background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',color:'#94a3b8'}}>Upload DOCX / PDF / .txt</button>
+          <input ref={fileRef} type="file" accept=".docx,.pdf,.txt" style={{display:'none'}} onChange={e=>{const f=e.target.files[0];if(f)readFile(f);e.target.value='';}}/>
+          {wc>0&&<span style={{fontSize:12,color:'#475569'}}>{wc} words</span>}
+        </div>
+        <button onClick={handleContinue} disabled={!ok}
+          style={{padding:'9px 24px',borderRadius:9,fontSize:14,fontWeight:600,cursor:ok?'pointer':'not-allowed',fontFamily:'inherit',border:'none',
+            background:ok?'linear-gradient(90deg,#6366f1,#8b5cf6)':'rgba(255,255,255,0.06)',color:ok?'#fff':'#475569',transition:'all 0.2s'}}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResumeGoalStep({onNext,onBack}){
+  const [selected,setSelected]=useState([]);
+  const [jd,setJd]=useState('');
+  const needsJd=selected.includes('tailor');
+  const ok=selected.length>0&&(!needsJd||jd.trim().length>50);
+  const toggle=id=>setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
+  return(
+    <div style={{maxWidth:680,margin:'0 auto'}}>
+      <button onClick={onBack} style={{marginBottom:20,background:'none',border:'none',color:'#64748b',cursor:'pointer',fontSize:13,padding:0,fontFamily:'inherit'}}>← Back</button>
+      <h3 style={{fontSize:22,fontWeight:700,color:'#e2e8f0',marginBottom:6}}>What do you want to do?</h3>
+      <p style={{color:'#64748b',fontSize:14,marginBottom:20}}>Select everything that applies.</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:10,marginBottom:20}}>
+        {RESUME_GOALS.map(g=>{const active=selected.includes(g.id);return(
+          <button key={g.id} onClick={()=>toggle(g.id)} style={{padding:'14px 16px',borderRadius:10,textAlign:'left',cursor:'pointer',fontFamily:'inherit',
+            border:active?'1.5px solid rgba(99,102,241,0.6)':'1px solid rgba(255,255,255,0.07)',background:active?'rgba(99,102,241,0.12)':'rgba(255,255,255,0.03)',transition:'all 0.15s'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+              <span style={{fontSize:16}}>{g.icon}</span>
+              <span style={{fontSize:14,fontWeight:600,color:active?'#a5b4fc':'#e2e8f0'}}>{g.label}</span>
+              {active&&<span style={{marginLeft:'auto',color:'#6366f1',fontSize:14}}>✓</span>}
+            </div>
+            <div style={{fontSize:12,color:'#64748b',paddingLeft:24}}>{g.desc}</div>
+          </button>
+        );})}
+      </div>
+      {needsJd&&(
+        <div style={{marginBottom:20}}>
+          <label style={{display:'block',fontSize:13,fontWeight:600,color:'#94a3b8',marginBottom:8}}>Paste the job description</label>
+          <textarea value={jd} onChange={e=>setJd(e.target.value)} placeholder="Paste the full job description here…" rows={8}
+            style={{width:'100%',padding:'14px',borderRadius:10,resize:'vertical',fontFamily:'inherit',fontSize:13,lineHeight:1.6,color:'#e2e8f0',outline:'none',boxSizing:'border-box',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)'}}/>
+        </div>
+      )}
+      <div style={{display:'flex',justifyContent:'flex-end'}}>
+        <button onClick={()=>onNext(selected,jd)} disabled={!ok}
+          style={{padding:'9px 28px',borderRadius:9,fontSize:14,fontWeight:600,cursor:ok?'pointer':'not-allowed',fontFamily:'inherit',border:'none',
+            background:ok?'linear-gradient(90deg,#6366f1,#8b5cf6)':'rgba(255,255,255,0.06)',color:ok?'#fff':'#475569',transition:'all 0.2s'}}>
+          Continue →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResumeInterviewStep({resumeText,goals,jd,interview,onUpdateInterview,onComplete,onBack,apiKey}){
+  const [loading,setLoading]=useState(!interview.questions.length);
+  const [current,setCurrent]=useState(interview.currentIdx||0);
+  const [answer,setAnswer]=useState('');
+  const [error,setError]=useState('');
+  const startedRef=useRef(false);
+  const questions=interview.questions;
+
+  useEffect(()=>{
+    if(interview.questions.length||startedRef.current)return;
+    startedRef.current=true;
+    if(!apiKey){setError('No API key. Add one in Settings.');setLoading(false);return;}
+    const sys=`You are an elite resume coach. Analyze this resume and generate exactly 5 targeted questions to uncover missing metrics, scope, and business impact. Be specific — reference actual content. Never ask about information already stated. NEVER ask users to invent numbers. Return ONLY valid JSON: {"questions":[{"id":"q1","q":"..."},{"id":"q2","q":"..."},{"id":"q3","q":"..."},{"id":"q4","q":"..."},{"id":"q5","q":"..."}]}`;
+    const usr=`RESUME:\n${resumeText}\n\nGOALS: ${goals.join(', ')}\nTARGET JD: ${jd||'Not provided'}`;
+    resumeAICall([{role:'system',content:sys},{role:'user',content:usr}],apiKey,1200)
+      .then(r=>{const qs=(r.questions||[]).map(q=>({...q,a:''}));onUpdateInterview({...interview,questions:qs,currentIdx:0});setLoading(false);})
+      .catch(e=>{setError('Failed to generate questions: '+e.message);setLoading(false);});
+  },[]);
+
+  const currentQ=questions[current];
+  const total=questions.length;
+
+  const advance=(ans)=>{
+    const updatedQs=questions.map((q,i)=>i===current?{...q,a:ans}:q);
+    if(current+1>=total){
+      onUpdateInterview({...interview,questions:updatedQs,done:true});
+      onComplete();
+    }else{
+      onUpdateInterview({...interview,questions:updatedQs,currentIdx:current+1});
+      setCurrent(c=>c+1);
+      setAnswer(questions[current+1]?.a||'');
+    }
+  };
+
+  if(loading)return(
+    <div style={{maxWidth:600,margin:'0 auto',textAlign:'center',paddingTop:60}}>
+      <div style={{fontSize:28,marginBottom:16}}>🔍</div>
+      <div style={{fontSize:16,fontWeight:600,color:'#e2e8f0',marginBottom:8}}>Analyzing your resume…</div>
+      <div style={{fontSize:13,color:'#64748b'}}>Generating targeted questions based on your specific experience</div>
+    </div>
+  );
+  if(error)return(
+    <div style={{maxWidth:600,margin:'0 auto'}}>
+      <div style={{padding:16,borderRadius:10,background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',color:'#fca5a5',marginBottom:16}}>{error}</div>
+      <button onClick={onBack} style={{padding:'8px 16px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',color:'#94a3b8',cursor:'pointer',fontFamily:'inherit'}}>← Back</button>
+    </div>
+  );
+
+  return(
+    <div style={{maxWidth:640,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:28}}>
+        <button onClick={onBack} style={{background:'none',border:'none',color:'#64748b',cursor:'pointer',fontSize:13,padding:0,fontFamily:'inherit'}}>← Back</button>
+        <div style={{flex:1,height:4,borderRadius:4,background:'rgba(255,255,255,0.06)',overflow:'hidden'}}>
+          <div style={{height:'100%',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',borderRadius:4,width:`${((current+1)/total)*100}%`,transition:'width 0.4s ease'}}/>
+        </div>
+        <span style={{fontSize:12,color:'#64748b',whiteSpace:'nowrap'}}>Question {current+1} of {total}</span>
+      </div>
+      <div style={{marginBottom:28}}>
+        <div style={{fontSize:12,fontWeight:600,letterSpacing:'0.08em',color:'#6366f1',textTransform:'uppercase',marginBottom:12}}>Quick Question</div>
+        <div style={{fontSize:18,fontWeight:600,color:'#e2e8f0',lineHeight:1.5,marginBottom:8}}>{currentQ?.q}</div>
+        <div style={{fontSize:12,color:'#475569'}}>"I don't know" and "skip" are always fine — never make up numbers.</div>
+      </div>
+      <textarea value={answer} onChange={e=>setAnswer(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))advance(answer);}}
+        placeholder="Your answer… (Ctrl+Enter to continue)" rows={5}
+        style={{width:'100%',padding:'14px',borderRadius:10,resize:'vertical',fontFamily:'inherit',fontSize:14,lineHeight:1.6,color:'#e2e8f0',outline:'none',boxSizing:'border-box',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)',marginBottom:16}}/>
+      <div style={{display:'flex',gap:10}}>
+        <button onClick={()=>advance('skip')} style={{padding:'9px 20px',borderRadius:9,fontSize:13,cursor:'pointer',fontFamily:'inherit',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#64748b'}}>Skip</button>
+        <button onClick={()=>advance(answer)} style={{padding:'9px 24px',borderRadius:9,fontSize:14,fontWeight:600,cursor:'pointer',fontFamily:'inherit',border:'none',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>
+          {current+1>=total?'Finish →':'Next →'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResumeGeneratingStep({resumeText,goals,jd,interview,onComplete,onError,apiKey}){
+  const [msgIdx,setMsgIdx]=useState(0);
+  const startedRef=useRef(false);
+
+  useEffect(()=>{
+    let i=0;
+    const t=setInterval(()=>{i=Math.min(i+1,GEN_MSGS.length-1);setMsgIdx(i);},2300);
+    return()=>clearInterval(t);
+  },[]);
+
+  useEffect(()=>{
+    if(startedRef.current)return;
+    startedRef.current=true;
+    const interviewCtx=interview.questions.map(q=>`Q: ${q.q}\nA: ${q.a||'(skipped)'}`).join('\n\n');
+    const goalLabels=goals.map(id=>RESUME_GOALS.find(g=>g.id===id)?.label||id).join(', ');
+    const sys=`You are a professional resume editor. Analyze this resume and propose targeted improvements as discrete edit operations.
+
+FACTUAL RULES — non-negotiable:
+- NEVER fabricate: jobs, employers, dates, degrees, GPAs, certifications, skills, technologies, metrics, titles, or accomplishments
+- NEVER add information not present in the original resume or interview answers
+- If an interview answer provides a legitimate metric, incorporate it. Never invent numbers.
+- Preserve all factual content: names, dates, companies, titles
+
+BULLET CONSTRUCTION — optimize every bullet in this exact order:
+1. TRUTH — every claim must be in the original or verified interview answers. Never invent.
+2. RELEVANCE — would a recruiter in this field actually care about this specific point?
+3. SPECIFICITY — what exactly was built, deployed, analyzed, or led? Name it.
+4. IMPACT — why did it matter? Only include if facts support it. Never fabricate.
+5. SCOPE — team size, user count, venue count, dataset volume, number of units. Use originals only.
+6. OWNERSHIP — what did the candidate personally own vs. assist vs. participate in?
+7. CONCISION — every word must earn its place. If a word adds nothing, cut it.
+8. FLOW — does it read cleanly in under 5 seconds?
+
+TARGET LENGTH: 1–2 dense lines. A tight one-liner is ideal. A two-liner is correct if the substance fills it. Never 3+ lines. Never pad — if the content is thin, make one precise line, not one vague long line.
+
+STRONG OPENING VERBS: Built, Developed, Designed, Launched, Led, Automated, Deployed, Evaluated, Analyzed, Mapped, Modeled, Implemented, Founded, Created, Optimized, Forecasted, Restructured, Streamlined, Consolidated, Managed, Directed, Authored, Executed
+
+WEAK OPENING VERBS — avoid unless factually accurate: Guided, Worked on, Helped, Assisted, Participated in, Was responsible for, Supported
+
+TONE — write like a sharp, specific person, not like AI:
+- BANNED: "spearheaded", "orchestrated", "leveraged" (verb), "synergized", "cross-functional", "robust", "scalable", "impactful", "bandwidth", "move the needle", "best-in-class", "innovative", "passionate", "results-driven", "proactive", "utilized", "facilitated"
+- BANNED EMPTY OUTCOME LANGUAGE — cut immediately, they consume space without evidence: "enhancing operational efficiency", "driving strategic outcomes", "boosting business performance", "delivering value", "improving stakeholder alignment", "improving customer experiences", "to drive growth"
+- Do NOT template every bullet as "Verb + object + resulting in X%". Vary structure.
+- Do NOT force metrics where none exist in the source.
+- Sound like the person wrote it about their actual work.
+${jd?'- Align language and keywords with the target role naturally (no keyword stuffing)':''}
+
+Return ONLY valid JSON (no markdown fences):
+{
+  "diagnosis":{"scores":{"clarity":75,"impact":65,"specificity":70,"relevance":80,"ats":72,"formatting":85},"observations":["obs1","obs2","obs3","obs4","obs5"]},
+  "edits":[
+    {"id":"e1","section":"Experience","targetText":"EXACT text from the resume copied verbatim — must match character-for-character (trim leading/trailing whitespace only)","replacementText":"improved version of exactly that text only — max 95 chars","why":"brief explanation"}
+  ],
+  "jobMatch":{"strong":["skill1"],"partial":[{"skill":"...","note":"..."}],"missing":[{"skill":"...","question":"Do you have experience with ...?"}]}
+}
+
+targetText must be exact text lifted from the resume — no paraphrasing, no summarizing. Propose 5-15 targeted edits. JobMatch: only if JD provided, else empty arrays.`;
+    const usr=`ORIGINAL RESUME:\n${resumeText}\n\nGOALS: ${goalLabels}\n${jd?`\nTARGET JOB DESCRIPTION:\n${jd}\n`:''}\nINTERVIEW ANSWERS:\n${interviewCtx||'(none)'}`;
+    resumeAICall([{role:'system',content:sys},{role:'user',content:usr}],apiKey,8192)
+      .then(r=>onComplete(r))
+      .catch(e=>onError(e.message));
+  },[]);
+
+  return(
+    <div style={{maxWidth:500,margin:'80px auto 0',textAlign:'center'}}>
+      <div style={{fontSize:36,marginBottom:20}}>✨</div>
+      <div style={{fontSize:17,fontWeight:600,color:'#e2e8f0',marginBottom:10,minHeight:28}}>{GEN_MSGS[msgIdx]}</div>
+      <div style={{fontSize:13,color:'#475569',marginBottom:32}}>This takes about 20–30 seconds</div>
+      <div style={{height:3,borderRadius:3,background:'rgba(255,255,255,0.06)',overflow:'hidden',maxWidth:320,margin:'0 auto'}}>
+        <div style={{height:'100%',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',borderRadius:3,animation:'shimmer 2s linear infinite',backgroundSize:'200% 100%'}}/>
+      </div>
+    </div>
+  );
+}
+
+function applyEditsToDocxXml(originalXml,edits){
+  const NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const parser=new DOMParser();
+  const doc=parser.parseFromString(originalXml,'application/xml');
+  const pNodes=doc.getElementsByTagNameNS(NS,'p');
+  for(const edit of edits){
+    const target=(edit.targetText||edit.before||'').trim().replace(/\s+/g,' ');
+    const replacement=edit.replacementText||edit.after||'';
+    if(!target)continue;
+    for(let i=0;i<pNodes.length;i++){
+      const p=pNodes[i];
+      const runs=p.getElementsByTagNameNS(NS,'r');
+      let fullText='';
+      for(let j=0;j<runs.length;j++){const tns=runs[j].getElementsByTagNameNS(NS,'t');for(let k=0;k<tns.length;k++)fullText+=tns[k].textContent;}
+      if(fullText.trim().replace(/\s+/g,' ')===target){
+        if(runs.length>0){
+          const ftns=runs[0].getElementsByTagNameNS(NS,'t');
+          if(ftns.length>0){
+            ftns[0].textContent=replacement;
+            if(/^\s|\s$/.test(replacement))ftns[0].setAttribute('xml:space','preserve');
+          }
+          for(let j=1;j<runs.length;j++){const tns2=runs[j].getElementsByTagNameNS(NS,'t');for(let k=0;k<tns2.length;k++)tns2[k].textContent='';}
+        }
+        break;
+      }
+    }
+  }
+  return new XMLSerializer().serializeToString(doc);
+}
+
+function postProcessMammothHtml(html){
+  if(!html)return html;
+  const div=document.createElement('div');
+  div.innerHTML=html;
+  // Apply full-width table styles
+  div.querySelectorAll('table').forEach(t=>{
+    t.style.width='100%';t.style.borderCollapse='collapse';t.style.borderSpacing='0';
+  });
+  div.querySelectorAll('td,th').forEach(cell=>{
+    cell.style.verticalAlign='top';cell.style.padding='0 0 2pt 0';
+  });
+  // Key fix: bullet rows trapped in first column of a two-column layout table.
+  // When a DOCX uses a table for company/location headers AND bullets in the same
+  // table, mammoth renders bullets in col 1 with an empty col 2 — constraining width.
+  // Collapse those empty right cells so bullets span the full row.
+  div.querySelectorAll('table tr').forEach(row=>{
+    const cells=Array.from(row.querySelectorAll('td,th'));
+    if(cells.length<2)return;
+    const rightEmpty=cells.slice(1).every(c=>!c.textContent.replace(/[\s ]/g,'').length&&!c.querySelector('img'));
+    if(rightEmpty){
+      cells[0].setAttribute('colspan',String(cells.length));
+      cells[0].style.width='100%';
+      cells.slice(1).forEach(c=>c.remove());
+    }
+  });
+  return div.innerHTML;
+}
+
+async function buildDocxBlob(originalDocxBase64,modifiedDocXml){
+  const bStr=atob(originalDocxBase64);
+  const bytes=new Uint8Array(bStr.length);
+  for(let i=0;i<bStr.length;i++)bytes[i]=bStr.charCodeAt(i);
+  const zip=await JSZip.loadAsync(bytes.buffer);
+  if(modifiedDocXml)zip.file('word/document.xml',modifiedDocXml);
+  return zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',compression:'DEFLATE',compressionOptions:{level:6}});
+}
+
+function ResumeEditingStep({re,setRe,original,apiKey,toasts}){
+  const [view,setView]=useState('resume');
+  const [chatInput,setChatInput]=useState('');
+  const [chatStreaming,setChatStreaming]=useState(false);
+  const [showExport,setShowExport]=useState(false);
+  const [savingVersion,setSavingVersion]=useState(false);
+  const [versionName,setVersionName]=useState('');
+  const [docxPreviewHtml,setDocxPreviewHtml]=useState('');
+  const [previewTick,setPreviewTick]=useState(0);
+  const chatEndRef=useRef(null);
+  useEffect(()=>{chatEndRef.current?.scrollIntoView({behavior:'smooth'});},[re.chatHistory?.length,chatStreaming]);
+
+  const activeVersion=(re.versions||[]).find(v=>v.id===re.activeVersionId)||(re.versions||[]).slice(-1)[0];
+  const currentResume=activeVersion?.content||'';
+  const isDocxMode=re.uploadMode==='docx'&&!!re.originalDocxBase64;
+  const diag=re.diagnosis;
+  const allChanges=re.changes||[];
+  const pending=allChanges.filter(c=>c.status==='pending');
+  const scoreColor=s=>s>=80?'#10b981':s>=65?'#f59e0b':'#ef4444';
+
+  // Mammoth DOCX preview — rebuilds when active version's docXml changes
+  useEffect(()=>{
+    if(!isDocxMode||!window.mammoth||!window.JSZip)return;
+    const currentXml=activeVersion?.docxXml||re.originalDocxXml;
+    if(!currentXml)return;
+    let cancelled=false;
+    (async()=>{
+      try{
+        const blob=await buildDocxBlob(re.originalDocxBase64,currentXml);
+        const buf=await blob.arrayBuffer();
+        if(cancelled)return;
+        const r=await mammoth.convertToHtml({arrayBuffer:buf});
+        if(!cancelled)setDocxPreviewHtml(postProcessMammothHtml(r.value||''));
+      }catch(e){console.warn('DOCX preview error',e);}
+    })();
+    return()=>{cancelled=true;};
+  },[re.activeVersionId,previewTick,isDocxMode]);
+
+  const rebuildDocxFromChanges=(changes)=>{
+    if(!isDocxMode||!re.originalDocxXml)return null;
+    const toApply=changes.filter(c=>c.status!=='rejected');
+    return applyEditsToDocxXml(re.originalDocxXml,toApply);
+  };
+
+  const setChangeStatus=(id,status)=>{
+    const newChanges=re.changes.map(c=>c.id===id?{...c,status}:c);
+    if(isDocxMode){
+      const newDocXml=rebuildDocxFromChanges(newChanges);
+      const newVersions=re.versions.map(v=>v.id===activeVersion?.id?{...v,docxXml:newDocXml}:v);
+      setRe(r=>({...r,changes:newChanges,versions:newVersions}));
+      setPreviewTick(t=>t+1);
+    }else{
+      let content=currentResume;
+      if(status==='rejected'){
+        const ch=re.changes.find(c=>c.id===id);
+        const target=ch?.replacementText||ch?.after||'';
+        const orig=ch?.targetText||ch?.before||'';
+        if(target&&orig)content=content.replace(target,orig);
+      }
+      const newVersions=re.versions.map(v=>v.id===activeVersion?.id?{...v,content}:v);
+      setRe(r=>({...r,changes:newChanges,versions:newVersions}));
+    }
+  };
+
+  const acceptAll=()=>{
+    const newChanges=re.changes.map(c=>c.status==='pending'?{...c,status:'accepted'}:c);
+    setRe(r=>({...r,changes:newChanges}));
+  };
+
+  const sendChatMessage=async()=>{
+    if(!chatInput.trim()||chatStreaming||!apiKey)return;
+    const userMsg={role:'user',content:chatInput.trim()};
+    const hist=[...(re.chatHistory||[]),userMsg];
+    setRe(r=>({...r,chatHistory:hist}));
+    setChatInput('');setChatStreaming(true);
+    const sys=`You are editing a professional resume. Make the requested changes as targeted edit operations.
+
+FACTUAL: NEVER fabricate jobs, employers, dates, degrees, certifications, skills, metrics, or accomplishments not in the original resume or conversation.
+
+BULLET QUALITY — optimize in order: Truth → Specificity → Impact → Scope → Concision → Flow.
+- Target 1–2 dense lines. A tight one-liner is ideal. Never pad.
+- Strong verbs: Built, Deployed, Led, Automated, Analyzed, Developed, Designed, Implemented, Launched, Optimized
+- Weak verbs to avoid: Guided, Helped, Assisted, Worked on, Was responsible for
+- Banned: "spearheaded", "orchestrated", "leveraged" (verb), "synergized", "cross-functional", "impactful", "proactive", "results-driven", "utilizing", "facilitating"
+- Banned empty outcome phrases — cut them, they add no evidence: "enhancing operational efficiency", "driving strategic outcomes", "delivering value", "improving stakeholder alignment", "boosting business performance"
+- Vary sentence structure — do NOT template every bullet as "Verb + object + resulting in X%"
+- Never invent metrics, scope, or impact not in the original or this conversation
+
+Current resume:\n${currentResume}\n\nOriginal (factual reference — add nothing not in original):\n${original?.content||currentResume}
+
+Return ONLY valid JSON:
+{"edits":[{"id":"cx1","section":"Chat edit","targetText":"exact text from current resume","replacementText":"improved version, max 95 chars","why":"reason"}],"note":"brief message to user"}`;
+    try{
+      const result=await resumeAICall([{role:'system',content:sys},...hist.map(m=>({role:m.role,content:m.content}))],apiKey,8192);
+      const edits=(result.edits||result.changes||[]).map(c=>({
+        ...c,id:c.id||uid('c'),
+        targetText:c.targetText||c.before||'',
+        replacementText:c.replacementText||c.after||'',
+        status:'pending'
+      }));
+      const newVid=uid('v');
+      let newContent=currentResume;
+      let newDocXml=activeVersion?.docxXml||null;
+      if(isDocxMode&&re.originalDocxXml){
+        const allEdits=[...re.changes.filter(c=>c.status!=='rejected'),...edits];
+        newDocXml=applyEditsToDocxXml(re.originalDocxXml,allEdits);
+      }else{
+        for(const e of edits){if(e.targetText&&e.replacementText)newContent=newContent.replace(e.targetText,e.replacementText);}
+      }
+      const newV={id:newVid,name:`Edit ${new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})}`,content:newContent,docxXml:newDocXml,isEdited:true,createdAt:Date.now()};
+      const aMsg={role:'assistant',content:result.note||'Done.'};
+      setRe(r=>({...r,versions:[...r.versions,newV],activeVersionId:newVid,changes:[...r.changes,...edits],chatHistory:[...hist,aMsg]}));
+      setPreviewTick(t=>t+1);
+    }catch(e){
+      setRe(r=>({...r,chatHistory:[...hist,{role:'assistant',content:'Error: '+e.message}]}));
+    }
+    setChatStreaming(false);
+  };
+
+  const saveVersion=()=>{
+    const name=versionName.trim()||`Version ${re.versions.length}`;
+    const id=uid('v');
+    setRe(r=>({...r,versions:[...r.versions,{id,name,content:currentResume,docxXml:activeVersion?.docxXml||null,isEdited:true,createdAt:Date.now()}],activeVersionId:id}));
+    setSavingVersion(false);setVersionName('');
+    toasts.push('Saved: '+name);
+  };
+
+  const copyText=()=>{
+    navigator.clipboard?.writeText(currentResume).then(()=>toasts.push('Copied to clipboard!')).catch(()=>{
+      const el=document.createElement('textarea');el.value=currentResume;document.body.appendChild(el);el.select();document.execCommand('copy');document.body.removeChild(el);toasts.push('Copied!');
+    });
+  };
+
+  const downloadDocx=async()=>{
+    if(!window.JSZip||!re.originalDocxBase64){toasts.push('No DOCX source available — try uploading a .docx file');return;}
+    try{
+      const blob=await buildDocxBlob(re.originalDocxBase64,activeVersion?.docxXml||re.originalDocxXml);
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=url;a.download='resume-edited.docx';document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+      toasts.push('Downloaded resume-edited.docx');
+    }catch(e){toasts.push('Download failed: '+e.message);}
+  };
+
+  const printPDF=()=>{
+    const w=window.open('','_blank');
+    if(!w){toasts.push('Allow popups to print resume');return;}
+    const bodyContent=isDocxMode&&docxPreviewHtml
+      ?`<div id="resume">${docxPreviewHtml}</div>`
+      :`<pre>${currentResume.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>`;
+    w.document.write(`<!DOCTYPE html><html><head><title></title><style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:'Times New Roman',Georgia,serif;font-size:11pt;line-height:1.55;color:#000;background:#fff}
+      #resume,pre{padding:0.75in}
+      pre{white-space:pre-wrap;font-family:inherit;font-size:inherit}
+      #resume p{margin:0 0 0.05in}
+      #resume h1,#resume h2,#resume h3{font-size:inherit;font-weight:bold;margin:0.08in 0 0.03in}
+      #resume ul{padding-left:0.18in;margin:0 0 0.05in}
+      #resume li{margin-bottom:0.02in}
+      #resume strong{font-weight:bold}#resume em{font-style:italic}
+      #resume table{width:100%;border-collapse:collapse;border-spacing:0}
+      #resume td,#resume th{vertical-align:top;padding:0 0 2pt}
+      @page{margin:0;size:letter}
+      @media print{body{padding:0}#resume,pre{padding:0.75in}}
+    </style></head><body>${bodyContent}</body></html>`);
+    w.document.close();
+    setTimeout(()=>w.print(),600);
+    toasts.push('Tip: uncheck "Headers and footers" in the print dialog for clean output');
+  };
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',height:'calc(100vh - 220px)',minHeight:480}}>
+      {/* Toolbar */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,flexShrink:0,flexWrap:'wrap'}}>
+        <select value={re.activeVersionId||''} onChange={e=>setRe(r=>({...r,activeVersionId:e.target.value}))}
+          style={{padding:'6px 10px',borderRadius:7,fontSize:12,background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:'#94a3b8',cursor:'pointer',fontFamily:'inherit',maxWidth:180}}>
+          {(re.versions||[]).map(v=><option key={v.id} value={v.id} style={{background:'#1a1a24'}}>{v.name}</option>)}
+        </select>
+        {isDocxMode&&<span style={{fontSize:11,padding:'3px 8px',borderRadius:5,background:'rgba(16,185,129,0.12)',border:'1px solid rgba(16,185,129,0.2)',color:'#6ee7b7'}}>DOCX</span>}
+        <div style={{display:'flex',gap:1,padding:3,borderRadius:8,background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>
+          {[['resume','Resume'],['changes',`Changes${pending.length>0?` (${pending.length})`:''}` ],['jobmatch','Job Match']].map(([id,label])=>(
+            <button key={id} onClick={()=>setView(id)} style={{padding:'5px 11px',borderRadius:6,fontSize:12,cursor:'pointer',fontFamily:'inherit',border:'none',transition:'all 0.15s',
+              background:view===id?'rgba(255,255,255,0.1)':'transparent',color:view===id?'#e2e8f0':'#64748b'}}>{label}</button>
+          ))}
+        </div>
+        {pending.length>0&&<button onClick={acceptAll} style={{padding:'5px 12px',borderRadius:7,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(16,185,129,0.1)',border:'1px solid rgba(16,185,129,0.2)',color:'#6ee7b7'}}>Accept All ({pending.length})</button>}
+        <div style={{marginLeft:'auto',display:'flex',gap:8}}>
+          <button onClick={()=>setSavingVersion(true)} style={{padding:'6px 12px',borderRadius:7,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:'#94a3b8'}}>Save Version</button>
+          <div style={{position:'relative'}}>
+            <button onClick={()=>setShowExport(x=>!x)} style={{padding:'6px 14px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',border:'none',color:'#fff'}}>Export ↓</button>
+            {showExport&&(
+              <div style={{position:'absolute',top:'110%',right:0,background:'#1a1a24',border:'1px solid rgba(255,255,255,0.1)',borderRadius:10,padding:'4px',minWidth:190,zIndex:100,boxShadow:'0 16px 40px rgba(0,0,0,0.6)'}}>
+                {[
+                  ...(isDocxMode?[['⬇ Download .docx',downloadDocx]]:[] ),
+                  ['📋 Copy Text',copyText],
+                  ['🖨 Print / Save PDF',printPDF],
+                ].map(([l,fn])=>(
+                  <button key={l} onClick={()=>{fn();setShowExport(false);}} style={{display:'block',width:'100%',padding:'9px 12px',borderRadius:7,textAlign:'left',fontSize:13,cursor:'pointer',fontFamily:'inherit',background:'none',border:'none',color:'#e2e8f0'}}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.06)'} onMouseLeave={e=>e.currentTarget.style.background='none'}>{l}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Save version modal */}
+      {savingVersion&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}} onClick={()=>setSavingVersion(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#1a1a24',border:'1px solid rgba(255,255,255,0.1)',borderRadius:14,padding:24,width:320}}>
+            <div style={{fontSize:15,fontWeight:600,color:'#e2e8f0',marginBottom:14}}>Save as version</div>
+            <input value={versionName} onChange={e=>setVersionName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveVersion()} autoFocus
+              placeholder="e.g. Equity Research — BlackRock"
+              style={{width:'100%',padding:'9px 12px',borderRadius:8,fontSize:13,color:'#e2e8f0',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:14}}/>
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>setSavingVersion(false)} style={{padding:'7px 14px',borderRadius:7,fontSize:13,cursor:'pointer',fontFamily:'inherit',background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:'#64748b'}}>Cancel</button>
+              <button onClick={saveVersion} style={{padding:'7px 14px',borderRadius:7,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',border:'none',color:'#fff'}}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Split view */}
+      <div style={{flex:1,display:'flex',gap:14,minHeight:0,overflow:'hidden'}}>
+        {/* Left: Resume / Changes / Job Match */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,overflow:'hidden'}}>
+          {view==='resume'&&(
+            <div style={{flex:1,overflow:'auto',background:'rgba(255,255,255,0.02)',borderRadius:12,border:'1px solid rgba(255,255,255,0.07)',padding:'24px 28px'}}>
+              {diag&&(
+                <div style={{marginBottom:20,padding:'14px 16px',borderRadius:10,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',display:'flex',gap:16,flexWrap:'wrap'}}>
+                  {Object.entries(diag.scores||{}).map(([k,v])=>(
+                    <div key={k} style={{textAlign:'center',minWidth:58}}>
+                      <div style={{fontSize:20,fontWeight:700,color:scoreColor(v)}}>{v}</div>
+                      <div style={{fontSize:10,color:'#475569',textTransform:'capitalize'}}>{k}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {isDocxMode&&docxPreviewHtml?(
+                <div style={{fontFamily:'Georgia,"Times New Roman",serif',fontSize:13,lineHeight:1.7,color:'#e2e8f0',wordBreak:'break-word',overflowWrap:'break-word'}}
+                  dangerouslySetInnerHTML={{__html:docxPreviewHtml}}/>
+              ):(
+                isDocxMode&&!docxPreviewHtml?(
+                  <div style={{color:'#475569',fontSize:13,textAlign:'center',paddingTop:40}}>Loading DOCX preview…</div>
+                ):(
+                  <pre style={{whiteSpace:'pre-wrap',fontFamily:'Georgia,"Times New Roman",serif',fontSize:13,lineHeight:1.75,color:'#e2e8f0',margin:0}}>{currentResume}</pre>
+                )
+              )}
+            </div>
+          )}
+          {view==='changes'&&(
+            <div style={{flex:1,overflow:'auto'}}>
+              {allChanges.length===0?(
+                <div style={{textAlign:'center',padding:40,color:'#475569'}}>No changes recorded yet.</div>
+              ):(
+                <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                  {allChanges.map(ch=>{
+                    const beforeText=ch.targetText||ch.before||'';
+                    const afterText=ch.replacementText||ch.after||'';
+                    return(
+                    <div key={ch.id} style={{borderRadius:10,border:`1px solid ${ch.status==='rejected'?'rgba(239,68,68,0.2)':ch.status==='accepted'?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.07)'}`,background:'rgba(255,255,255,0.02)',overflow:'hidden'}}>
+                      <div style={{padding:'8px 14px',borderBottom:'1px solid rgba(255,255,255,0.05)',display:'flex',alignItems:'center',gap:8}}>
+                        <span style={{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',color:'#475569'}}>{ch.section||'Edit'}</span>
+                        <span style={{marginLeft:'auto',fontSize:11,fontWeight:600,textTransform:'uppercase',color:ch.status==='accepted'?'#6ee7b7':ch.status==='rejected'?'#fca5a5':'#94a3b8'}}>
+                          {ch.status==='accepted'?'✓ Accepted':ch.status==='rejected'?'✗ Rejected':'Pending'}
+                        </span>
+                      </div>
+                      <div style={{padding:'12px 14px'}}>
+                        <div style={{marginBottom:8}}><div style={{fontSize:10,fontWeight:600,color:'#ef4444',textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>Before</div><div style={{fontSize:13,color:'#94a3b8',lineHeight:1.5,background:'rgba(239,68,68,0.06)',padding:'7px 10px',borderRadius:6}}>{beforeText}</div></div>
+                        <div style={{marginBottom:8}}><div style={{fontSize:10,fontWeight:600,color:'#10b981',textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>After</div><div style={{fontSize:13,color:'#e2e8f0',lineHeight:1.5,background:'rgba(16,185,129,0.06)',padding:'7px 10px',borderRadius:6}}>{afterText}</div></div>
+                        <div style={{marginBottom:8}}><div style={{fontSize:10,fontWeight:600,color:'#6366f1',textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>Why</div><div style={{fontSize:12,color:'#64748b',lineHeight:1.5}}>{ch.why}</div></div>
+                        {ch.status==='pending'&&(
+                          <div style={{display:'flex',gap:8,marginTop:8}}>
+                            <button onClick={()=>setChangeStatus(ch.id,'accepted')} style={{padding:'4px 14px',borderRadius:7,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(16,185,129,0.12)',border:'1px solid rgba(16,185,129,0.25)',color:'#6ee7b7'}}>Accept</button>
+                            <button onClick={()=>setChangeStatus(ch.id,'rejected')} style={{padding:'4px 14px',borderRadius:7,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.2)',color:'#fca5a5'}}>Reject</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );})}
+                </div>
+              )}
+            </div>
+          )}
+          {view==='jobmatch'&&(
+            <div style={{flex:1,overflow:'auto'}}>
+              {!re.jobMatch||(re.jobMatch.strong?.length===0&&re.jobMatch.partial?.length===0&&re.jobMatch.missing?.length===0)?(
+                <div style={{textAlign:'center',padding:40,color:'#475569'}}>No job description was provided, or the match analysis is empty. Paste a JD and run again to see match analysis.</div>
+              ):(
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  {(re.jobMatch.strong||[]).length>0&&(
+                    <div style={{background:'rgba(16,185,129,0.06)',border:'1px solid rgba(16,185,129,0.15)',borderRadius:10,padding:'14px 16px'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#6ee7b7',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Strong Matches</div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>{(re.jobMatch.strong||[]).map(s=><span key={s} style={{padding:'3px 10px',borderRadius:20,fontSize:12,background:'rgba(16,185,129,0.15)',color:'#6ee7b7'}}>✓ {s}</span>)}</div>
+                    </div>
+                  )}
+                  {(re.jobMatch.partial||[]).length>0&&(
+                    <div style={{background:'rgba(245,158,11,0.06)',border:'1px solid rgba(245,158,11,0.15)',borderRadius:10,padding:'14px 16px'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#fbbf24',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Partial Matches</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>{(re.jobMatch.partial||[]).map(p=>(
+                        <div key={p.skill}><div style={{fontSize:13,fontWeight:600,color:'#fbbf24'}}>△ {p.skill}</div><div style={{fontSize:12,color:'#64748b',marginTop:2}}>{p.note}</div></div>
+                      ))}</div>
+                    </div>
+                  )}
+                  {(re.jobMatch.missing||[]).length>0&&(
+                    <div style={{background:'rgba(239,68,68,0.05)',border:'1px solid rgba(239,68,68,0.15)',borderRadius:10,padding:'14px 16px'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#fca5a5',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:10}}>Missing Evidence</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>{(re.jobMatch.missing||[]).map(m=>(
+                        <div key={m.skill}><div style={{fontSize:13,fontWeight:600,color:'#fca5a5'}}>○ {m.skill}</div><div style={{fontSize:12,color:'#64748b',marginTop:2}}>{m.question}</div></div>
+                      ))}</div>
+                      <div style={{marginTop:12,padding:'9px 12px',borderRadius:8,background:'rgba(255,255,255,0.03)',fontSize:12,color:'#64748b',fontStyle:'italic'}}>Only add a skill if you actually have it. Ask the AI: "I have [skill] experience — add it."</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Right: AI Chat */}
+        <div style={{width:290,flexShrink:0,display:'flex',flexDirection:'column',borderLeft:'1px solid rgba(255,255,255,0.06)',paddingLeft:14,overflow:'hidden'}}>
+          <div style={{fontSize:11,fontWeight:600,color:'#6366f1',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.08em'}}>AI Resume Assistant</div>
+          {diag?.observations&&(re.chatHistory||[]).length===0&&(
+            <div style={{marginBottom:12}}>
+              {(diag.observations||[]).map((obs,i)=>(
+                <div key={i} style={{fontSize:12,color:'#94a3b8',lineHeight:1.5,padding:'7px 10px',borderRadius:7,background:'rgba(99,102,241,0.06)',border:'1px solid rgba(99,102,241,0.1)',marginBottom:5}}>{obs}</div>
+              ))}
+            </div>
+          )}
+          <div style={{flex:1,overflow:'auto',display:'flex',flexDirection:'column',gap:7,marginBottom:10,minHeight:0}}>
+            {(re.chatHistory||[]).length===0&&!diag?.observations&&(
+              <div style={{fontSize:12,color:'#475569',textAlign:'center',padding:'20px 0'}}>Ask me to make changes, strengthen bullets, or tailor for a role.</div>
+            )}
+            {(re.chatHistory||[]).map((m,i)=>(
+              <div key={i} style={{padding:'8px 10px',borderRadius:8,fontSize:12,lineHeight:1.5,background:m.role==='user'?'rgba(99,102,241,0.12)':'rgba(255,255,255,0.04)',color:m.role==='user'?'#a5b4fc':'#e2e8f0',alignSelf:m.role==='user'?'flex-end':'flex-start',maxWidth:'90%'}}>{m.content}</div>
+            ))}
+            {chatStreaming&&<div style={{padding:'8px 10px',borderRadius:8,fontSize:12,color:'#64748b',background:'rgba(255,255,255,0.03)',alignSelf:'flex-start'}}>Editing…</div>}
+            <div ref={chatEndRef}/>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6,flexShrink:0}}>
+            {(re.chatHistory||[]).length===0&&(
+              <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:4}}>
+                {['Make bullets more impactful','Tighten to one page','Emphasize technical skills','Remove filler language'].map(p=>(
+                  <button key={p} onClick={()=>setChatInput(p)} style={{padding:'4px 8px',borderRadius:6,fontSize:11,cursor:'pointer',fontFamily:'inherit',background:'rgba(99,102,241,0.1)',border:'1px solid rgba(99,102,241,0.2)',color:'#a5b4fc'}}>{p}</button>
+                ))}
+              </div>
+            )}
+            <textarea value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))sendChatMessage();}}
+              placeholder="Ask AI to edit your resume… (Ctrl+Enter)" rows={3}
+              style={{width:'100%',padding:'9px',borderRadius:8,resize:'none',fontFamily:'inherit',fontSize:12,lineHeight:1.5,color:'#e2e8f0',outline:'none',boxSizing:'border-box',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)'}}/>
+            <button onClick={sendChatMessage} disabled={!chatInput.trim()||chatStreaming||!apiKey}
+              style={{padding:'8px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',border:'none',background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:(!chatInput.trim()||chatStreaming||!apiKey)?0.4:1}}>
+              {chatStreaming?'Editing…':'Send'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResumeEditorTab({data,setData,toasts}){
+  const apiKey=data.settings?.apiKey||'';
+  const re=data.resumeEditor||getDefaultResumeEditor();
+  const [genError,setGenError]=useState('');
+  const setRe=updater=>setData(d=>{const cur=d.resumeEditor||getDefaultResumeEditor();const next=typeof updater==='function'?updater(cur):updater;return{...d,resumeEditor:next};});
+  const versions=re.versions||[];
+  const original=versions.find(v=>v.isOriginal);
+  const step=!versions.length?'import':!re.goals.length?'goal':!re.interview.done?'interview':!re.diagnosis?'generating':'editing';
+  const reset=()=>{if(!confirm('Start over? This clears your current resume session.'))return;setRe(getDefaultResumeEditor());setGenError('');};
+
+  const STEP_LABELS=[['import','Import'],['goal','Goal'],['interview','Interview'],['generating','Analysis'],['editing','Editor']];
+  const stepOrder=['import','goal','interview','generating','editing'];
+  const curIdx=stepOrder.indexOf(step);
+
+  if(!apiKey)return(
+    <div style={{textAlign:'center',padding:'48px 20px'}}>
+      <div style={{fontSize:32,marginBottom:14}}>🔑</div>
+      <div style={{fontSize:16,fontWeight:600,color:'#e2e8f0',marginBottom:8}}>OpenAI API Key Required</div>
+      <div style={{fontSize:13,color:'#64748b'}}>Add your key in Settings to use the AI Resume Editor.</div>
+    </div>
+  );
+
+  return(
+    <div>
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:20,gap:12}}>
+        <div>
+          <h3 style={{fontSize:18,fontWeight:700,color:'#e2e8f0',margin:0}}>
+            {step==='import'?'AI Resume Editor':step==='goal'?'Set Your Goal':step==='interview'?'Quick Interview':step==='generating'?'Analyzing…':'Resume Editor'}
+          </h3>
+          <p style={{fontSize:12,color:'#64748b',marginTop:4,margin:0}}>
+            {step==='import'?'Upload your resume and get a stronger, more targeted version back.':
+             step==='goal'?'Tell us what you want to achieve with this resume.':
+             step==='interview'?'A few specific questions to strengthen your bullets.':
+             step==='generating'?'Analyzing your resume and generating improvements…':
+             'Review edits, chat with AI, and export your finished resume.'}
+          </p>
+        </div>
+        {step!=='import'&&<button onClick={reset} style={{padding:'6px 12px',borderRadius:7,fontSize:12,cursor:'pointer',fontFamily:'inherit',background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#475569',whiteSpace:'nowrap',flexShrink:0}}>Start Over</button>}
+      </div>
+
+      {step!=='import'&&step!=='generating'&&(
+        <div style={{display:'flex',gap:4,alignItems:'center',marginBottom:22,flexWrap:'wrap'}}>
+          {STEP_LABELS.map(([s,label],i)=>{
+            const idx=stepOrder.indexOf(s);const done=idx<curIdx;const active=s===step;
+            return(
+              <React.Fragment key={s}>
+                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                  <div style={{width:20,height:20,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,
+                    background:done?'rgba(16,185,129,0.2)':active?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.05)',
+                    border:done?'1.5px solid rgba(16,185,129,0.5)':active?'1.5px solid rgba(99,102,241,0.6)':'1px solid rgba(255,255,255,0.1)',
+                    color:done?'#6ee7b7':active?'#a5b4fc':'#475569'}}>
+                    {done?'✓':i+1}
+                  </div>
+                  <span style={{fontSize:11,color:active?'#a5b4fc':done?'#6ee7b7':'#475569'}}>{label}</span>
+                </div>
+                {i<STEP_LABELS.length-1&&<div style={{width:16,height:1,background:'rgba(255,255,255,0.07)'}}/>}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
+
+      {step==='import'&&<ResumeImportStep onNext={(text,meta={})=>{const id=uid('v');setRe(r=>({...r,versions:[{id,name:'Original',content:text,docxXml:meta.docXml||null,isOriginal:true,createdAt:Date.now(),mode:meta.mode||'text'}],activeVersionId:id,originalDocxBase64:meta.base64||null,originalDocxXml:meta.docXml||null,paragraphs:meta.paragraphs||[],uploadMode:meta.mode||'text'}));}} data={data}/>}
+      {step==='goal'&&<ResumeGoalStep onNext={(goals,jd)=>setRe(r=>({...r,goals,jd:jd||''}))} onBack={()=>setRe(r=>({...r,versions:[],activeVersionId:null}))}/>}
+      {step==='interview'&&<ResumeInterviewStep resumeText={original?.content||''} goals={re.goals} jd={re.jd} interview={re.interview}
+        onUpdateInterview={iv=>setRe(r=>({...r,interview:iv}))} onComplete={()=>setRe(r=>({...r,interview:{...r.interview,done:true}}))}
+        onBack={()=>setRe(r=>({...r,goals:[],jd:''}))} apiKey={apiKey}/>}
+      {step==='generating'&&(
+        genError?(
+          <div style={{maxWidth:500,margin:'0 auto',textAlign:'center',paddingTop:40}}>
+            <div style={{padding:16,borderRadius:10,background:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',color:'#fca5a5',marginBottom:16}}>{genError}</div>
+            <button onClick={()=>{setGenError('');setRe(r=>({...r,interview:{...r.interview,done:false}}));}} style={{padding:'8px 16px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)',color:'#94a3b8',cursor:'pointer',fontFamily:'inherit'}}>← Retry from Interview</button>
+          </div>
+        ):(
+          <ResumeGeneratingStep resumeText={original?.content||''} goals={re.goals} jd={re.jd} interview={re.interview}
+            onComplete={result=>{
+              const id=uid('v');
+              // Normalize to new edits schema (supports both old {changes:[{before,after}]} and new {edits:[{targetText,replacementText}]})
+              const rawEdits=result.edits||result.changes||[];
+              const changes=rawEdits.map(c=>({...c,id:c.id||uid('c'),targetText:c.targetText||c.before||'',replacementText:c.replacementText||c.after||'',status:'pending'}));
+              const isDocx=re.uploadMode==='docx'&&re.originalDocxXml;
+              let editedContent=result.editedResume||original?.content||'';
+              let editedDocXml=null;
+              if(isDocx){
+                try{editedDocXml=applyEditsToDocxXml(re.originalDocxXml,changes);}catch(e){console.warn('DOCX patch failed, text-only mode',e);editedDocXml=null;}
+                let txt=original?.content||'';
+                for(const c of changes){if(c.targetText&&c.replacementText)txt=txt.replace(c.targetText,c.replacementText);}
+                editedContent=txt;
+              }else if(!result.editedResume&&result.edits){
+                let txt=original?.content||'';
+                for(const c of changes){if(c.targetText&&c.replacementText)txt=txt.replace(c.targetText,c.replacementText);}
+                editedContent=txt;
+              }
+              const nv={id,name:'AI Edit',content:editedContent,docxXml:editedDocXml,isEdited:true,createdAt:Date.now()};
+              setRe(r=>({...r,versions:[...r.versions,nv],activeVersionId:id,diagnosis:result.diagnosis||null,jobMatch:result.jobMatch||null,changes}));
+              setGenError('');
+            }}
+            onError={setGenError} apiKey={apiKey}/>
+        )
+      )}
+      {step==='editing'&&<ResumeEditingStep re={re} setRe={setRe} original={original} apiKey={apiKey} toasts={toasts}/>}
+    </div>
+  );
+}
+
 function CareerPanel({data, setData, toasts}){
   const [tab, setTab] = useState('overview');
   const career = data.career || {contacts:[], questions:DEFAULT_QUESTIONS, applications:[]};
@@ -6233,7 +7471,7 @@ function CareerPanel({data, setData, toasts}){
   const updateQ = (id, patch) => setCareer(cr=>({...cr, questions:(cr.questions||[]).map(q=>q.id===id?{...q,...patch}:q)}));
   const deleteQ = (id) => setCareer(cr=>({...cr, questions:(cr.questions||[]).filter(q=>q.id!==id)}));
 
-  const TABS = [{id:'overview',label:'Overview'},{id:'network',label:'Network'},{id:'applications',label:'Applications'},{id:'prep',label:'Interview Prep'}];
+  const TABS = [{id:'overview',label:'Overview'},{id:'network',label:'Network'},{id:'applications',label:'Applications'},{id:'prep',label:'Interview Prep'},{id:'resume',label:'Resume Editor'}];
 
   return (
     <div>
@@ -6256,6 +7494,7 @@ function CareerPanel({data, setData, toasts}){
       {tab==='network'      && <NetworkTracker contacts={career.contacts||[]} addContact={addContact} updateContact={updateContact} deleteContact={deleteContact} />}
       {tab==='applications' && <AppPipeline applications={career.applications||[]} addApp={addApp} updateApp={updateApp} deleteApp={deleteApp} />}
       {tab==='prep'         && <InterviewPrep questions={career.questions||DEFAULT_QUESTIONS} addQ={addQ} updateQ={updateQ} deleteQ={deleteQ} />}
+      {tab==='resume'       && <ResumeEditorTab data={data} setData={setData} toasts={toasts} />}
     </div>
   );
 }
@@ -6731,6 +7970,1053 @@ function InterviewPrep({questions, addQ, updateQ, deleteQ}){
 const GE_PHASE_COLORS = {in_progress:'#6366f1', future:'#334155', done:'#10b981'};
 const GE_OWNER_COLORS = {rishi:'#6366f1', rohan:'#10b981', both:'#8b5cf6'};
 
+const GE_COURSE_WEEKS = [
+  {id:'wk1', num:1,  name:'No Time Machine',                   notebook:'01_data_contract.ipynb',          deliverable:'Data contract + leakage checklist + 20–30-stock starter universe', hours:'5–6h', done:false, bossFight:false,
+   phase:'Foundations', emoji:'⏳',
+   objectives:['Set up Git repo, data dirs, Python env, SEC identification header, CIK/ticker mapping','Understand point-in-time data, survivorship bias, look-ahead bias, and decision timestamps','Build available_at, source, accession, retrieved_at fields — write automated leakage assertions that fail when violated'],
+   readings:['SEC EDGAR APIs — no key needed; submissions + XBRL facts update throughout the day','When Alpha Disappears (2026) — how minor timing conventions inflate backtests substantially']},
+
+  {id:'wk2', num:2,  name:'Build the Boring Portfolio',        notebook:'02_baseline_portfolio.ipynb',     deliverable:'Investment Policy v0.1 + baseline performance report + live $1M paper ledger', hours:'5h', done:false, bossFight:false,
+   phase:'Foundations', emoji:'📊',
+   objectives:['Compute arithmetic/log returns, CAGR, Sharpe, drawdown, beta, turnover, diversification','Create equal-weight and market-cap-weight portfolios; add trading-cost sensitivity','Initialize the $1M paper ledger — every AI strategy needs a naïve baseline to beat first'],
+   readings:['Kenneth French Data Library — downloadable factor + portfolio returns, updated through 2026','Georgia Tech CS7646 — practical ML-for-trading portfolio foundation (free online)']},
+
+  {id:'wk3', num:3,  name:'Rank the Street',                   notebook:'03_cross_sectional_ranker.ipynb', deliverable:'Model card, OOS rank-IC series, decile returns, feature-stability plot', hours:'6h', done:false, bossFight:false,
+   phase:'Machine Learning', emoji:'🏆',
+   objectives:['Reframe stock selection as cross-sectional ranking, not price prediction','Build lagged price/volume/fundamental features; compare linear baseline vs. gradient-boosted ML','Learn rank IC, top-minus-bottom spreads, monthly walk-forward — measure ranking quality not forecast accuracy'],
+   readings:['Charting by Machines (2024) — nonlinear ML extracts genuine OOS signal from historical price patterns','AlphaGlass (NBER 2026) — portfolio-oriented ranking links interpretable characteristics directly to decisions']},
+
+  {id:'wk4', num:4,  name:'Kill Your Alpha',                   notebook:'04_backtest_audit.ipynb',         deliverable:'Signed leakage/robustness report — you must destroy your own best backtest', hours:'6–7h', done:false, bossFight:true,
+   phase:'Machine Learning', emoji:'⚔️',
+   objectives:['Walk-forward evaluation, purge/embargo logic, hyperparameter overfitting, robustness testing','Run a specification multiverse over horizons, algorithms, costs, and portfolio construction rules','BOSS FIGHT: receive a suspiciously profitable contaminated strategy — diagnose exactly why it is wrong'],
+   readings:['When Alpha Disappears — decision-time leakage effects demonstrated concretely with real code','Lalwani 2026 (European Financial Management) — research-design choices cause large variation in ML results']},
+
+  {id:'wk5', num:5,  name:'EDGAR Detective',                   notebook:'05_edgar_pipeline.ipynb',         deliverable:'Searchable 10-company filing warehouse + "what changed?" change-detection report', hours:'5–6h', done:false, bossFight:false,
+   phase:'Research Intelligence', emoji:'🔍',
+   objectives:['Master CIKs, accession numbers, 10-K/10-Q/8-K, XBRL Company Facts, filing dates vs. fiscal periods','Critical rule: fiscal-period date ≠ availability date — only admit data from filings available at decision time','Build an immutable filing store; extract + compare current vs. prior filing sections for change detection'],
+   readings:['SEC EDGAR public API — submissions history + XBRL facts, no authentication, <10 req/sec','JFE Cao et al. — AI most useful where information is transparent but voluminous (SEC filings are exactly this)']},
+
+  {id:'wk6', num:6,  name:'Citation or It Didn\'t Happen',     notebook:'06_financial_rag.ipynb',          deliverable:'Retrieval eval with Recall@k + evidence-grounded filing Q&A tool', hours:'6h', done:false, bossFight:false,
+   phase:'Research Intelligence', emoji:'📎',
+   objectives:['Learn chunking, embeddings, semantic search, hybrid retrieval, reranking, and RAG','Attach accession/section/filing-date metadata to every retrieved chunk — provenance is mandatory','Separate retrieval errors from generation errors; build 25 manually verified ground-truth questions'],
+   readings:['Fin-RATE (2026) — LLM performance drops when tasks cross documents or reporting periods','FinRank (Aug 2026) — retrieving the correct evidence from filings is hard even when documents are available']},
+
+  {id:'wk7', num:7,  name:'Become the Allocator',              notebook:'07_portfolio_optimizer.ipynb',    deliverable:'Allocator function: ML scores → auditable constrained target weights (CVXPY)', hours:'6h', done:false, bossFight:false,
+   phase:'Portfolio Management', emoji:'⚖️',
+   objectives:['Move from "best stocks" to portfolios — covariance, risk budgets, rank weighting, mean-variance','Build constrained optimization with CVXPY: position limits, sector exposure, turnover penalties','Understand why expected-return errors matter — the forecast and the optimizer are not independent problems'],
+   readings:['Machine Learning Meets Markowitz (NBER 2026) — integrate ML with portfolio objective, not two steps','AlphaGlass (NBER 2026) — interpretable direct portfolio objectives vs. isolated prediction-then-optimize']},
+
+  {id:'wk8', num:8,  name:'Crash the Portfolio',               notebook:'08_risk_and_drift.ipynb',         deliverable:'Risk limits + model-disable rules', hours:'5–7h', done:false, bossFight:true,
+   phase:'Portfolio Management', emoji:'💥',
+   objectives:['Factor regression, concentration dashboard, drawdown stress, cost shocks, model drift monitor','Volatility regimes, liquidity proxies, macro vintages — FRED/ALFRED APIs supply vintage-dated observations','BOSS FIGHT: understand why good average performance can conceal catastrophic fragility in stress scenarios'],
+   readings:['FRED/ALFRED — historical macro + vintage dates so macro features can be tested point-in-time','Chen, Sialm & Xu (NBER 2026) — early AI fund outperformance diminishes; AI is not a durable alpha source']},
+
+  {id:'wk9', num:9,  name:'Build an AI Analyst, Not an Oracle',notebook:'09_llm_analyst.ipynb',           deliverable:'5 AI research memos graded against human-verified facts', hours:'6h', done:false, bossFight:false,
+   phase:'AI Analysts', emoji:'🧠',
+   objectives:['Structured LLM outputs — JSON with thesis, risks, uncertainties, evidence source IDs, unanswered questions','Prompt contracts: LLM may reason only from supplied, timestamp-approved evidence — never from memory alone','Force every material investment claim to cite an evidence ID; document everything the agent cannot answer'],
+   readings:['JFE Cao et al. — conceptual anchor: AI processes volume, humans supply context and catch extreme errors','Finance Agent Benchmark (2025) — best model scored only 46.8% on 537 real SEC-grounded research tasks']},
+
+  {id:'wk10',num:10, name:'Bull vs. Bear',                     notebook:'10_agent_red_team.ipynb',         deliverable:'Agent eval matrix + escalation rules', hours:'6h', done:false, bossFight:true,
+   phase:'AI Analysts', emoji:'🐂',
+   objectives:['Build a multi-agent committee: Fundamental → Quant → Bear → Risk → human synthesis','Adversarial debate, model independence, correlated LLM errors, concentration and media bias','BOSS FIGHT: introduce misleading evidence into the pipeline — does the adversarial agent catch it?'],
+   readings:['Carlin et al. (NBER 2026) — LLM portfolios: concentrated, momentum/media-tilted, no statistically significant alpha','LangGraph — stateful workflows + human-in-the-loop gates (or implement in plain Python first)']},
+
+  {id:'wk11',num:11, name:'Build the War Room',                notebook:'11_platform_integration.ipynb',   deliverable:'Platform v1.0: ticker → evidence → quant → AI → human gate → weights → log', hours:'7h', done:false, bossFight:false,
+   phase:'Integration', emoji:'🏗️',
+   objectives:['Integrate data lake + ML ranker + RAG + multi-agent committee + optimizer + audit log + paper ledger','Establish the deterministic boundary: agents analyze, deterministic code controls weights and execution','The human approval gate is arguably more important than any choice of agent framework'],
+   readings:['Ollama structured outputs — Pydantic/JSON-schema-constrained outputs for reliable agent parsing','LangGraph — optional stateful orchestration; plain Python is better until you understand the workflow']},
+
+  {id:'wk12',num:12, name:'The $1M Investment Committee',      notebook:'12_final_ic.ipynb',               deliverable:'Final repo + IC deck + $1M paper portfolio + preregistered forward-testing protocol', hours:'7h', done:false, bossFight:false,
+   phase:'Integration', emoji:'💰',
+   objectives:['Freeze models, evidence dates, portfolio rules, and benchmark — no post-hoc changes allowed','Convert rankings + AI research into a paper portfolio; defend every position with thesis + disconfirming evidence','12 weeks builds a credible research operation — not a statistically credible track record (that takes years)'],
+   readings:['"Summoning the Oracle to Slay It" (2026) — LLM historical backtests inherit future knowledge via model parameters','Mo & Ouyang "GenAI in Financial Economics" (Jul 2026) — synthesis across asset pricing, investment, and market risks']},
+];
+
+const GE_COURSE_RULES = [
+  {name:'The Mission',      icon:'🎯', color:'#6366f1', desc:'Every week ships a working component of the same platform. By Week 11 the whole system runs end-to-end.'},
+  {name:'Boss Fight',       icon:'⚔️', color:'#ef4444', desc:'Weeks 4, 8, and 10 each hand you a suspiciously profitable model or misleading evidence. Your job: prove it wrong before it breaks the portfolio.'},
+  {name:'Bull vs. Bear',    icon:'🐂', color:'#f59e0b', desc:'Once agents are live, no bullish research memo is accepted without a separate adversarial Bear agent attacking it first.'},
+  {name:'No-Time-Machine',  icon:'⏳', color:'#8b5cf6', desc:'Every feature, filing, macro observation, and LLM prompt context must satisfy available_at ≤ decision_time. No exceptions, ever.'},
+  {name:'Evidence Rule',    icon:'📎', color:'#3b82f6', desc:'An LLM statement about a company is not accepted because it sounds plausible. It must resolve to a filing accession, section, data observation, or source.'},
+  {name:'$1M Scoreboard',   icon:'💰', color:'#10b981', desc:'Paper portfolio graded on return, vol, drawdown, turnover, concentration, factor exposure, thesis accuracy, and process errors — not P&L alone.'},
+];
+
+const GE_RESEARCH_SPINE = [
+  {title:'From Man vs. Machine to Man + Machine',    authors:'Cao, Jiang, Wang & Yang',     venue:'JFE 2024',      why:'Best evidence for hybrid design: AI scales information processing, humans reduce extreme errors — combining both beats either alone'},
+  {title:'The Growth and Performance of AI in AM',   authors:'Chen, Sialm & Xu',             venue:'NBER 2026',     why:'Early AI hedge-fund outperformance diminished over time — AI is not itself a durable source of alpha'},
+  {title:'AlphaGlass',                               authors:'Bell et al.',                  venue:'NBER 2026',     why:'Modern example: interpretable stock characteristics linked directly to portfolio decisions, not isolated prediction'},
+  {title:'Machine Learning Meets Markowitz',         authors:'Wang et al.',                  venue:'NBER 2026',     why:'Forecast-then-optimize is suboptimal; integrate the investor\'s objective and constraints into the modeling problem'},
+  {title:'AlphaPortfolio',                           authors:'Cong, Tang & Wang',            venue:'NBER 2026',     why:'Frontier: transformer + deep RL for direct portfolio construction — stretch reading, not the beginner baseline'},
+  {title:'AI Managed Household Portfolios',          authors:'Carlin, Israelsen & Wazzan',   venue:'NBER 2026',     why:'Warning: LLM portfolios concentrated in large, momentum, media-visible stocks — no statistically significant abnormal return'},
+  {title:'Finance Agent Benchmark',                  authors:'(community)',                   venue:'2025',          why:'537 expert SEC-research questions; best model achieved 46.8% — agents need human oversight, not autonomous delegation'},
+  {title:'Fin-RATE',                                 authors:'(community)',                   venue:'2026',          why:'LLM performance degrades when financial tasks cross documents, entities, or reporting periods'},
+  {title:'FinRank',                                  authors:'(community)',                   venue:'Aug 2026',      why:'Evidence provenance in 10-K/10-Q retrieval is hard even for state-of-the-art systems — evaluate it explicitly'},
+  {title:'When Alpha Disappears',                    authors:'(community)',                   venue:'2026',          why:'Core reading on decision-time leakage — minor timing conventions can materially inflate financial ML backtests'},
+  {title:'Summoning the Oracle to Slay It',          authors:'(community)',                   venue:'2026',          why:'LLM historical backtests can inherit future knowledge through model parameters (parametric look-ahead bias)'},
+  {title:'(Generative) AI in Financial Economics',   authors:'Mo & Ouyang',                  venue:'SSRN Jul 2026', why:'Broad synthesis tying GenAI to asset pricing, investment, and financial-market risks — good Week 12 capstone read'},
+];
+
+const GE_COURSE_DAYS14 = [
+  {id:'d1', day:1,  action:'Create repository and Python environment — notebooks/, src/, data/, tests/, decisions/ exist; Git initialized', done:false},
+  {id:'d2', day:2,  action:'Pick 20–30 company educational universe — CSV: ticker, company, CIK, sector, inclusion rationale', done:false},
+  {id:'d3', day:3,  action:'Connect to SEC EDGAR — retrieve each company\'s submissions metadata; respect <10 req/sec fair-access limit', done:false},
+  {id:'d4', day:4,  action:'Acquire EOD price history — raw data saved unchanged; data source and licensing documented', done:false},
+  {id:'d5', day:5,  action:'Build data contract — every table has source, retrieved_at, available_at, and primary key', done:false},
+  {id:'d6', day:6,  action:'Write leakage tests — code fails if any feature or filing appears after its simulated decision time', done:false},
+  {id:'d7', day:7,  action:'Boss Fight: deliberately leak one feature — test suite must catch and fail on it', done:false},
+  {id:'d8', day:8,  action:'Calculate returns, volatility, and drawdowns — one clean performance notebook runs start to finish', done:false},
+  {id:'d9', day:9,  action:'Build $1M equal-weight paper baseline — ledger contains shares, weights, timestamp, decision ID', done:false},
+  {id:'d10',day:10, action:'Add benchmark and factor diagnostics — baseline compared to preregistered benchmark/factors', done:false},
+  {id:'d11',day:11, action:'Add transaction-cost scenarios — results shown at multiple assumed cost levels, not one convenient assumption', done:false},
+  {id:'d12',day:12, action:'Write Investment Policy v0.1 — universe, benchmark, rebalance schedule, constraints, "no live trading" rule', done:false},
+  {id:'d13',day:13, action:'Write first one-page company memo manually — no LLM; establish what good human research looks like', done:false},
+  {id:'d14',day:14, action:'Review and freeze the foundation — tag repository foundation-v1; Week 3 ML work may begin', done:false},
+];
+
+/* ──────────────────────────────────────────────────────────
+   GE COURSE CURRICULUM CONTENT  (immutable — user state overlays via weekProgress)
+   ────────────────────────────────────────────────────────── */
+const GE_WEEK_CONTENT = {
+  wk1: {
+    mission:{
+      objective:"Prove that your data pipeline cannot see the future, and build automated tests that make temporal leakage impossible.",
+      output:"A reproducible data-contract notebook: universe CSV, point-in-time filing timestamps, automated leakage assertions that fail when violated, and documented data sources.",
+      failCondition:"You report a research result without a verified available_at timestamp on every input feature.",
+      whatWouldChangeMind:"A systematic process that assigns filing timestamps to every data row — and a test suite that catches any violation."
+    },
+    whyItMatters:"Every spectacular backtest that fails in live trading shares one trait: it accidentally saw the future. Temporal integrity is the highest-leverage habit in quantitative research. Researchers who internalize it first build better strategies faster, with fewer expensive surprises.",
+    prerequisites:['Python environment','Basic pandas/NumPy','SEC EDGAR account (free)'],
+    lessons:[
+      {id:'w01-l01', title:'Why Backtests Lie', duration:'10 min', competency:'DATA',
+       content:"A researcher builds a momentum strategy. It shows a 2.4 Sharpe ratio over ten years. During code review, a colleague spots one error: every signal was tagged with fiscal year-end date rather than the actual SEC filing date. After correcting this single date field, the Sharpe falls to 0.7.\n\nWhich result represents the strategy?\n\nOnly the 0.7. The 2.4 was not a measurement of the strategy. It was a measurement of the researcher's access to information that market participants in 2012 did not possess. The performance was real in the simulation. It was never real in the market.\n\nA backtest simulates trading decisions in the past. Its only value is the assumption that it reconstructed exactly the information available at each historical decision moment. When that assumption is wrong, the backtest measures nothing useful.\n\n── THE INFORMATION TIMELINE ──\n\nEvery piece of financial data moves through a sequence of timestamps before it reaches a trader:\n\n  OBSERVATION DATE  → the economic event occurs (fiscal year ends Dec 31)\n  REPORTING PERIOD  → the data describes this interval (FY 2021)\n  PUBLICATION DATE  → the document is filed and publicly accessible (Feb 28, 2022)\n  INGESTION DATE    → your data vendor captures it (often +2–7 days)\n  REVISION DATE     → a historical value is updated (GDP revisions, earnings restatements)\n  DECISION DATE     → the strategy makes its simulated trade (Jan 3, 2022)\n\nFor a backtest to be valid, every feature used at the decision date must have a publication date on or before that date. In the example above, the researcher used Publication Date February 28 to tag a trade on January 3 — a 56-day time machine.\n\n── THE THREE FAMILIES OF ERROR ──\n\nLOOK-AHEAD BIAS — using information that did not yet exist at decision time:\n  → Financial statements tagged with period-end instead of filing date\n  → Earnings tagged with quarter-end instead of announcement date\n  → Features normalized using the full dataset including future observations\n  → Index membership defined from today rather than historically\n  → Improperly aligned rolling windows or preprocessing\n\nSURVIVORSHIP BIAS — defining the universe from the future:\n  → Today's S&P 500 constituents applied to a 2005 backtest\n  → Datasets that exclude delisted and bankrupt companies\n  → ETF backtests assuming all current constituents were always tradeable\n\nDATA SNOOPING — reporting a selected result as if it were pre-specified:\n  → Testing 200 lookback windows and reporting the best\n  → Optimizing parameters after seeing backtest results\n  → Trying many factor definitions, universes, or date ranges\n\nThese three families frequently interact. A researcher might simultaneously use today's index constituents (survivorship), tag data with fiscal year-end (look-ahead), and report the best of 200 parameter combinations (snooping). Each bias individually inflates results. Together they can produce backtests that look extraordinary and contain almost no information about forward performance.",
+
+       mechanics:"A valid research pipeline executes this sequence for each decision date:\n\nFOR each trading_date in simulation:\n\n  STEP 1 — Assemble available information\n    available_data = all rows where available_at <= trading_date\n    → Reject any row where available_at > trading_date\n\n  STEP 2 — Compute features from available_data only\n    features = f(available_data)\n    → Normalization parameters computed from available_data only\n    → No future observations enter computation at any stage\n\n  STEP 3 — Generate signal\n    signal = model.predict(features)\n    → Training window must end strictly before trading_date\n    → Hyperparameters must not be tuned using future information\n\n  STEP 4 — Determine and log position\n    position = allocator(signal, constraints)\n    log(trading_date, position, features_hash)\n\n  STEP 5 — Realize forward return\n    return = price[trading_date + holding_period] / price[trading_date] - 1\n\nContamination enters at Steps 1, 2, or 3.\nStep 4 and 5 are mechanical — contamination cannot enter there.\nThe most common entry point: Step 1 (wrong available_at timestamps).\nThe most subtle entry point: Step 2 (full-sample preprocessing).",
+
+       intuition:"Imagine a sealed historical archive. Every document is timestamped and locked in a vault until its public release date. You are allowed to consult only documents that were unlocked on or before your decision date. To conduct a valid backtest, you must operate entirely within those constraints — never reaching for a document still in the sealed wing.\n\nLook-ahead bias is an accidental breach of that archive. The researcher reaches for a filing that has not yet been unlocked. The data is real and describes genuine financial facts — it just was not available to any market participant at the simulated trade time. The backtest becomes a simulation of a trader who could read sealed files.\n\nWhat makes this particularly dangerous: the breach is almost always unintentional. Researchers do not plan to contaminate their backtests. They mark data with the period it describes rather than the date it became public. The contamination is invisible in the data itself — you only detect it by tracing the provenance of every input back to its original source.\n\nSurvivorship bias is a different archive problem. The researcher has not read sealed files — they have quietly discarded a large section of the archive. All files belonging to companies that failed before the study end date are simply missing. What remains is a curated collection of survivors. Testing a strategy on survivors tells you how the strategy would have performed with perfect foreknowledge of which companies would still exist.\n\nData snooping corrupts the scientific question itself. Testing 200 strategies and presenting the winner as 'the strategy' is not one experiment — it is 200 experiments followed by one extremely optimistic selection. The winner looks good because of the search process, not because of genuine signal.",
+
+       example:"CONTAMINATED PIPELINE — Fiscal Year-End Tagging\n\n  Company:             Acme Corp\n  Fiscal year:         Jan 1, 2021 – Dec 31, 2021\n  Revenue 2021:        $1.2B  (up 20% from $1.0B in 2020)\n  Actual 10-K filing:  February 28, 2022\n  Researcher tags:     available_at = 2021-12-31\n  Strategy trades:     January 3, 2022\n\n  What the contaminated backtest does:\n    Jan 3, 2022 → sees revenue growth = 20% → BUYS Acme Corp\n    Reality:       10-K not yet filed → data was sealed until Feb 28\n\nVALID PIPELINE — Using Actual Filing Date\n\n  Same data, correct: available_at = 2022-02-28\n\n  What the valid backtest does:\n    Jan 3, 2022 → revenue row locked (available_at > decision_date) → NOT USED\n    Mar 1, 2022 → first rebalance after filing → signal now eligible\n\nBEFORE / AFTER COMPARISON (hypothetical illustration)\n\n  Metric          Contaminated    Valid (corrected)\n  ──────────────  ────────────    ─────────────────\n  CAGR            22.8%           8.3%\n  Sharpe Ratio     2.4             0.7\n  Max Drawdown   -14%           -29%\n  Win Rate        68%             52%\n\nThe contaminated backtest did not find alpha.\nIt found the filing delay — information real traders did not possess.",
+
+       subtleVersion:"The obvious version — using tomorrow's price to make today's decision — is rarely the real problem. Sophisticated researchers know to lag their signals. The subtle versions are far more common.\n\nFULL-SAMPLE NORMALIZATION\n\nYou standardize features using z-scores:\n  z_t = (x_t - mean(x_ALL)) / std(x_ALL)\n\nIf x_ALL includes observations from future years, then mean and std embed future information. The normalization is leaky even if every individual x_t is correctly timestamped. The feature 'knows' how extreme it is relative to history that has not happened yet.\n\nCorrect approach: use expanding or rolling window statistics:\n  z_t = (x_t - mean(x[0:t])) / std(x[0:t])\n\nPREPROCESSING LEAKAGE\n\nYou fit a StandardScaler, Imputer, or encoder on the full dataset, then split into train and test. Even if the model sees only training labels during fitting, the preprocessing parameters were computed using test-period statistics. Future distribution information has leaked backward into training features.\n\nCorrect approach: fit ALL transformations exclusively on training data, then apply (not re-fit) those same parameters to test data.\n\nMISSING VALUE STRATEGIES\n\nForward-filling missing values creates another common leakage path. If a company stopped reporting in 2019, forward-filling its last known value through 2022 implies the strategy 'knew' the company remained a going concern. Point-in-time universes handle this by tracking which companies had active filings at each decision date.",
+
+       warning:"THE TRAP: PERIOD END AS AVAILABILITY DATE\n\nTHE TRAP\nMarking data as available on the date the observation describes (fiscal year-end, quarter-end) rather than the date it was published and accessible to the public.\n\nWHY IT LOOKS LEGITIMATE\nFiscal year-end IS embedded in the data. Most database schemas use 'period' or 'date' as the primary timestamp. That timestamp describes what the data covers, not when it was released. The error feels like a minor labeling choice.\n\nWHY IT MATTERS\nFundamental data is typically published 30–90 days after the period it describes. A strategy using December 31 instead of February 28 captures a 60-day lead on an entire dataset. Multiplied across many stocks and many quarters, this generates systematic positioning before public announcements — producing simulated returns with no market counterpart.\n\nHOW TO DETECT IT\n  1. Pull three random rows from your feature dataset\n  2. Look up the actual SEC filing date for each observation\n  3. Compare your available_at to the real filing date\n  4. If available_at = fiscal period end → this problem is present\n\nHOW TO FIX IT\n  → For SEC filings: use the 'filed' field from EDGAR submissions JSON\n  → For earnings: use announcement timestamp, not quarter-end\n  → For macro data: use ALFRED (Archival FRED) for vintage-dated releases\n  → Add validate_availability() to assert the contract automatically",
+
+       misconception:"COMMON MISCONCEPTION\n\n'I used .shift(1) on all my features — my backtest cannot have look-ahead bias.'\n\n.shift(1) lags every feature by one row. It addresses one specific alignment problem: using today's closing price when the trade executes at tomorrow's open.\n\nIt does NOT fix:\n  → Point-in-time errors (fiscal year-end used instead of filing date)\n  → Full-sample normalization leakage\n  → Survivorship bias in the universe\n  → Revised macroeconomic data used instead of vintage values\n  → Preprocessing parameters fitted on the full dataset before train/test split\n  → Index membership defined from the future\n\nA backtest with .shift(1) applied to a contaminated feature set is still contaminated. The shift merely moves contaminated values one row backward — the wrong information is still present, just slightly displaced in time. The source of the leakage is the timestamp in the data, not the alignment of the signal.",
+
+       yourTurn:"YOUR TURN\n\nYour dataset contains quarterly earnings data. The only timestamp available is:\n  period_end = 2023-03-31\n\nYou cannot find a filing date. What do you do?\n\nA. Assume March 31 is correct and proceed\nB. Add 1 day (April 1) as a conservative buffer and proceed\nC. Apply a fixed lag of 45 days after quarter-end for all companies\nD. Investigate actual filing dates and determine point-in-time availability\n\nAnswer: D is the correct research approach. Then, if investigation confirms consistent timing, C is defensible.\n\nOption A is look-ahead bias. Option B barely helps. Option C acknowledges uncertainty with a meaningful buffer. But D is what careful researchers do first: check 5–10 actual SEC filings for companies in your universe. If they consistently file within 40 days of quarter-end, a 45-day lag assumption may be defensible. Document every lag assumption in your data contract.",
+
+       synthesis:"KEY TAKEAWAY\n\nA backtest is credible only if its simulated trader knew no more than any real market participant could have known at each historical moment. When temporal contamination is present — even from one mislabeled timestamp — performance metrics can be dramatically overstated and meaningless as forward-performance evidence.\n\nThe most important research habit: treat every data field as a claim about when information became available, and verify that claim against the original source.\n\nBEFORE YOU CONTINUE, you should be able to:\n  ✓ Explain why fiscal year-end is not the same as data availability date\n  ✓ Identify two subtle forms of leakage beyond simple date misuse\n  ✓ Describe what .shift(1) does and does not fix\n  ✓ Explain why reporting the best of 200 backtest variants is misleading\n  ✓ Describe the correct temporal sequence: observation → publication → decision\n\nNEXT: Lesson 2 builds the formal data contract infrastructure that makes temporal leakage mechanically impossible to commit accidentally.",
+
+       equation:"VALIDITY RULE (must hold for every row, every feature)\n  available_at(x_t) <= decision_date(t)\n\n  available_at   = date the data was publicly accessible\n  decision_date  = date the simulated trade was made\n\nIf this inequality is violated even once, every downstream result is suspect.\nVerify this contract with automated assertions — never assume it holds."},
+
+      {id:'w01-l02', title:'Point-in-Time Data Contracts', duration:'12 min', competency:'DATA',
+       content:"A data contract is a formal specification of what guarantees hold about a dataset. In software engineering, contracts specify API behavior. In quantitative research, the most important contract is temporal: it guarantees that every value in the dataset was available to a real market participant at or before the timestamp assigned to it.\n\nWithout a data contract, every feature in your research system is a trust claim. You believe it is point-in-time correct. You have not verified it. That belief is not evidence.\n\n── THE FIVE TIMESTAMP PROBLEM ──\n\nFinancial data carries multiple timestamps, and confusing them is the primary source of look-ahead bias. For any data observation, you must distinguish:\n\n  OBSERVATION DATE    When the underlying event occurred\n                      (company fiscal year ends December 31, 2021)\n\n  REPORTING PERIOD    The interval the data summarizes\n                      (full-year 2021 financials)\n\n  PUBLICATION DATE    When the document became publicly accessible\n                      (10-K filed February 28, 2022)\n\n  INGESTION DATE      When your data vendor captured it\n                      (often 1–7 days after publication)\n\n  REVISION DATE       When a historical value was subsequently updated\n                      (GDP initial estimate vs. third revision)\n\nFor your research pipeline, only PUBLICATION DATE and INGESTION DATE are relevant for available_at. The other timestamps describe what the data is about — not when you may use it.\n\n── THE FOUR REQUIRED FIELDS ──\n\nEvery table in a rigorous research system carries these fields:\n\n  source          Where did this data originate?\n                  (SEC EDGAR, FRED, Bloomberg, FactSet, etc.)\n\n  retrieved_at    When did you download this data?\n                  (your retrieval timestamp — proves data existed at this time)\n\n  available_at    When was this data publicly accessible?\n                  (the critical field — drives all temporal filtering)\n\n  primary_key     A unique identifier for this observation\n                  (ticker + period_end + accession_number)\n\nWithout these fields, you cannot construct a point-in-time view of your data. Without a point-in-time view, you cannot run a valid backtest.\n\n── THE VALIDATE_AVAILABILITY CONTRACT ──\n\nA data contract is only as good as its enforcement. Write a validator that asserts the contract programmatically:\n\n  def validate_availability(features_df, decision_dates):\n    for date in decision_dates:\n      leakers = features_df[\n        (features_df.index == date) &\n        (features_df.available_at > date)\n      ]\n      if len(leakers) > 0:\n        raise ValueError(f'Leakage on {date}: {leakers}')\n\nThis validator should run before every backtest run. Treat a validation failure as a hard error, not a warning. If it passes silently, you may have a bug in the validator itself — test it deliberately by introducing a known leaker and confirming it is caught.\n\n── MACRO DATA AND VINTAGE RELEASES ──\n\nEconomic data (GDP, unemployment, inflation) presents a particularly complex timestamp problem: many economic series are revised repeatedly after initial release.\n\nExample: Q3 2022 US GDP\n  Initial release (advance estimate):    October 27, 2022   +2.6%\n  Second estimate:                       November 30, 2022  +2.9%\n  Third estimate (final):                December 22, 2022  +3.2%\n\nIf your strategy makes a decision on November 1, 2022, it should see only +2.6%. Using the final +3.2% is look-ahead bias — that number was not public until late December.\n\nThe solution: ALFRED (Archival FRED) provides vintage-dated releases of all FRED economic series. Never use plain FRED for backtesting — always use ALFRED to retrieve the value that was available on your specific decision date.",
+
+       mechanics:"ENFORCING THE CONTRACT IN A RESEARCH PIPELINE:\n\n1. ACQUISITION\n   Download raw data → record retrieved_at timestamp immediately\n   Never modify raw files — raw data is immutable\n\n2. ENRICHMENT\n   For each row: determine available_at from the original source\n   → SEC filings: use 'filed' date from EDGAR submissions API\n   → Earnings: use announcement_date from earnings calendar\n   → Macro: use ALFRED vintage_date for the series\n\n3. STORAGE\n   Persist all four contract fields: source, retrieved_at, available_at, primary_key\n   Store raw and processed data separately\n   Never overwrite historical rows — append new versions\n\n4. CONSUMPTION\n   Apply temporal filter at query time:\n     filtered = data[data.available_at <= query_date]\n   This is the point-in-time view\n\n5. VALIDATION\n   Before every backtest run:\n     validate_availability(features, decision_dates)\n   Test the validator itself: deliberately introduce a leaker and assert it fails\n\n6. DOCUMENTATION\n   For each data source, document:\n     → Typical lag between observation date and publication date\n     → Whether historical revisions occur\n     → How you handle the revision problem",
+
+       intuition:"Think of available_at as the postmark on a sealed letter. The letter contains financial information. You are not allowed to read a letter until the postmark date has passed. Reading it early — even if you own the letter — violates the contract.\n\nA data contract is the formal specification of those postmarks. It says: this row of financial data was mailed on date X. You may not use it before date X in any simulation.\n\nWithout a data contract, you are handling a pile of undated letters. Some of them might be from the future. You do not know which ones. Every time you grab a letter to build a feature, you might be grabbing information your historical traders could not have seen.\n\nThe deeper problem: a strategy that performs well using future information is not merely overstated — it is structurally impossible to replicate in live trading. The edge that looks real in the backtest does not exist in the forward environment. The data contract is the mechanism that prevents you from mistaking a data artifact for a genuine market insight.\n\nVintage data adds another dimension to this. For economic series that are revised, the 'letter' is actually rewritten over time. The advance GDP estimate is one letter. The revised estimate is a correction letter, mailed months later. In a valid backtest, your strategy reads only the letters available at its decision date — not the corrected versions that came later.",
+
+       example:"SEC EDGAR API RESPONSE — Three Timestamps for One Filing\n\n  Query: Apple Inc., fiscal Q4 2022 (period ending September 2022)\n\n  API response fields:\n    'period_of_report': '2022-09-30'   ← OBSERVATION DATE  (fiscal quarter end)\n    'filed':            '2022-10-28'   ← PUBLICATION DATE  (SEC receipt timestamp)\n    'accepted':         '2022-10-28T18:01:23'   ← exact acceptance time\n    'form':             '10-Q'\n    'accession_number': '0000320193-22-000108'\n\n  WRONG: available_at = '2022-09-30'  (period end — look-ahead bias, 28-day error)\n  RIGHT: available_at = '2022-10-28'  (filing date — point-in-time correct)\n\nALFRED VINTAGE DATA — GDP Revisions\n\n  Q3 2022 US GDP quarterly growth rate:\n\n  vintage_date    value    notes\n  ───────────     ─────    ─────\n  2022-10-27      +2.6%    advance estimate (first public release)\n  2022-11-30      +2.9%    second estimate\n  2022-12-22      +3.2%    third estimate (final)\n\n  Strategy decision date: November 1, 2022\n  Correct value to use:   +2.6% (advance estimate, available Oct 27)\n  Using +3.2% would be look-ahead bias\n\n  ALFRED query: get_vintage_series('GDP', observation_date='2022-11-01')\n  Returns: +2.6%  ← the value available on that specific date",
+
+       subtleVersion:"INTRADAY TIMING AND ANNOUNCEMENT WINDOWS\n\nEarnings announcements have precise timing that matters for decision validity:\n  → Pre-market (before 9:30 AM ET): tradeable at the open\n  → After-hours (after 4:00 PM ET): tradeable the next morning\n\nIf your strategy assumes daily frequency and a company reports at 6:00 PM on day T, the information should not be available until day T+1. Using it for a day T position is a half-day time machine. For daily backtests, the safe convention: treat any after-hours announcement as available on T+1.\n\nDATA VENDOR LATENCY\n\nEven when you know the correct publication date, your data vendor processes it later. A 10-K filed February 28 might not appear in your vendor's database until March 2 due to processing, normalization, and quality checks. For conservative research, use available_at = max(filing_date, ingestion_date). For a production system with real-time data feeds, verify actual latency empirically.\n\nCURRENCY AND CROSS-COUNTRY TIMING\n\nInternational research adds complexity: different fiscal year structures, different regulatory filing deadlines, and different market hours. A Japanese company's annual report may be filed in June for a March fiscal year. Applying the US 90-day assumption would be wrong. Always verify filing deadlines country-by-country.",
+
+       warning:"THE TRAP: TRUSTING THE DATA VENDOR'S TIMESTAMP\n\nTHE TRAP\nAssuming that the date field in your data provider's API or export represents when the information was publicly available.\n\nWHY IT HAPPENS\nData vendors often use 'date' or 'period' as their primary key — meaning the period the data describes, not the publication date. This is a reasonable choice for data organization, but it is wrong for point-in-time research.\n\nWHY IT MATTERS\nA data vendor providing quarterly earnings with date = quarter_end gives you data that appears to arrive 30-60 days before it was actually public. This is not a vendor error — it is a usage error. The vendor is not promising point-in-time correctness; the researcher is incorrectly assuming it.\n\nHOW TO VERIFY\nFor any new data source:\n  1. Find 5-10 observations with known public release dates\n  2. Compare the vendor's 'date' field to the actual release date\n  3. If they differ, you need a separate available_at mapping\n  4. Document whether the vendor provides point-in-time data at all\n\nHOW TO FIX\n  → For fundamentals: build your own available_at from SEC EDGAR filings\n  → For earnings: subscribe to or build an earnings calendar with announcement timestamps\n  → For macro: use ALFRED, not plain FRED\n  → For price data: use adjusted prices with careful ex-dividend handling",
+
+       misconception:"COMMON MISCONCEPTION\n\n'retrieved_at and available_at are the same thing.'\n\nThey are almost always different.\n\nretrieved_at = when YOU downloaded the data (today, or whenever you ran the collection script)\navailable_at = when the information was PUBLIC (the original filing date or announcement date)\n\nIf you collect SEC filings in 2025 for data going back to 2015, your retrieved_at is 2025. Your available_at should be the actual 2015 filing date. Using retrieved_at as available_at makes every historical observation look like it was available only when you collected it — which would make backtesting impossible or meaningless.\n\nretrieved_at matters for auditing your pipeline (proving you had the data). available_at drives your backtest temporal filter. They serve different purposes and must be stored separately.",
+
+       yourTurn:"YOUR TURN\n\nYour EDGAR pipeline returns this for a company's 10-K:\n  period_of_report: 2022-12-31\n  filed:            2023-03-15\n  accepted:         2023-03-15T16:42:11\n  form:             10-K\n\nYour strategy rebalances on the first trading day of each month.\n\nWhich of these is the correct available_at for this filing?\nA. 2022-12-31 (fiscal year end)\nB. 2023-01-01 (next day after fiscal year end)\nC. 2023-03-15 (SEC filing date)\nD. 2023-03-16 (day after filing, to allow indexing delay)\n\nAnswer: C or D are both defensible. C is technically correct (filing is publicly accessible via EDGAR immediately upon acceptance). D is more conservative and accounts for the time it takes for data vendors to index and process the filing. A and B are wrong — they use the fiscal period end, not the publication date. In this example, using A or B gives your strategy a 74-day time machine.",
+
+       synthesis:"KEY TAKEAWAY\n\nA data contract is not bureaucracy — it is the mechanism that separates research from data artifact hunting. Every timestamp claim in your dataset is an assertion about when information was available to real market participants. That assertion must be verified, not assumed.\n\nThe four fields (source, retrieved_at, available_at, primary_key) and the validate_availability() function are not optional features. They are the foundation that makes every downstream result interpretable.\n\nBEFORE YOU CONTINUE, you should be able to:\n  ✓ Distinguish the five timestamp types: observation, reporting period, publication, ingestion, revision\n  ✓ Explain why retrieved_at and available_at are different fields\n  ✓ Describe what validate_availability() does and why it must be tested with deliberate failures\n  ✓ Explain the ALFRED/FRED distinction for macroeconomic backtesting\n  ✓ Verify any data source's available_at guarantee against the original source\n\nNEXT: Lesson 3 extends these principles to the hardest part of universe construction — identifying which companies existed at each historical decision date.",
+
+       equation:"POINT-IN-TIME FILTER\n  features_at_t = data[data.available_at <= t]\n\nDATA CONTRACT FIELDS (required on every table)\n  source        — origin of the data\n  retrieved_at  — when YOU collected it (audit trail)\n  available_at  — when it was public (drives backtest filter)\n  primary_key   — unique row identifier\n\nCONSERVATIVE available_at ASSIGNMENT\n  available_at = max(filing_date, ingestion_date)\n  (or filing_date alone if no vendor delay is expected)"},
+
+      {id:'w01-l03', title:'Survivorship Bias and Universe Construction', duration:'8 min', competency:'DATA',
+       content:"If you backtest a strategy on today's S&P 500 constituents from 2005 to 2024, you have not tested how that strategy would have performed. You have tested how it would have performed on a portfolio of companies that you already knew, in 2025, had survived to the end of the sample period.\n\nThat is not a historical test. It is a test of your knowledge of the future, applied to the past.\n\nSurvivorship bias is the inflation of backtest performance caused by testing only on entities that survived to the present day, while excluding all entities that failed, were acquired at distressed prices, were delisted, or were otherwise removed during the test period.\n\nThe bias is structural: you cannot avoid it by being careful, by lagging your signals, or by using quality data. You can only avoid it by constructing a point-in-time universe — one that includes, at each historical decision date, exactly the companies that would have been eligible for inclusion at that moment.\n\n── HOW SURVIVORSHIP BIAS INFLATES PERFORMANCE ──\n\nThe mechanism is straightforward. Companies fail for reasons that often involve poor financial performance, deteriorating fundamentals, or sector-wide distress. If your strategy selects based on any fundamental signal (value, growth, profitability, quality), it will naturally prefer companies with strong fundamentals. Many companies with weak fundamentals eventually fail. By excluding failures from the universe, you are removing the companies your strategy was most likely to short or underweight — improving your apparent returns mechanically, not through skill.\n\nSurvivorship bias also affects benchmark comparisons. If both the strategy and its benchmark are constructed from survivors, the comparison may still be internally consistent — but the absolute return numbers are inflated relative to what a real investor could have achieved.\n\n── WHERE SURVIVORSHIP BIAS HIDES ──\n\nCurrent index constituents: The S&P 500 in 2025 contains 500 companies that exist and are large enough today. The index in 2005 contained many different companies. Applying 2025 membership to a 2005 start date excludes every company that was in the 2005 index but was later removed — typically due to poor performance, mergers, or bankruptcy.\n\nFinancial databases: Many academic and commercial financial databases are not survivorship-bias-free. Companies that delisted before the database was constructed are simply absent. The CRSP database is well known for handling this correctly; many others do not.\n\nMutual fund performance: Studies of mutual fund performance using survivorship-biased databases consistently show higher average returns than are actually achievable — because the worst-performing funds that were closed or merged are not represented.\n\nETF and factor backtests: Factor ETFs and smart-beta strategies sometimes publish 'simulated historical performance' calculated using current constituents or methodology applied historically. This should be treated with extreme skepticism.",
+
+       mechanics:"BUILDING A POINT-IN-TIME UNIVERSE\n\nA point-in-time universe assigns to each decision date exactly the companies that were eligible at that moment.\n\nMETHOD: SEC EDGAR Active Filers\n\n  FOR each company in candidate_set:\n    FOR each decision_date:\n      filings = EDGAR.get_filings(cik, form=['10-K','10-Q'])\n      recent_filing = max(f for f in filings if f.filed <= decision_date)\n\n      # Include if company filed within the past 18 months\n      if (decision_date - recent_filing.filed).days <= 548:  # 18 months\n        universe_at_date.add(company)\n      # Else: company may have stopped reporting → exclude\n\nWHAT THIS CAPTURES:\n  → Companies that went bankrupt (stop filing → excluded going forward)\n  → Companies acquired (filings stop → excluded)\n  → Companies added to index later (not included before they were eligible)\n  → Companies removed from index (still included if still filing)\n\nWHAT ADDITIONAL DATA IS NEEDED:\n  → Actual index constituency records (CRSP for S&P 500 historical constituents)\n  → Delisting reason codes (merger, bankruptcy, voluntary, etc.)\n  → Price adjustment for delistings (final delisting returns matter for strategy evaluation)",
+
+       intuition:"Imagine testing a diet by interviewing 1,000 people who followed it and are still alive. The population you surveyed was defined by the outcome you are trying to measure — survival. Of course they will report better health than a randomly selected group. You have selected for survival, then asked about health.\n\nSurvivorship bias in backtesting is exactly this. The universe is defined by companies that survived to today. You then ask: would these survivors have been good investments? The answer is biased toward yes before any strategy logic is applied — because you have already filtered out the worst outcomes.\n\nA point-in-time universe is the equivalent of interviewing everyone who started the diet in 2005, not just those who are still alive in 2025. Some of them stopped. Some of them got sicker. Some of them died. Including those outcomes gives you an honest picture of what the diet actually does.\n\nThe practical implication: almost every backtest you encounter in casual research contexts contains some survivorship bias. When someone tells you their strategy earns 15% CAGR since 2005, the first question to ask is: 'What was your universe, and did it include companies that subsequently failed?' If they do not know, treat the number with significant skepticism.",
+
+       example:"EXAMPLE: S&P 500 BACKTEST 2005–2024\n\n  Universe method: today's S&P 500 constituents (2025 membership)\n  Backtest period: January 2005 – December 2024\n\nWHAT YOU TESTED ON:\n  → 500 companies that are large and healthy enough to be in S&P 500 in 2025\n  → All 500 existed and survived through the 2008-09 financial crisis\n  → All 500 survived COVID-19 market dislocations\n  → All 500 avoided bankruptcy, forced delisting, or distressed merger\n\nWHAT YOU EXCLUDED (partial list):\n  → Bear Stearns (2005 S&P 500 constituent, failed March 2008)\n  → Lehman Brothers (major S&P 500 constituent, failed September 2008)\n  → Washington Mutual (largest US bank failure in history, 2008)\n  → Kodak (S&P 500 constituent for decades, Chapter 11 in 2012)\n  → Sears Holdings (S&P 500 constituent, filed for bankruptcy 2018)\n  → And hundreds of other companies removed for various performance reasons\n\nCONSEQUENCE:\n  If your fundamental signal had identified any of these companies as undervalued,\n  your backtest never records the resulting losses.\n  Performance appears better than any real investor could have achieved.",
+
+       subtleVersion:"MUTUAL FUND DATABASE BIAS\n\nAcademic studies of mutual fund performance often use databases that are not survivorship-bias-free. Funds that underperformed and were closed or merged into other funds are absent. Studies using such databases systematically overestimate the average skill of active managers.\n\nThe same problem applies to any alternative investment category where funds close when performance is poor: hedge funds, commodity trading advisors, private equity. Databases of 'live' funds always show better historical performance than the actual investor experience.\n\nETF SIMULATED PERFORMANCE BIAS\n\nWhen a factor ETF or smart-beta strategy publishes 'historical simulated performance,' they sometimes reconstruct the portfolio using the current factor definition and current-period eligible universe. This is particularly common for recently launched ETFs that want to show 10+ years of history. The resulting track record is not a genuine historical record — it is a backtest constructed with knowledge of the current state of every company in the universe.\n\nLOOK-AHEAD BIAS IN UNIVERSE ELIGIBILITY\n\nA subtler form: you define universe eligibility based on characteristics that require future knowledge. For example, requiring that a company be 'profitable for at least 3 of the past 5 years.' If you apply this filter as of today and use that set historically, companies that became profitable only later are included in their early years — when the filter should have excluded them.",
+
+       warning:"THE TRAP: ASSUMING THE DATA PROVIDER'S UNIVERSE IS SURVIVORSHIP-FREE\n\nTHE TRAP\nUsing a data provider's 'historical index data' or 'universe' without verifying whether it handles delistings, removals, and failures correctly.\n\nWHY IT HAPPENS\nData providers often advertise 'point-in-time data' for price and fundamental data. This may be true for the data values — but not for universe construction. Having point-in-time pricing for a set of companies that was selected using survivorship criteria does not make the backtest survivorship-bias-free.\n\nHOW TO DETECT IT\nAsk your data provider:\n  'Does your historical universe include companies that were later delisted?'\n  'Can you tell me the exact constituents of the S&P 500 on January 3, 2005?'\n  'Do you have delisting return data for bankrupt companies?'\n\nIf they cannot answer these questions specifically, assume survivorship bias is present.\n\nHOW TO FIX IT\n  → Use CRSP (Center for Research in Security Prices) for survivorship-bias-free US equity data\n  → Build your universe from SEC EDGAR active filers (free, point-in-time by construction)\n  → Document your universe construction methodology in your data contract\n  → Test your universe: verify it includes companies you know failed during the test period",
+
+       yourTurn:"YOUR TURN\n\nYou want to backtest a value strategy from 2010 to 2024 on US equities.\nYour data vendor offers two universe options:\n\nOption A: 'Russell 1000 Historical Constituents' — $800/year\n  Documentation says: 'Historical Russell 1000 membership data'\n  No mention of delisting data or bankrupt company returns\n\nOption B: SEC EDGAR active filers — Free\n  Requires building your own universe from filing metadata\n  Includes all filing companies, including those that later delisted\n\nWhich do you choose, and what questions do you ask?\n\nRight approach: Ask Option A's vendor specifically whether their data includes companies that were in the Russell 1000 in 2010 but were later delisted or bankrupt. Ask whether they provide final delisting returns. If they cannot answer clearly, Option B is actually more trustworthy for this purpose — despite requiring more work — because its universe construction mechanism is transparent and survivorship-bias-free by design.",
+
+       synthesis:"KEY TAKEAWAY\n\nSurvivorship bias is not a data quality problem — it is a universe construction problem. The data about surviving companies may be perfectly accurate. The bias comes from which companies are in the dataset at all.\n\nA rigorous research process treats universe construction as carefully as it treats signal construction. Both require explicit, verifiable, point-in-time decisions. A strategy that 'selects' stocks from a survivor-only pool is not testing stock selection — it is testing hindsight.\n\nBEFORE YOU CONTINUE, you should be able to:\n  ✓ Explain why using today's index members to backtest from 2005 introduces bias\n  ✓ Describe the mechanism by which survivorship bias inflates every performance metric\n  ✓ Identify three settings where survivorship bias commonly appears\n  ✓ Explain how to construct a point-in-time universe from SEC EDGAR active filers\n  ✓ Describe what questions to ask a data vendor to detect survivorship bias\n\nNEXT LESSON: In Week 2, we build the baseline portfolio against which all future strategies must be measured. The baseline is also the first opportunity to test your data contract end-to-end with real data.",
+
+       equation:"POINT-IN-TIME UNIVERSE\n  Universe(t) = { companies where last_filing_date >= t - 548_days }\n                (548 days = 18 months — companies with active SEC filings)\n\nSURVIVOR-BIASED UNIVERSE (invalid)\n  Universe = current_index_members  ← known today, not at time t\n\nBIAS MAGNITUDE (empirical research estimates)\n  Annual return inflation from survivorship bias varies by study,\n  asset class, and time period. Rather than cite a specific number,\n  verify it empirically: compare your strategy returns between\n  a survivorship-biased and a point-in-time universe. The difference\n  is your bias estimate for your specific setup."}
+    ],
+    quiz:{id:'w01-quiz', questions:[
+      {id:'w01-q01', type:'scenario', scenario:"A researcher downloads 10-K data and marks each row's available_at as the fiscal year-end date (e.g. December 31) rather than the actual SEC filing date (e.g. March 2 of the following year).", question:"What is the primary research error?", options:['Survivorship bias','Look-ahead bias','Data snooping','Multicollinearity'], correct:1, explanation:"Look-ahead bias. The fiscal year-end is when the period ended — not when the data became public. The SEC filing date is when investors could legally access the information. Using December 31 as available_at gives the strategy a 2-3 month time machine."},
+      {id:'w01-q02', type:'scenario', scenario:"A strategy backtested on 'S&P 500 stocks from 2005–2024' shows 15% CAGR. The researcher used today's index membership to define the universe.", question:"Which bias most likely inflates this result?", options:['Look-ahead bias','Parameter overfitting','Survivorship bias','Transaction cost omission'], correct:2, explanation:"Survivorship bias. Today's S&P 500 members all survived to 2024. Companies that went bankrupt, were acquired at distressed prices, or removed for poor performance are excluded. The strategy was tested on a curated set of survivors."},
+      {id:'w01-q03', type:'scenario', scenario:"A strategy has Gross CAGR 18%, Sharpe 1.8. The researcher later discovers the signal was computed using price data from day T+1, not day T.", question:"How severe is this error?", options:['Minor — 1 day is negligible','Severe look-ahead bias — the signal used tomorrow\'s prices','Survivorship bias — some stocks were delisted','Model overfitting'], correct:1, explanation:"Using day T+1 data to generate a day T signal is direct look-ahead bias. Even a 1-day shift is extremely impactful for short-horizon signals — the strategy effectively 'knows' tomorrow's prices. An 18% Sharpe-1.8 backtest built on overnight gaps is not a strategy; it's a time machine."},
+      {id:'w01-q04', type:'multiple_choice', question:"Which field is NOT required in a point-in-time data contract?", options:['available_at','source','retrieved_at','analyst_rating'], correct:3, explanation:"analyst_rating is derived/subjective data, not a data contract field. The four required fields are: source, retrieved_at, available_at, and a primary key that uniquely identifies each observation."},
+      {id:'w01-q05', type:'scenario', scenario:"You backtest using FRED GDP data. Q3 2022 GDP was: advance estimate Oct 27, revised Nov 30, final Dec 22. Your backtest decision date is Oct 28, 2022.", question:"Which value should appear for Q3 2022 GDP on Oct 28, 2022?", options:['The final revised value (most accurate)','The advance estimate (available Oct 27)','An average of all three','Q2 2022 GDP (prior confirmed quarter)'], correct:1, explanation:"The advance estimate is correct — it was the only value available on October 28. Using the final revised figure would be look-ahead bias. ALFRED (Archival FRED) provides vintage-dated releases specifically to enable point-in-time macro testing."}
+    ]},
+    lab:{id:'w01-lab', objective:"Build a point-in-time data contract for your research universe. Every dataset must pass automated leakage assertions before Week 2 begins.", dataset:"SEC EDGAR (free), any EOD price source (yfinance for educational use)", steps:["Create repository: notebooks/, src/, data/raw/, data/processed/, tests/, decisions/","Define universe: 20-30 companies. CSV with ticker, CIK, sector, inclusion_rationale, inclusion_date","Query SEC EDGAR submissions API for each CIK","Record fiscal_period_end, filing_date, accession_number for every 10-K and 10-Q","Compute available_at = filing_date (conservative; some add +1 business day)","Build validate_availability(features, decision_dates) that raises if any row violates the contract","Write a test: deliberately shift available_at 90 days backward. Assert validator catches and fails.","Acquire EOD prices. Save raw data unchanged. Document source, license, retrieval date.","Verify no forward-fill or look-ahead in return alignment","Run full test suite — all assertions green before commit"],
+     checks:[
+       {id:'w01-c01', text:'Repo structure: notebooks/, src/, data/, tests/, decisions/ exist'},
+       {id:'w01-c02', text:'Universe CSV: ticker, CIK, sector, inclusion_rationale, inclusion_date'},
+       {id:'w01-c03', text:'SEC EDGAR API connected; filings retrieved with respect for 10 req/s limit'},
+       {id:'w01-c04', text:'fiscal_period_end, filing_date, accession_number recorded per filing'},
+       {id:'w01-c05', text:'available_at field computed on all fundamental data rows'},
+       {id:'w01-c06', text:'validate_availability() exists and raises on any violation'},
+       {id:'w01-c07', text:'Deliberate leakage test written — validator correctly catches and fails'},
+       {id:'w01-c08', text:'Price data acquired and saved raw with source documentation'},
+       {id:'w01-c09', text:'Return computation has no forward-fill or look-ahead'},
+       {id:'w01-c10', text:'Full test suite passes — zero leakage violations'},
+     ], deliverable:"Commit 01_data_contract.ipynb. Every cell runs clean. Leakage tests green. README documents lag assumptions for every source."},
+    evidencePrompts:["What is the average lag between fiscal year-end and 10-K filing for your universe?","Did the deliberate leakage test actually fail (not silently pass)?","Are there any data sources without a documented available_at guarantee?"]
+  },
+
+  wk2:{
+    mission:{objective:"Build the naïve baseline that every future strategy must beat. Freeze its benchmark and performance metrics before attempting anything sophisticated.",output:"Investment Policy v0.1 and a live $1M paper baseline with frozen benchmark comparison.",failCondition:"Reporting a strategy result without first showing what a naïve equal-weight portfolio achieves.",whatWouldChangeMind:"A strategy that materially outperforms equal-weight on a net-of-costs basis across multiple subperiods."},
+    whyItMatters:"You cannot know if a strategy is good without knowing what good looks like. A boring equal-weight portfolio beating inflation is not nothing — it is the minimum bar every sophisticated strategy must clear first.",
+    lessons:[
+      {id:'w02-l01', title:'Returns: Arithmetic vs. Log', duration:'10 min', competency:'STATISTICS',
+       content:"Two return types dominate quantitative finance. They answer different questions — and confusing them produces errors that compound silently across every downstream calculation.\n\n**Arithmetic Return (Simple Return)**\nR = (P₁ - P₀) / P₀\n\nThis is the intuitive definition. Arithmetic returns are additive across assets in the same period. If you hold 50% AAPL (+10%) and 50% MSFT (+6%), portfolio return = 0.5×10% + 0.5×6% = 8%. This cross-sectional additivity makes arithmetic returns the right choice for portfolio construction math.\n\n**Log Return (Continuously Compounded Return)**\nr = ln(P₁/P₀) = ln(1 + R)\n\nLog returns are additive across time. If a stock returns r₁ on day 1 and r₂ on day 2, the two-day log return is exactly r₁ + r₂. This time-series additivity makes log returns the right choice for compounding math, CAGR calculations, and time-series models.\n\n**The Volatility Drag Problem**\nFor any asset with annualized volatility σ:\nGeometric mean ≈ Arithmetic mean − σ²/2\n\nThis is volatility drag — permanent and compounding. A strategy with arithmetic mean 12% and volatility 20% has geometric mean ≈ 12% − 2% = 10%. Over 10 years, this 2% gap creates a 22% wealth shortfall versus what the arithmetic return implied.",
+       mechanics:"# Return Calculation Pipeline\nFOR each asset in universe:\n  # 1. Raw price series (adjusted for splits/dividends)\n  prices = get_adjusted_close(asset, start, end)\n\n  # 2. Arithmetic returns — use for cross-sectional work, IC, factor construction\n  arith_ret = prices.pct_change()  # (P_t - P_{t-1}) / P_{t-1}\n\n  # 3. Log returns — use for compounding, CAGR, time-series models\n  log_ret = np.log(prices / prices.shift(1))\n\n  # 4. CAGR — always geometric, never arithmetic mean\n  T_years = len(prices) / 252\n  cagr = (prices.iloc[-1] / prices.iloc[0]) ** (1/T_years) - 1\n\n  # 5. Volatility drag quantification\n  vol = log_ret.std() * np.sqrt(252)\n  arith_ann = arith_ret.mean() * 252\n  drag = arith_ann - cagr  # should ≈ vol²/2\n\n# RED FLAG: if drag > 3%, strategy has very high volatility eating compound growth",
+       intuition:"The arithmetic vs. log distinction is not academic — it determines whether your CAGR numbers are honest or flattering.\n\nConsider the simplest possible case: a stock loses 50% one year, then gains 100% the next. Arithmetic average return: +25%. This sounds like a good investment. Actual compound result: $100 × 0.50 × 2.00 = $100 exactly. Every dollar of apparent arithmetic return was consumed by volatility drag.\n\nThe log return framework makes this obvious: ln(0.5) + ln(2.0) = −0.693 + 0.693 = 0.000. The zero compound growth is built into the math. No trickery needed. This is why CAGR uses geometric compounding — it is the only formula that correctly converts periodic returns into actual wealth.",
+       example:"**4-Year Portfolio: Where Arithmetic Mean Deceives**\n\nStarting capital: $100,000\nYear 1: −30%  → $100,000 × 0.70 = $70,000\nYear 2: +20%  → $70,000 × 1.20 = $84,000\nYear 3: +40%  → $84,000 × 1.40 = $117,600\nYear 4: −20%  → $117,600 × 0.80 = $94,080\n\nArithmetic mean: (−30+20+40−20)/4 = +2.5%/yr\nPredicted ending value at +2.5%: $110,381 ← does not exist\n\nActual CAGR: ($94,080/$100,000)^(0.25) − 1 = −1.5%/yr\nActual ending value: $94,080\n\nThe 4% gap (2.5% reported − (−1.5%) actual) = volatility drag\nApprox. σ²/2: variance of annual returns ≈ 8% → drag ≈ 4%  ✓",
+       subtleVersion:"**Jensen's Inequality: The Precise Statement**\nFor any concave function f, E[f(X)] ≤ f(E[X]). Compound growth is concave in returns. Expected compound wealth is always ≤ compound of expected returns. The gap is σ²/2 in continuous time.\n\nThis has a direct implication for leverage: 2× leverage squares volatility, which quadruples drag. A 2× fund with 25% underlying volatility has 50% levered vol → drag ≈ 50²/2 = 12.5%/yr. Even a +15% arithmetic mean strategy has near-zero geometric return when over-levered.\n\n**Log-Normal Prices**: Stock prices are conventionally modeled log-normal (log returns normally distributed). This means high-performing stock distributions look fat-tailed because compounding amplifies winners and caps losers at −100%. The distribution skew is a mathematical artifact, not evidence of genuine outlier events.",
+       warning:"**Trap: Reporting Arithmetic Mean as Strategy Return**\n\nTrap: Presenting annualized arithmetic mean of monthly returns as the strategy's annual return figure in performance reports.\n\nWhy it is dangerous: arithmetic mean consistently overstates compound growth. The overstatement grows with volatility. A 20% volatility strategy overstates CAGR by ~2%/yr. Over 10 years: 12% reported vs. 10% actual — a 22% wealth shortfall that was never disclosed.\n\nSymptom: a deck showing '14% annualized returns' where 14% = (mean monthly return) × 12, not the CAGR from starting to ending NAV.\n\nDetect it: compute (ending_NAV / starting_NAV)^(1/T) − 1. If this geometric CAGR is materially below the reported figure, arithmetic mean was used.\n\nFix: always report CAGR as the headline. Label arithmetic returns explicitly when showing return distributions. Both numbers are valid — but they answer different questions.",
+       misconception:"**Misconception: 'Log returns are only for continuous-time models'**\n\nMany practitioners treat log returns as an academic construction for Black-Scholes math and use arithmetic returns for everything practical. This is wrong.\n\nFirst, log returns are the natural representation for time-series additivity. Summing daily returns into weekly returns requires simple addition for log returns — but (1+R₁)(1+R₂)...(1+R₅) − 1 for arithmetic, which is messier and more error-prone.\n\nSecond, log returns are approximately normally distributed for small time steps, making statistical tests (t-tests, Sharpe ratio t-stats) more valid. Arithmetic returns for individual stocks are right-skewed by construction — pretending they are normal underestimates extreme loss probabilities.\n\nUse arithmetic for: cross-sectional portfolio math, factor IC construction. Use log for: any time-series analysis, compounding, CAGR.",
+       yourTurn:"**Scenario**: A colleague's backtest shows:\n• Strategy arithmetic mean return: +16%/yr\n• Strategy annual volatility: 35%\n• Benchmark (equal-weight) CAGR: 11%/yr\n• Strategy 'reported alpha': +5%\n\n1. Estimate the strategy's approximate CAGR using the volatility drag formula.\n2. Does the strategy actually beat the benchmark?\n3. What number should appear in the report's headline?\n\n**Answer**:\n1. CAGR ≈ 16% − (35%)²/2 = 16% − 6.1% ≈ 9.9%\n2. No. 9.9% CAGR < 11% benchmark CAGR. The strategy underperforms the simple baseline when measured correctly.\n3. ~9.9% CAGR — not the 16% arithmetic mean. The +5% 'alpha' evaporates entirely when comparing compound returns.",
+       synthesis:"**Week 2, Lesson 1 — Key Takeaways**\n\n☑ Arithmetic returns are additive across assets (use for cross-sectional and portfolio-weight math)\n☑ Log returns are additive across time (use for compounding, CAGR, time-series models)\n☑ Volatility drag = σ²/2 — always reduces geometric mean below arithmetic mean\n☑ CAGR (geometric) is the honest measure of wealth creation\n☑ Never report arithmetic mean as compound annual return — it systematically overstates\n\n**Next**: With honest return computation established, Lesson 2 builds the Sharpe ratio framework your strategy's risk-adjusted performance must justify.",
+       equation:"CAGR = (V_final / V_initial)^(1/T) − 1     |     Geometric ≈ Arithmetic − σ²/2"
+      },
+      {id:'w02-l02', title:'The Sharpe Ratio: Construction and Interpretation', duration:'8 min', competency:'STATISTICS',
+       content:"The Sharpe ratio is the most widely cited performance metric in quantitative finance — and one of the most frequently misused. Understanding what it measures, and what it deliberately ignores, is prerequisite to an honest performance framework.\n\n**The Formula**\nSharpe = (R_p − R_f) / σ_p\n\nWhere R_p = portfolio annualized return (geometric, not arithmetic), R_f = risk-free rate (use 3-month T-bill — never zero), σ_p = annualized standard deviation of excess returns.\n\nFor a monthly series: Sharpe = (mean_monthly_excess / std_monthly_excess) × √12\n\n**What Sharpe Measures**\nRisk-adjusted return: how much excess return per unit of total volatility? Sharpe 1.0 means: for every 1% of annualized vol accepted, the portfolio delivers 1% excess return. Sharpe 0.5 means half that efficiency.\n\n**What Sharpe Does Not Measure**\n• Drawdown depth or duration — Sharpe 1.0 is consistent with a 60% drawdown\n• Return distribution shape — leptokurtic (fat-tail) strategies hide crash risk\n• Autocorrelation — smoothed NAVs inflate Sharpe by compressing measured volatility\n• Tail risk — selling options produces high Sharpe until catastrophic unwind\n\n**Practical Benchmarks**\n• Sharpe < 0.5: difficult to distinguish from noise\n• Sharpe 0.5–1.0: acceptable for long-only equity\n• Sharpe 1.0–1.5: strong\n• Sharpe > 2.0: examine carefully — autocorrelation? costs included? selection bias?",
+       mechanics:"# Sharpe Computation — Correct Procedure\ndef compute_sharpe(returns, freq='monthly', rf_annual=0.045):\n  # 1. Convert rf to period frequency\n  if freq == 'daily':\n    periods = 252\n    rf_period = (1 + rf_annual)**(1/252) - 1\n  else:  # monthly\n    periods = 12\n    rf_period = (1 + rf_annual)**(1/12) - 1\n\n  # 2. Excess returns\n  excess = returns - rf_period\n\n  # 3. Annualize mean and std independently\n  mean_ann = excess.mean() * periods\n  std_ann = excess.std() * np.sqrt(periods)  # multiply by SQRT, not periods\n\n  # 4. Sharpe\n  return mean_ann / std_ann if std_ann > 0 else np.nan\n\n# WRONG approaches (both common):\n# sharpe = returns.mean() / returns.std()   <- ignores rf, mixes scaling\n# sharpe = (returns.mean()*12) / (returns.std()*12)  <- std should be ×√12 not ×12",
+       intuition:"Sharpe is a signal-to-noise ratio for investment returns. The numerator is signal (excess return above doing nothing). The denominator is noise (how much does your return fluctuate?). A high Sharpe means your signal reliably rises above its own noise floor.\n\nBut Sharpe rewards volatility indiscriminately. A strategy that makes +1% every day has near-infinite Sharpe — even if it crashes to zero on day 366. This is the fundamental limitation: standard deviation treats upside and downside volatility symmetrically. Strategies designed around selling volatility (options writing, credit, anything with limited upside and catastrophic downside) will produce inflated Sharpe ratios for years before a single event wipes out the track record. Always pair Sharpe with maximum drawdown and tail-risk measures.",
+       example:"**Computing Sharpe: Step by Step**\n\nMonthly excess returns (rf = 0.367%/month for 4.5% annual T-bill):\nJan: 2.1−0.37 = +1.73%\nFeb: 0.8−0.37 = +0.43%\nMar: −1.4−0.37 = −1.77%\nApr: 1.9−0.37 = +1.53%\nMay: 1.5−0.37 = +1.13%\n\nMean excess (monthly): 1.01%\nStd excess (monthly): 1.17%\n\nSharpe = (1.01% × 12) / (1.17% × √12) = 12.12% / 4.05% = 2.99\n\nCritical caveat: 5 monthly observations means this Sharpe estimate has huge uncertainty. Standard error of Sharpe ≈ √(1 + SR²/2) / √T = √(1 + 9/2) / √5 ≈ 1.12. The 95% confidence interval is roughly [0.76, 5.22] — completely uninformative. You need 36+ months for a Sharpe estimate worth reporting.",
+       subtleVersion:"**Lo (2002): Sharpe Inflation from Autocorrelation**\n\nIf strategy returns are autocorrelated (smoothed monthly marks, illiquid holdings, momentum-following), annualized std underestimates true risk. The correction factor: σ_true = σ_reported × √(1 + 2ρ₁(1−ρ₁ⁿ)/(1−ρ₁) / n) for first-order autocorrelation ρ₁.\n\nA private credit fund reporting +0.7% every month (ρ₁ ≈ 0.70) has roughly 2× understated volatility. If reported Sharpe is 2.4, the autocorrelation-adjusted Sharpe is ~1.2.\n\n**Deflated Sharpe (Bailey & López de Prado, 2012)**\nTesting multiple variants inflates the best observed Sharpe. Expected maximum Sharpe from N tests of a zero-edge strategy: E[max SR] ≈ (1 − γ − ln(ln N) + ln(4π ln N))^0.5 / √T. With 50 tested variants and 36 monthly observations, a Sharpe of ~1.4 is consistent with zero edge. Always report whether a Sharpe is from a single pre-specified variant or the best of many.",
+       warning:"**Trap: Using Risk-Free Rate = 0**\n\nTrap: Setting rf = 0 in Sharpe calculations, especially in a 4–5% rate environment.\n\nWhy it matters: excess return = gross return − rf. With rf = 0, a strategy earning 10% appears to have 10% excess return (Sharpe = 10/vol) instead of 5% excess (Sharpe = 5/vol). This doubles the Sharpe ratio. This error was invisible in 2015–2021 near-zero rate environment. At current rates, it dramatically inflates reported Sharpe.\n\nDetect: check whether a backtest states the risk-free rate. If it does not, assume it may be zero.\n\nFix: use the 3-month T-bill rate as rf. For long backtests spanning rate cycles, use time-varying monthly T-bill rates (available from FRED: DTB3). Never use a constant historical rf that doesn't match the backtest period.",
+       misconception:"**Misconception: 'Higher Sharpe is always better'**\n\nSharpe can be manufactured by compressing volatility without generating genuine edge. A strategy that sells at-the-money index options collects premium (excess return) with low measured volatility — until a crash event wipes out years of gains. Pre-crash Sharpe ratios for such strategies routinely exceeded 2.0.\n\nEqually important: Sharpe does not capture absolute return magnitude. A market-neutral strategy with 2% net return and 1% volatility has Sharpe 2.0 — but is economically trivial and unscalable. A strategy with Sharpe 0.8 and 15% net CAGR at $100M AUM delivers far more economic value.\n\nAlways evaluate Sharpe alongside: absolute CAGR, maximum drawdown, Calmar ratio (CAGR / max drawdown), turnover costs, and strategy capacity.",
+       yourTurn:"**Scenario**: Two strategies, 36-month backtest, rf = 4% annual:\n\nStrategy A: mean monthly return +1.0%, std 1.0%\nStrategy B: mean monthly return +1.8%, std 3.2%\nMarket benchmark: +0.9%/mo, std 3.8%\n\nCalculate annualized Sharpe for each. Which do you prefer, and what additional data do you need?\n\n**Answer**:\nrf monthly = (1.04)^(1/12)−1 = 0.327%\nA excess mean = 0.673%/mo → Sharpe = (0.673×12)/(1.0×√12) = 2.33\nB excess mean = 1.473%/mo → Sharpe = (1.473×12)/(3.2×√12) = 1.60\nMarket Sharpe = (0.573×12)/(3.8×√12) = 0.52\n\nStrategy A is better risk-adjusted. But you still need: drawdown (does A have autocorrelated returns masking hidden risk?), Lo autocorrelation check, and capacity analysis (2.33 Sharpe at $10M may be noise at $1B).",
+       synthesis:"**Week 2, Lesson 2 — Key Takeaways**\n\n☑ Sharpe = (geometric excess return) / (annualized std of excess returns) — never arithmetic mean, never rf=0\n☑ Annualize correctly: multiply mean by T, std by √T\n☑ Sharpe ignores drawdown, tail risk, autocorrelation, capacity — always pair with drawdown metrics\n☑ Autocorrelated returns inflate Sharpe — apply Lo (2002) correction for illiquid strategies\n☑ With multiple tested variants, use Deflated Sharpe to account for selection bias\n\n**Next**: The lab builds your frozen equal-weight baseline with these exact metrics, locking in the benchmark before any optimization begins.",
+       equation:"Sharpe = (R_p − R_f) / σ_p     |     Annualize: mean×T, std×√T     |     Lo adj: σ_true = σ×√(1+2ρ₁+...)"
+      }
+    ],
+    quiz:{id:'w02-quiz', questions:[
+      {id:'w02-q01', type:'scenario', scenario:"A $100 investment loses 50% in Year 1 then gains 100% in Year 2.", question:"What is the final value and the true CAGR?", options:['$150 / 22% CAGR','$100 / 0% CAGR','$200 / 41% CAGR','$75 / -13% CAGR'], correct:1, explanation:"$100 × 0.50 × 2.00 = $100. Despite a +100% gain, you only recovered to breakeven. The arithmetic average is +25% — the geometric (compound) result is 0%. Always use geometric compounding for CAGR."},
+      {id:'w02-q02', type:'multiple_choice', question:"A strategy reports 18% annualized return with 30% annual volatility. Estimate the CAGR using the volatility drag approximation.", options:['18% (no adjustment needed)','~13.5%','~15%','~22%'], correct:1, explanation:"CAGR ≈ arithmetic mean − σ²/2 = 18% − (0.30)²/2 = 18% − 4.5% = 13.5%. The 4.5% annual drag is permanent and compounds across years. Never report arithmetic mean as CAGR for high-volatility strategies."},
+      {id:'w02-q03', type:'multiple_choice', question:"You compute Sharpe with risk-free rate = 0 in a 5% T-bill environment. What is the direction and approximate magnitude of the bias?", options:['Sharpe understated by ~0.5×','Sharpe overstated — numerator inflated by 5% per year','No material bias since rf is small','Sharpe understated — risk premium must be added back'], correct:1, explanation:"With rf=0, excess return equals gross return instead of (gross − 5%). For a strategy earning 10% with 10% vol: true Sharpe = (10−5)/10 = 0.50, biased Sharpe = 10/10 = 1.00 — doubled by the omission. At current rate levels this is a material error."}
+    ]},
+    lab:{id:'w02-lab', objective:"Build the baseline portfolio and freeze metrics.", checks:[{id:'w02-c01',text:'Equal-weight portfolio constructed with log + arithmetic returns both computed'},{id:'w02-c02',text:'CAGR (geometric), Sharpe (with current T-bill rf), max drawdown computed and logged'},{id:'w02-c03',text:'Sharpe autocorrelation check: first-order autocorrelation of returns computed'},{id:'w02-c04',text:'Benchmark comparison table built and frozen with timestamp'},{id:'w02-c05',text:'Investment Policy v0.1 written: universe, benchmark, constraints, rules, and disconfirmation criteria'}], deliverable:"02_baseline_portfolio.ipynb + Investment Policy v0.1"},
+    evidencePrompts:["Does equal-weight beat inflation over your sample period?","What does annual turnover cost the baseline?","How does Sharpe change when you use actual T-bill rates vs. rf=0?"]
+  },
+
+  wk3:{
+    mission:{objective:"Reframe stock selection as a ranking problem. Build a model that orders stocks cross-sectionally and measure its quality via rank-IC — not price forecast accuracy.",output:"Model card with OOS rank-IC series, decile return spreads, and feature stability analysis.",failCondition:"Reporting only in-sample IC or optimizing the model after observing OOS results.",whatWouldChangeMind:"Consistent positive rank-IC out-of-sample across at least 3 independent subperiods."},
+    whyItMatters:"Most ML tutorials minimize prediction error. Quantitative investing needs something different: can you rank stocks in the right order? A model directionally right about relative returns is economically valuable even when its absolute predictions are noisy.",
+    lessons:[{id:'w03-l01', title:'Rank IC and Walk-Forward Evaluation', duration:'8 min', competency:'SIGNALS',
+     content:"Information Coefficient (IC) = Spearman rank correlation between predicted rank and actual rank of forward returns. It is the central diagnostic for cross-sectional signal quality.\n\n**IC Interpretation Scale**\n• IC < 0.02: no economically meaningful signal\n• IC = 0.02–0.05: weak, possibly exploitable in large universes (500+ stocks)\n• IC = 0.05–0.10: meaningful signal, typical for factor models\n• IC > 0.10: strong signal — verify carefully for data leakage\n• IC < 0: the model anti-predicts (short it, or throw it away)\n\nIC is measured monthly (or at your rebalance frequency): each measurement is one observation from a single period. The IC time series — not any single value — is the diagnostic.\n\n**The IC Information Ratio (ICIR)**\nICIR = Mean(IC) / Std(IC)\n\nICIR > 0.5 indicates the signal is consistently directional. High mean IC with high volatility (ICIR < 0.3) means the signal works sometimes and fails randomly — hard to rely on.\n\n**Walk-Forward Evaluation Protocol**\nWalk-forward testing is the only valid evaluation method for time-series models. Never look at OOS data while selecting model parameters or features:\nPeriod 1 (train): 2015–2017 → predict Jan 2018\nPeriod 2 (train): 2015–2018 → predict Jan 2019\nPeriod 3 (train): 2015–2019 → predict Jan 2020\n\nEach prediction window must be completely independent. Even one OOS observation used for model selection contaminates the entire evaluation.",
+     mechanics:"# Walk-Forward IC Evaluation\ndef walk_forward_ic(features_df, returns_df, train_start, oos_dates, freq='ME'):\n  \"\"\"features_df, returns_df: indexed by (date, ticker)\"\"\"\n  ic_series = []\n\n  for oos_date in oos_dates:\n    # 1. Define train window: all data strictly before oos_date\n    train_mask = features_df.index.get_level_values('date') < oos_date\n    X_train = features_df[train_mask]\n    y_train = returns_df[train_mask]\n\n    # 2. Fit model on train — no peeking at oos_date features\n    model = LightGBMRanker().fit(X_train, y_train)\n\n    # 3. Predict on oos_date cross-section\n    X_oos = features_df.xs(oos_date, level='date')\n    pred_ranks = model.predict(X_oos)\n\n    # 4. Compute IC: Spearman correlation of predicted vs actual ranks\n    actual_fwd_rets = returns_df.xs(oos_date + pd.DateOffset(months=1), level='date')\n    ic = spearmanr(pred_ranks, actual_fwd_rets.values)[0]\n    ic_series.append({'date': oos_date, 'ic': ic})\n\n  ic_df = pd.DataFrame(ic_series).set_index('date')\n  return ic_df, ic_df.mean()[0], ic_df.mean()[0]/ic_df.std()[0]  # IC, mean_IC, ICIR",
+     intuition:"You do not need to know a stock will go up exactly 12.3%. You only need to rank it above 60% of its peers. Ranking is a fundamentally more tractable problem than precise return forecasting — and it is the problem that actually translates into portfolio returns.\n\nThink of it this way: a sports ranking system does not need to predict scores. It just needs to be right about relative quality most of the time. A cross-sectional ranker that is directionally correct 55% of the time consistently outperforms, because over hundreds of stock-months, that edge compounds into real return spreads between your long book and your short book.",
+     example:"**IC Calculation — One Month**\n\nUniverse: 5 stocks (simplified for clarity)\nModel predicted ranks (1=worst, 5=best): [2, 4, 1, 5, 3]\nActual forward return ranks: [3, 5, 1, 4, 2]\n\nSpearman: ρ = 1 − 6Σd²/(n(n²−1))\nd² values: (2-3)²=1, (4-5)²=1, (1-1)²=0, (5-4)²=1, (3-2)²=1 → Σd² = 4\nIC = 1 − 6×4/(5×24) = 1 − 24/120 = 1 − 0.20 = 0.80 ← one period, too small to mean anything\n\nReal example: 200-stock universe, 24 OOS months\nMean IC = 0.063, Std IC = 0.048, ICIR = 0.063/0.048 = 1.31 ← strong, consistent signal\nTop decile avg return: +2.8%/mo, Bottom decile: −1.4%/mo, Spread: 4.2%/mo",
+     subtleVersion:"**IC Decay and Feature Staleness**\n\nIC measured at a 1-month horizon captures the signal at that frequency. Many fundamental signals decay quickly — the IC measured at a 3-month horizon is lower than at 1 month. Decay rate characterizes how long a signal remains useful.\n\nIf IC decays to zero within 2 months, you need monthly rebalancing to capture it. If IC holds for 6 months, quarterly rebalancing suffices. Always plot IC vs. horizon (1, 2, 3, 6, 12 months) — rapid decay means high turnover cost.\n\n**Conditional IC and Regime Dependence**\nA signal with mean IC = 0.06 across all regimes may have IC = 0.11 in trending markets and IC = −0.01 in reverting markets. Conditional IC analysis separates signal quality from regime luck. A model with strong conditional IC in only one regime is not robust — it is a regime bet disguised as an alpha model.",
+     warning:"**Trap: Optimizing After Observing OOS IC**\n\nTrap: Checking OOS results, adding or removing features, then re-running the 'OOS' evaluation — and reporting the improved numbers as genuine out-of-sample performance.\n\nWhy it is fatal: any model modification after observing OOS results contaminates those results. The OOS window becomes in-sample. You are now fitting to two datasets instead of one, and calling the second one 'OOS.'\n\nSymptom: research showing suspiciously stable OOS IC that never has a losing year; or OOS evaluation that began only after finding interesting signals.\n\nDetect it: require a timestamped commit of model specification before any OOS data is examined. Code frozen before evaluation, results computed once.\n\nFix: walk-forward protocol must be fully automated. No human-in-the-loop decisions after train window closes.",
+     misconception:"**Misconception: 'IC of 0.05 is too low to be useful'**\n\nResearchers trained on ML benchmarks expect R² > 0.90 or F1 > 0.85. An IC of 0.05 looks trivially small by comparison. But quantitative finance is a different problem domain.\n\nIn a 500-stock universe with monthly rebalancing, consistent IC = 0.05 translates into top-decile spreads of 1–3% per month over the long run — substantial economic value. The Fundamental Law of Active Management formalizes this: information ratio ≈ IC × √(number of independent bets). With 12 monthly bets per year across 500 stocks, even IC = 0.05 generates a healthy information ratio.\n\nDo not dismiss small IC. Do verify it is genuine (ICIR > 0.5, consistent across periods) rather than noisy.",
+     yourTurn:"**Scenario**: You run a 3-year walk-forward evaluation:\n\nYear 1 OOS: IC = 0.08\nYear 2 OOS: IC = −0.04\nYear 3 OOS: IC = 0.09\n\nMean IC = 0.043, ICIR = 0.043/0.065 = 0.66\n\n1. Is this a tradeable signal? What is your concern?\n2. What would you investigate about Year 2?\n3. What would strengthen your conviction before trading?\n\n**Answer**:\n1. ICIR 0.66 is borderline — marginal. The Year 2 failure is the concern: one negative year out of three suggests regime sensitivity rather than genuine robustness.\n2. Year 2 regime: Was it a strong momentum/mean-reversion market that penalizes your signal type? Check if other factors also failed in Year 2 (common factor risk) or if your signal alone failed (model-specific risk).\n3. More OOS periods (5+ years), subperiod analysis, and understanding why Year 2 failed mechanically.",
+     synthesis:"**Week 3 — Key Takeaways**\n\n☑ IC = Spearman rank correlation between predicted and actual return ranks — not prediction error\n☑ ICIR = mean(IC)/std(IC) > 0.5 indicates consistent directional signal\n☑ Walk-forward is the only valid evaluation protocol — no model changes after OOS data is observed\n☑ IC of 0.05 can be economically valuable in large universes — do not dismiss small values\n☑ IC decay analysis reveals required rebalance frequency and true signal shelf life\n\n**Next**: Week 4 attacks your best result systematically — testing every assumption that could be wrong before you trust a single backtest number.",
+     equation:"IC = Spearman(predicted_ranks, rank(forward_returns))     |     ICIR = mean(IC)/std(IC)"
+    }],
+    quiz:{id:'w03-quiz', questions:[
+      {id:'w03-q01', type:'multiple_choice', question:"A model has IS IC=0.09 and OOS IC=-0.02. What does this indicate?", options:['Strong signal — IS IC above 0.05 is excellent','Likely overfitting — positive IS IC does not generalize','Survivorship bias in the universe','Normal variance — difference is within statistical noise'], correct:1, explanation:"A large positive IS IC with a negative OOS IC is a classic overfitting signature. The model learned the historical sample but the signal does not generalize. The gap is the red flag, not the absolute values."},
+      {id:'w03-q02', type:'multiple_choice', question:"What does ICIR (IC Information Ratio) measure, and what threshold suggests a tradeable signal?", options:['IC scaled by universe size — threshold > 0.01','Consistency of IC over time (mean/std) — ICIR > 0.5 suggests consistent signal','IC measured at different horizons — threshold > 1.0','IC adjusted for transaction costs — threshold > 0.03'], correct:1, explanation:"ICIR = mean(IC)/std(IC) measures consistency. A high mean IC with equally high volatility means the signal is unreliable — it works sometimes and fails other times. ICIR > 0.5 indicates that positive IC is not just lucky noise, but a consistent directional signal across periods."},
+      {id:'w03-q03', type:'scenario', scenario:"You check OOS results, notice IC is low in months with high volatility, add a volatility filter, and re-run the 'OOS' evaluation showing improved IC.", question:"What is the problem with this evaluation?", options:['The filter is too complex','The OOS evaluation is contaminated — it became IS by using observed OOS results to guide feature selection','Volatility is not a valid feature','The filter should have been applied to training data only'], correct:1, explanation:"Any model modification after observing OOS results converts those results from OOS to IS. The evaluation is no longer genuinely out-of-sample. Walk-forward OOS must be computed exactly once, from a frozen model specification, before any OOS data is examined."}
+    ]},
+    lab:{id:'w03-lab', objective:"Build and evaluate a walk-forward cross-sectional ranker.", checks:[{id:'w03-c01',text:'All features computed and lagged (no future information used — verified with available_at timestamps)'},{id:'w03-c02',text:'Walk-forward splits defined with no overlap between train and test windows'},{id:'w03-c03',text:'IC and ICIR calculated for each independent OOS period'},{id:'w03-c04',text:'Simple linear baseline implemented as comparison (not just ML)'},{id:'w03-c05',text:'IC decay curve plotted at 1, 2, 3, 6-month horizons'}], deliverable:"03_cross_sectional_ranker.ipynb with OOS IC series and ICIR"},
+    evidencePrompts:["Is IC consistent across all OOS periods, or driven by one regime?","Does ML significantly outperform a simple linear ranking?","What is the IC decay rate and what does it imply for rebalance frequency?"]
+  },
+
+  wk4:{
+    mission:{objective:"Systematically destroy your best backtest. Find every assumption that could be wrong. Boss Fight: receive a contaminated strategy and diagnose exactly why it is wrong.",output:"Signed leakage and robustness report detailing every vulnerability found in your Week 3 strategy.",failCondition:"Concluding a backtest is robust without testing parameter sensitivity, subperiod stability, and cost sensitivity.",whatWouldChangeMind:"A strategy that maintains meaningful performance across all dimensions of the specification multiverse."},
+    whyItMatters:"The purpose of a backtest is not to prove a strategy works. It is to find every reason it might not work. A researcher who cannot attack their own backtest will be attacked by the market instead.",
+    lessons:[{id:'w04-l01', title:'The Specification Multiverse', duration:'9 min', competency:'BACKTESTING',
+     content:"A specification multiverse runs your strategy across all plausible implementation variants — not just the one you happened to choose. The goal is to characterize the distribution of outcomes across the parameter space, not to find the best outcome.\n\n**Dimensions to Test**\n• Lookback periods: 3mo, 6mo, 9mo, 12mo, 18mo\n• Rebalance frequencies: weekly, monthly, quarterly\n• Universe sizes: top 50, 100, 200, 500 stocks\n• Cost assumptions: 0 bps, 10 bps, 20 bps, 50 bps round-trip\n• Signal formation windows × holding periods\n• Winsorization thresholds for outlier handling\n\n**The Distribution, Not the Maximum**\nFor a multiverse of N combinations, what matters is the distribution of Sharpe ratios:\n• Median Sharpe: your realistic expectation (selection-bias-adjusted)\n• 10th percentile Sharpe: your bad-luck scenario\n• Gap between best and median: your data-snooping exposure\n\nIf Median Sharpe is 0.4 and Best Sharpe is 2.1, reporting 2.1 overstates expected forward performance by 4× or more.\n\n**Subperiod Stability**\nDivide your sample into thirds. If the strategy only works in one third, it is not robust — it is a regime bet. Robust strategies should have positive Sharpe in at least 2 of 3 subperiods even if magnitude varies.",
+     mechanics:"# Specification Multiverse Runner\nimport itertools\n\ndef run_multiverse(signal_fn, returns_df, param_grid):\n  results = []\n\n  for params in itertools.product(*param_grid.values()):\n    p = dict(zip(param_grid.keys(), params))\n\n    # 1. Compute signal with this parameter set\n    signals = signal_fn(returns_df, **p)\n\n    # 2. Run backtest (no optimization in here)\n    bt = backtest(signals, returns_df,\n                  costs_bps=p['costs_bps'],\n                  rebalance_freq=p['rebalance_freq'])\n\n    # 3. Record key metrics\n    results.append({\n      'params': p,\n      'sharpe': bt.sharpe,\n      'cagr': bt.cagr,\n      'max_dd': bt.max_drawdown,\n      'subperiod_sharpes': bt.subperiod_sharpes  # list of 3\n    })\n\n  df = pd.DataFrame(results)\n  return {\n    'median_sharpe': df.sharpe.median(),\n    'best_sharpe': df.sharpe.max(),\n    'p10_sharpe': df.sharpe.quantile(0.1),\n    'pct_positive': (df.sharpe > 0).mean(),\n    'full_results': df\n  }",
+     intuition:"If a map is only accurate in one specific town, it is not a useful map. A strategy that only works at exactly 12-month lookback, monthly rebalance, at exactly 0 bps costs is not a useful strategy — it is an overfitted artifact that happens to look impressive in one corner of parameter space.\n\nThe specification multiverse forces you to confront this directly. If the median outcome across 100 reasonable implementations is a Sharpe of 0.4, then 0.4 is your honest estimate — not the 2.1 you found after searching. Every parameter choice you made that wasn't theoretically motivated in advance is a trial in the multiverse that should count against you.",
+     example:"**Multiverse of 96 Combinations: Reading the Distribution**\n\n4 lookbacks × 4 rebalance freqs × 6 cost levels = 96 combinations\n\nDistribution of Sharpe ratios:\nBest: 2.1  (12-month lookback, weekly, 0 bps)\nMedian: 0.43\nP10 worst: −0.18\nPct combinations with Sharpe > 1.0: 11% (11 out of 96)\nPct combinations with positive Sharpe: 62%\n\nAt 20 bps costs (realistic for most strategies):\nMedian Sharpe drops to 0.21\nPct positive drops to 44%\n\nHonest interpretation: the strategy barely beats random at realistic costs. The 2.1 Sharpe was a lucky corner — not the expected outcome.",
+     subtleVersion:"**The Deflated Sharpe and Multiple Testing**\n\nHarvey, Liu & Zhu (2016) documented that roughly half of published factor strategies fail to survive out-of-sample. Their proposed t-stat threshold for a 'new' factor rises from 2.0 to 3.0+ once you account for the multiple comparisons problem across all published strategies.\n\nFor your own research: if you tested N strategy variants, the expected maximum Sharpe from random chance is approximately √(2 × ln(N)). With N=96 combinations, E[max SR from noise] ≈ √(2 × ln 96) = √9.1 ≈ 3.0 for a single asset with 36 monthly observations. This is why a Sharpe of 2.1 from a 96-combination multiverse is not impressive — it barely exceeds noise.\n\nThe Deflated Sharpe Ratio (Bailey & López de Prado, 2012) formalizes this adjustment. Always report DSR alongside raw Sharpe when testing multiple variants.",
+     warning:"**Trap: The Best-Parameter Selection Bias**\n\nTrap: Testing N parameter combinations, selecting the best-performing combination, and reporting that combination's Sharpe as the strategy's expected performance.\n\nWhy it is dangerous: with enough combinations, you will find a lucky configuration even if the strategy has zero edge. The best result from 100 trials of a random strategy has positive Sharpe by construction — you are selecting a winner from noise.\n\nSymptom: strategy performance is highly sensitive to exact parameter values — a 1-month change in lookback drops Sharpe from 2.1 to 0.3. This sensitivity fingerprints overfitting.\n\nDetect: run the multiverse. If best >> median, you have snooping exposure proportional to the gap.\n\nFix: pre-specify parameters before evaluation using theory or prior literature. Report median and distribution, not just best. If selecting a parameter set based on performance, apply the Deflated Sharpe correction.",
+     misconception:"**Misconception: 'Testing more combinations produces more evidence'**\n\nMore combinations tested produces more data snooping risk, not more evidence. The more combinations you test, the higher the probability that your best result is a statistical artifact.\n\nThe correct interpretation: a strategy found after testing 1,000 combinations requires much stronger OOS evidence than a strategy with a single pre-specified parameter set. The pre-specified strategy's OOS test is clean evidence. The post-search strategy's 'OOS' test needs to be genuinely held-out — not just the last slice of data you looked at least carefully.\n\nIf you must search over parameters, reserve a true holdout period that was never examined during any part of the search process. This requires real discipline — it means you cannot look at holdout performance at all until the strategy specification is completely frozen.",
+     yourTurn:"**Scenario**: Your multiverse results:\n• Best Sharpe (9-month lookback, monthly, 0 bps): 1.8\n• Median Sharpe (all 96 combos): 0.38\n• Median Sharpe at 20 bps costs: 0.12\n• Subperiod analysis: Period 1 Sharpe +0.9, Period 2 +0.1, Period 3 +0.7\n\n1. Should you trade this strategy? What is your honest Sharpe estimate?\n2. What does the subperiod analysis reveal?\n3. What would you do next before committing capital?\n\n**Answer**:\n1. Honest estimate is the median at realistic costs: 0.12. The 1.8 is a lucky parameter corner, not the expected outcome. Do not trade this strategy based on current evidence.\n2. Period 2 near-zero suggests regime sensitivity — the strategy failed in one of three subperiods, possibly during a different market regime (e.g., a mean-reverting period for a momentum signal).\n3. Investigate Period 2 specifically. If you can explain why the signal should fail in that regime (mechanistically), that is evidence. If you cannot explain it, the strategy may just be a regime bet.",
+     synthesis:"**Week 4 — Key Takeaways**\n\n☑ Report median Sharpe across the multiverse, not best — the gap between best and median reveals data-snooping exposure\n☑ Subperiod stability: robust strategies have positive Sharpe in at least 2 of 3 subperiods\n☑ Costs at realistic levels (20+ bps) often cut median Sharpe to near zero — always test with costs\n☑ More parameter combinations = more snooping risk, not more evidence\n☑ Pre-specify parameters using theory; compute performance exactly once on OOS data\n\n**Next**: Phase 2 begins — Week 5 builds the data infrastructure that makes all future signals trustworthy from day one.",
+     equation:"E[Forward Sharpe] ≤ Median[Backtest Sharpe across multiverse]     |     DSR adjusts for N tested variants"
+    }],
+    quiz:{id:'w04-quiz', questions:[
+      {id:'w04-q01', type:'scenario', scenario:"You test 96 parameter combinations. Best Sharpe: 2.1. Median Sharpe: 0.4. You report the best combination.", question:"What is the primary concern?", options:['Median Sharpe 0.4 is too low to be useful','The gap suggests data snooping — the reported result overstates expected forward performance','Too few combinations were tested','Nothing — always report the best result'], correct:1, explanation:"The gap between best (2.1) and median (0.4) across 96 combinations is a classic data-snooping signature. With many combinations, finding one that looks excellent by chance is highly likely. The reported 2.1 dramatically overstates expected forward performance."},
+      {id:'w04-q02', type:'multiple_choice', question:"A strategy has Sharpe 1.6 at 0 bps costs and Sharpe 0.1 at 20 bps costs. What does this reveal?", options:['The strategy needs leverage to overcome costs','The economic value of the strategy is minimal — turnover destroys the edge at realistic cost levels','20 bps is too high an assumption','The strategy should use options instead of stock positions'], correct:1, explanation:"If realistic trading costs (20 bps per round-trip is conservative for most execution environments) reduce Sharpe from 1.6 to 0.1, the signal exists only in a frictionless world. A strategy with no net-of-cost edge is not a strategy."},
+      {id:'w04-q03', type:'multiple_choice', question:"Strategy Sharpe in three equal subperiods: +0.8, +0.9, −0.6. What is your primary concern?", options:['Sample period is too short','The negative third-period Sharpe suggests regime sensitivity or deteriorating signal','The average Sharpe is still positive so this is acceptable','The first two periods must have a data error'], correct:1, explanation:"One out of three subperiods with negative Sharpe (-0.6) is a significant red flag. Either the signal is regime-dependent (works in trending markets, fails in mean-reverting ones) or it has deteriorated over time. You need to understand why before trusting the average."}
+    ]},
+    lab:{id:'w04-lab', objective:"Run a specification multiverse and robustness audit on your Week 3 ranker.", checks:[{id:'w04-c01',text:'Parameter sensitivity tested across ≥3 alternatives per major parameter (lookback, frequency, costs)'},{id:'w04-c02',text:'Subperiod analysis: performance in each third of sample period documented'},{id:'w04-c03',text:'Cost sensitivity at 0, 10, 20, and 50 bps round-trip computed'},{id:'w04-c04',text:'Leakage audit: all features re-verified with available_at timestamps'},{id:'w04-c05',text:'Boss Fight: contaminated strategy received, flaw diagnosed, and write-up signed'}], deliverable:"04_backtest_audit.ipynb + signed robustness report"},
+    evidencePrompts:["What is worst-case performance under stressed parameters?","Does the strategy survive using median parameters instead of the best?","What did the Boss Fight teach you about contamination detection?"]
+  },
+
+  wk5:{
+    mission:{objective:"Build an immutable filing warehouse that allows querying any company's financials as of any historical date without ever using future information.",output:"10-company immutable filing store with change-detection comparing current vs. prior filings.",failCondition:"Treating fiscal period end date as data availability date for any XBRL fact.",whatWouldChangeMind:"A clear, verifiable mapping from SEC accession number to exact availability date for every document."},
+    whyItMatters:"SEC EDGAR is one of the richest free data sources in quantitative research. Companies must file standardized statements with mandatory timing rules. The filing metadata tells you exactly when information became public.",
+    lessons:[{id:'w05-l01', title:'EDGAR Architecture and the Availability Rule', duration:'8 min', competency:'DATA',
+     content:"SEC EDGAR is a timestamped public ledger of every material corporate disclosure since 1993. It is the closest thing to a free, legally certified point-in-time financial database available to individual researchers.\n\n**Filing Types and What They Contain**\n• 10-K: Annual report — full audited financials, risk factors, business description\n• 10-Q: Quarterly report — unaudited interim financials (3 per year, Q1/Q2/Q3)\n• 8-K: Material event — earnings announcements, M&A disclosures, leadership changes\n• DEF 14A: Proxy — executive compensation, governance, shareholder proposals\n\n**The Availability Rule — The Most Important Concept**\nFiling deadline from fiscal period end:\n• Large accelerated filer 10-K: 60 days\n• Accelerated filer 10-K: 75 days\n• Non-accelerated filer 10-K: 90 days\n• All filers 10-Q: 40–45 days\n\nThe fiscal period end date (e.g., December 31) is NOT the availability date. December 31 financials are not public until the filing is accepted by the SEC — typically late February or early March. Any model that uses December 31 numbers on January 1 has traveled back in time.\n\n**API Access**\n• Submissions: data.sec.gov/submissions/CIK{cik}.json — filing history per company\n• Company Facts: data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json — all XBRL financials\n• Full-text search: efts.sec.gov/LATEST/search-index?q=...&dateRange=custom\n• Rate limit: 10 requests/second — always include User-Agent header with your contact email",
+     mechanics:"# EDGAR PIT Data Pipeline\nimport requests, json, time\n\nBASE = 'https://data.sec.gov'\nHEADERS = {'User-Agent': 'YourName contact@email.com'}  # required by EDGAR\n\ndef get_filings(cik, form_types=['10-K','10-Q']):\n  # 1. Get submission history\n  url = f'{BASE}/submissions/CIK{str(cik).zfill(10)}.json'\n  resp = requests.get(url, headers=HEADERS); time.sleep(0.1)\n  data = resp.json()\n\n  filings = data['filings']['recent']\n  results = []\n  for i, form in enumerate(filings['form']):\n    if form in form_types:\n      results.append({\n        'accession': filings['accessionNumber'][i],\n        'form': form,\n        'fiscal_end': filings['reportDate'][i],  # period end — DO NOT USE as available_at\n        'filed': filings['filingDate'][i],        # SEC receipt — this is available_at\n      })\n  return results\n\ndef get_xbrl_facts(cik, concept='Revenues'):\n  # 2. Get XBRL facts — each fact has 'end' (period) and 'filed' (availability)\n  url = f'{BASE}/api/xbrl/companyfacts/CIK{str(cik).zfill(10)}.json'\n  data = requests.get(url, headers=HEADERS).json()\n  facts = data['facts']['us-gaap'].get(concept, {}).get('units', {}).get('USD', [])\n\n  # 3. Build PIT record — available_at = filed date, NOT end date\n  return [{'value': f['val'], 'period_end': f['end'],\n           'available_at': f['filed'], 'accession': f['accn']} for f in facts]",
+     intuition:"EDGAR is a timestamped public record — think of it as the official postmark system for corporate financial disclosure. Every document has a filed date that represents the legal moment it became accessible to the public.\n\nThe crucial distinction: fiscal period end (December 31) tells you when the accounting period closed. Filing date (February 28) tells you when the world learned about it. Using the wrong date means your model is operating with information the market did not have — a legal impossibility in real trading. If your model consistently earns returns that could only be achieved with advance knowledge of financial statements, the backtest is fraudulent in the statistical sense: it measures an information advantage that never existed.",
+     example:"**Apple Q4 FY2022 — Availability Timeline**\n\nFiscal year end: September 24, 2022 (Apple's FY ends in late September)\nSEC filing date: October 28, 2022 (10-K submitted)\nEDGAR acceptance: October 28, 2022 (same day for electronic filings)\nAvailable_at: 2022-10-28\n\nXBRL fact for Net Sales:\n  'val': 394328000000 (=$394.3B)\n  'end': '2022-09-24'  ← fiscal period end — DO NOT USE\n  'filed': '2022-10-28' ← this is available_at\n  'accn': '0000320193-22-000108'\n\nA model using September 24 numbers on September 25 has a 33-day look-ahead.\nA model using October 28 numbers on October 29 is honest.\n\nAvg lag for S&P 500 large-cap 10-K: ~45 days from fiscal year end to SEC filing.",
+     subtleVersion:"**Amended Filings and Restated Financials**\n\nCompanies sometimes amend filings (10-K/A, 10-Q/A) to correct errors. EDGAR records both the original and the amendment. For PIT research, the original filing is available_at = original_filed_date. The amendment is available_at = amendment_filed_date. Queries for a historical date T should use whichever version was available as of T.\n\nThis creates the 'vintage' problem from Week 1: the number for Q4 2020 revenue may be different in the original 10-K (filed March 2021) versus the 10-K/A amendment (filed July 2021). A properly constructed warehouse stores both vintages with their respective availability dates and returns the correct vintage for any query date.\n\n**XBRL Taxonomy Drift**: XBRL concept names change across years. 'Revenues' in 2015 filings may be 'RevenueFromContractWithCustomerExcludingAssessedTax' in 2020 filings due to ASC 606. Your pipeline must handle concept aliases.",
+     warning:"**Trap: Using 'period.end' as available_at in XBRL Data**\n\nTrap: Treating the XBRL 'end' date (fiscal period end) as the date the information became available — and filtering data by 'end <= query_date'.\n\nWhy it is fatal: fiscal year-end December 31 financials are published in February or March. A model filtered by 'end <= 2023-01-15' includes Q4 2022 data that was not available until February 2023. Every signal computed from such a model has ~6 weeks of forward-looking contamination.\n\nSymptom: suspiciously good performance in January (before 10-Q/10-K filings), or strategies that seem to anticipate earnings. Detection: sort XBRL facts by 'end' date vs. 'filed' date — the gap is the contamination window.\n\nFix: always filter by 'filed' <= query_date, never by 'end' <= query_date. Store both dates; use 'filed' for PIT queries.",
+     misconception:"**Misconception: 'EDGAR is too slow/complex for research use'**\n\nMany researchers avoid EDGAR's raw API due to rate limits and JSON complexity, and instead pay for vendor-normalized fundamental data. This is a valid operational choice — but it shifts the point-in-time problem to the vendor.\n\nCommercial vendors also make availability-date errors. Compustat and Bloomberg both have documented cases where restated financials were retroactively applied to historical dates, contaminating historical backtests. If you cannot audit a vendor's availability_at timestamps against EDGAR filing dates for a sample of companies, you cannot verify the vendor's data is PIT-clean.\n\nEDGAR gives you the ground truth — the legal filing date is unambiguous. Use it to audit any commercial dataset by spot-checking 10-20 companies across the historical period.",
+     yourTurn:"**Scenario**: You query your financial database for all companies' revenue data as of 2023-01-15. Your database returns Q3 2022 earnings (fiscal period Oct–Dec 2022 for calendar-year companies) with dates showing '2022-12-31' as the data date.\n\n1. Is this a PIT violation? Explain the mechanism.\n2. What data should actually be available on 2023-01-15 for a December-fiscal-year company?\n3. How would you fix the database query?\n\n**Answer**:\n1. Yes — critical PIT violation. Q4 2022 (fiscal end Dec 31) 10-K filings are not accepted by EDGAR until February–March 2023. Using them on January 15, 2023 requires knowledge of financials not yet public.\n2. Q3 2022 (fiscal end September 30, 2022), filed ~November 2022, is the correct latest-available quarterly data on January 15, 2023.\n3. Filter by filed_date <= '2023-01-15' instead of period_end <= '2023-01-15'. Return the row with the latest filed_date that is still ≤ query_date.",
+     synthesis:"**Week 5 — Key Takeaways**\n\n☑ available_at = SEC filing date ('filed' in EDGAR), NOT fiscal period end ('end')\n☑ 10-K filing lag: 60–90 days from fiscal year end — using December 31 numbers in January is a time machine\n☑ Store both period_end and filed_date; always query by filed_date\n☑ Amended filings create 'vintages' — PIT-correct databases store each vintage with its own available_at\n☑ Audit any commercial dataset against EDGAR filing dates for at least 20 companies\n\n**Next**: With filing data properly timestamped, Week 6 builds the retrieval system that lets you ask natural-language research questions and get evidence-grounded answers.",
+     equation:"available_at = filing_date (from EDGAR submissions JSON 'filingDate' field)"
+    }],
+    quiz:{id:'w05-quiz', questions:[
+      {id:'w05-q01', type:'multiple_choice', question:"An XBRL fact shows 'end: 2022-12-31' and 'filed: 2023-03-02'. What is the correct available_at for a PIT query on 2023-01-15?", options:['2022-12-31 — use this fact','2023-03-02 — but the fact is not yet available on Jan 15','2023-01-15 — use today as available_at','The midpoint: 2023-01-16'], correct:1, explanation:"2023-03-02 is when the SEC received the filing. On January 15, 2023, this fact is NOT yet available — the filing has not been submitted. The correct behavior is to exclude this fact from any query dated before 2023-03-02."},
+      {id:'w05-q02', type:'multiple_choice', question:"A company's fiscal year ends December 31. It is a 'large accelerated filer.' Approximately when will its 10-K be filed?", options:['January 1 — immediately after year-end','Late February (60 days from Dec 31)','April 15 (IRS deadline)','December 31 itself'], correct:1, explanation:"Large accelerated filers must file 10-K within 60 days of fiscal year-end. December 31 + 60 days ≈ late February. This means Q4 annual figures are not publicly available until late February at the earliest — any model using them before that date has forward-looking contamination."},
+      {id:'w05-q03', type:'scenario', scenario:"A vendor claims their financial database is 'point-in-time clean' for all data back to 2010.", question:"How would you audit this claim for a sample of 20 companies?", options:['Take the vendor at their word — they have legal liability','Check 10-20 company/quarter pairs: compare the vendor available_at to the actual EDGAR filing date for that accession number','Run a backtest and see if returns look too good','Ask the vendor for their methodology document'], correct:1, explanation:"The only rigorous verification is to spot-check vendor available_at dates against the actual EDGAR filing dates (from the submissions JSON). If a vendor marks October 1 as available_at for a December fiscal-year Q3 filing (which wouldn't be filed until November), the database has contamination. Methodological documents are not a substitute for empirical verification."}
+    ]},
+    lab:{id:'w05-lab', objective:"Build an immutable SEC EDGAR filing warehouse.", checks:[{id:'w05-c01',text:'Submissions API queried for all universe companies with proper User-Agent header'},{id:'w05-c02',text:'10-K and 10-Q filings catalogued: fiscal_period_end, filing_date, accession_number — all three stored'},{id:'w05-c03',text:'XBRL facts extracted with available_at = filing_date (not period end)'},{id:'w05-c04',text:'Change detection: current vs. prior filing text comparison built (TF-IDF or embedding-based)'},{id:'w05-c05',text:'Raw store is append-only: new downloads append, nothing overwritten — immutability enforced'}], deliverable:"05_edgar_pipeline.ipynb + filing warehouse + change-detection report"},
+    evidencePrompts:["What is the average lag between fiscal year-end and 10-K filing for your companies?","Are there irregular filing patterns in any company's history?","How many amended filings (10-K/A, 10-Q/A) exist in your sample, and how does that affect your PIT query logic?"]
+  },
+
+  wk6:{
+    mission:{objective:"Build and evaluate a retrieval system that answers research questions about filings. Prove it works quantitatively against manually verified ground truth.",output:"RAG pipeline with Recall@k evaluation report and evidence-grounded Q&A tool.",failCondition:"Claiming the system works without a quantified retrieval evaluation against human-labeled questions.",whatWouldChangeMind:"Recall@5 > 0.80 on ≥25 manually verified research questions."},
+    whyItMatters:"Language models that read filings without retrieval evaluation are unaudited systems. You cannot trust an AI analyst that cannot demonstrate it finds the right evidence.",
+    lessons:[{id:'w06-l01', title:'RAG: From Fluency to Evidence', duration:'9 min', competency:'RESEARCH',
+     content:"Retrieval-Augmented Generation forces a language model to answer only from documents you supply — with mandatory citation to the source chunk. This constraint is the most important property of a trustworthy AI research system.\n\n**The Standard RAG Pipeline**\n1. Chunk: divide filing text into ~400–600 token passages, preserving section headers as metadata\n2. Embed: encode each chunk with a text embedding model (e.g., text-embedding-3-small)\n3. Index: store embeddings in a vector database (FAISS, ChromaDB, Pinecone)\n4. Query: embed the research question; retrieve top-k chunks by cosine similarity\n5. Generate: pass retrieved chunks as context; LLM answers from this context only\n6. Cite: every factual claim must reference chunk_id, accession, and section\n\n**Why Evaluation is Non-Optional**\nRAG systems can fail in two independent ways:\n1. Retrieval fails: the correct chunk is not in the top-k results → LLM has no evidence to cite\n2. Generation fails: retrieval succeeds but LLM ignores the retrieved chunk and produces a hallucinated answer\n\nRecall@k measures failure mode 1: does the right evidence reach the LLM?\nRecall@k = |{questions where correct chunk ∈ top-k results}| / |all questions|\n\nFor financial research systems, Recall@5 > 0.75 is a baseline requirement. Below 0.75, your LLM is generating answers without consistent access to the relevant evidence.\n\n**Grounding Protocol**\nFor every LLM-generated claim, the output schema must include 'evidence_ids' field listing the chunk IDs that support the claim. Empty evidence_ids = rejected claim. This is not optional — it is what separates an auditable AI analyst from a confident text generator.",
+     mechanics:"# RAG Pipeline: Build and Evaluate\nfrom sentence_transformers import SentenceTransformer\nimport faiss, numpy as np\n\n# 1. CHUNKING\ndef chunk_filing(text, accession, section, chunk_size=500):\n  words = text.split()\n  chunks = []\n  for i in range(0, len(words), chunk_size):\n    chunk_text = ' '.join(words[i:i+chunk_size])\n    chunks.append({'text': chunk_text,\n                   'chunk_id': f'{accession}-{section}-{i//chunk_size}',\n                   'accession': accession, 'section': section})\n  return chunks\n\n# 2. EMBEDDING + INDEXING\nmodel = SentenceTransformer('all-MiniLM-L6-v2')\ndef build_index(chunks):\n  texts = [c['text'] for c in chunks]\n  embeddings = model.encode(texts, normalize_embeddings=True)\n  index = faiss.IndexFlatIP(embeddings.shape[1])  # inner product = cosine for normalized vecs\n  index.add(embeddings)\n  return index, embeddings\n\n# 3. RETRIEVAL EVALUATION (Recall@k)\ndef eval_recall(questions, correct_chunk_ids, index, chunks, k=5):\n  hits = 0\n  for question, correct_id in zip(questions, correct_chunk_ids):\n    q_embed = model.encode([question], normalize_embeddings=True)\n    _, top_idx = index.search(q_embed, k)\n    retrieved_ids = [chunks[i]['chunk_id'] for i in top_idx[0]]\n    if correct_id in retrieved_ids:\n      hits += 1\n  return hits / len(questions)  # Recall@k",
+     intuition:"A language model without retrieval is like a lawyer who memorized thousands of legal textbooks but cannot open the actual brief when arguing a case. They can produce fluent, convincing arguments that are completely wrong. RAG forces the model to open the brief — and then mandates a citation to the specific paragraph.\n\nThe citation requirement is the key safeguard. Without it, you cannot distinguish between an LLM that found the right evidence and one that generated a plausible-sounding answer from training data. In financial research, training data includes years of analyst reports, earnings summaries, and news articles — a model can reproduce confident financial analysis about any large company without ever consulting the actual filing. Mandatory chunk citations expose this immediately: if the claimed evidence is not in the cited chunks, the claim is fabricated.",
+     example:"**Retrieval Success vs. Failure: Same Question, Different Outcomes**\n\nQuestion: 'What did Apple disclose about China revenue concentration risk in FY2022 10-K?'\n\nRETRIEVAL FAILURE (Recall@5 miss):\nTop-5 chunks: Q1 earnings call transcript, 2019 annual report risk factors, news article, analyst report summary, 2022 Q2 10-Q\nChunk with actual FY2022 10-K risk factor language: not retrieved\nResult: LLM generates plausible answer from training data — may be accurate by luck, but is unverifiable\n\nRETRIEVAL SUCCESS:\nTop-1 chunk: 0000320193-22-000108 / Risk Factors / chunk_47\nActual text: 'A significant portion of our net sales are made to customers in China...'\nLLM answer: 'Apple disclosed that a significant portion of net sales are made to China-based customers, citing geographic concentration as a material risk [chunk_id: 0000320193-22-000108-RiskFactors-47].'\nVerifiable: open EDGAR filing, navigate to Risk Factors, find the exact paragraph.",
+     subtleVersion:"**Chunking Strategy Matters More Than Embedding Model**\n\nMost RAG tutorials spend effort on embedding model selection. In practice, chunking strategy has larger impact on Recall@k for structured documents like 10-K filings.\n\n10-K filings have natural section boundaries: Item 1 (Business), Item 1A (Risk Factors), Item 7 (MD&A), Item 8 (Financial Statements). Chunking across section boundaries loses context — the heading tells you what the paragraph is about.\n\nBetter: section-aware chunking. Parse the filing into sections first, then chunk within sections. Include the section header in each chunk's text and metadata. This dramatically improves retrieval for section-specific questions.\n\n**Reranking**: After top-k retrieval, a cross-encoder reranker (BGE-reranker, Cohere Rerank) rescores retrieved chunks for relevance to the specific question. Reranking often improves Recall@3 by 10–20 percentage points at trivial latency cost.",
+     warning:"**Trap: Treating High Fluency as Evidence of High Accuracy**\n\nTrap: Evaluating RAG quality by reading generated answers and judging whether they sound correct — without verifying the cited evidence.\n\nWhy it is dangerous: LLMs are trained to produce fluent, authoritative-sounding text. A model with Recall@5 of 0.40 (retrieving the right evidence only 40% of the time) still produces complete, confident-sounding answers 100% of the time. The 60% of answers without correct evidence are generated from training data associations — potentially hallucinated or from the wrong company, period, or context.\n\nDetect: build a 25-question ground-truth set with manually identified correct chunks. Compute Recall@k before evaluating generation quality.\n\nFix: never trust generated quality without measuring retrieval quality first. Retrieval failure is silent — it produces answers anyway.",
+     misconception:"**Misconception: 'If the LLM cites a chunk, the claim is verified'**\n\nCitation to a chunk_id proves the claim was grounded in retrieval, not that the claim is accurate. Two separate verification failures remain possible:\n\n1. The cited chunk does not actually support the claim (hallucination despite retrieval — LLM ignored the chunk content)\n2. The cited chunk is the wrong document — e.g., it retrieved Q3 2022 instead of Q4 2022, or MSFT instead of AAPL due to similar boilerplate language\n\nTrue verification requires a human to open the cited accession on EDGAR, navigate to the section, find the chunk text, and confirm the claim matches. Automated verification can catch case 1 (entailment check: does chunk text entail the claim?), but case 2 requires metadata verification.\n\nFor production research systems: spot-check at least 20% of claims against original source documents.",
+     yourTurn:"**Scenario**: Your RAG system shows:\n• Recall@1: 0.48\n• Recall@3: 0.64\n• Recall@5: 0.71\n\nYour target is Recall@5 > 0.80. You have budget for one improvement.\n\n1. What does Recall@1 = 0.48 tell you about retrieval precision?\n2. The gap between Recall@1 and Recall@5 is 0.23 — what does this suggest?\n3. What improvement would you prioritize: better embedding model, section-aware chunking, or cross-encoder reranking?\n\n**Answer**:\n1. The top-ranked result is wrong 52% of the time. Retrieval is finding relevant material but ranking it poorly.\n2. The correct chunk is often in positions 2–5 but not position 1. The system finds the right evidence but ranks it below less relevant chunks.\n3. Cross-encoder reranking — it directly addresses the ranking problem (correct chunk retrieved but poorly ranked). Section-aware chunking would help if recall@5 were lower; better embedding model is less likely to close the gap than fixing the ranking step.",
+     synthesis:"**Week 6 — Key Takeaways**\n\n☑ RAG forces grounding: LLMs answer only from supplied documents with mandatory chunk citations\n☑ Recall@k measures retrieval quality — compute it before evaluating generation quality\n☑ Recall@5 > 0.75 is a minimum bar for financial research systems; below this, answers are unreliable\n☑ Fluency and accuracy are independent — a model with 40% recall produces confident answers 100% of the time\n☑ Chunking strategy (section-aware) often matters more than embedding model choice for structured documents\n\n**Next**: Week 7 turns retrieval output into portfolio construction — translating ML signal rankings into constrained weight vectors.",
+     equation:"Recall@k = |{q : correct_chunk ∈ top_k(q)}| / |Q|     Minimum bar: Recall@5 > 0.75"
+    }],
+    quiz:{id:'w06-quiz', questions:[
+      {id:'w06-q01', type:'multiple_choice', question:"Why is citation to a specific accession number required for every AI financial claim?", options:['Legal compliance requirement','Allows verification that the claim is grounded, not hallucinated','Improves LLM response speed','Required by EDGAR API terms'], correct:1, explanation:"Accession number citation allows any reader to open the exact filing and verify the claim. Without this, an LLM answer is completely unauditable — it could be hallucinated, based on outdated training data, or from a different company or period than intended."},
+      {id:'w06-q02', type:'scenario', scenario:"Your RAG system has Recall@5 = 0.45. You present the generated answers to a colleague who says 'these look great!'", question:"What is the appropriate response?", options:['Agree — the answers do look good, suggesting retrieval is not a bottleneck','The colleague is right — Recall@5 = 0.45 means 45% accuracy, which is acceptable','The system retrieves the right evidence only 45% of the time. The other 55% of answers are generated without correct evidence and cannot be trusted — regardless of how they sound.','Request more evaluation data before concluding anything'], correct:2, explanation:"Recall@5 = 0.45 means the correct evidence is not in the retrieved context 55% of the time. The LLM produces answers anyway — from training data, related documents, or hallucination. Looking good ≠ being correct. The system fails more than half the time before the LLM even sees the evidence."},
+      {id:'w06-q03', type:'multiple_choice', question:"What is the most likely cause of Recall@1=0.42 but Recall@5=0.78 in a RAG system?", options:['The embedding model is wrong for this domain','Retrieval finds relevant chunks but ranks them poorly — a reranker would help','Chunk size is too large','The vector index has too many dimensions'], correct:1, explanation:"The large gap between Recall@1 and Recall@5 means the correct chunk is being retrieved (it appears in top-5) but is ranked below position 1. This is a ranking problem, not a retrieval problem. A cross-encoder reranker, which scores each retrieved chunk against the query, directly addresses this by re-sorting the top-k results."}
+    ]},
+    lab:{id:'w06-lab', objective:"Build and evaluate a RAG pipeline for SEC filings.", checks:[{id:'w06-c01',text:'Filings chunked with section-aware boundaries and accession/section/chunk_id metadata'},{id:'w06-c02',text:'Embeddings generated and stored in vector index (FAISS or equivalent)'},{id:'w06-c03',text:'25+ manually verified ground-truth Q&A pairs created with correct chunk IDs identified'},{id:'w06-c04',text:'Recall@1, Recall@3, Recall@5 computed on held-out questions'},{id:'w06-c05',text:'Every generated answer cites accession_number and chunk_id — empty evidence_ids rejected'}], deliverable:"06_financial_rag.ipynb with retrieval evaluation report (Recall@k)"},
+    evidencePrompts:["What is your Recall@5 score?","What question types does retrieval fail on most often?","How does section-aware chunking vs. fixed-size chunking affect Recall@k?"]
+  },
+
+  wk7:{
+    mission:{objective:"Move from ranking stocks to building a portfolio. Translate ML signals into auditable constrained target weights using CVXPY.",output:"Allocator function: ML scores → constrained portfolio weights, reproducibly.",failCondition:"Treating top-N equal-weight as sufficient portfolio construction.",whatWouldChangeMind:"A constrained optimizer that improves risk-adjusted returns vs. naive top-N with measurable reduction in concentration risk."},
+    whyItMatters:"Stock picking and portfolio construction are different problems. A list of great stocks still produces a bad portfolio if they are all in the same sector or correlated drawdowns.",
+    lessons:[{id:'w07-l01', title:'Mean-Variance and Why Simple Alternatives Often Win', duration:'10 min', competency:'PORTFOLIO',
+     content:"Stock ranking and portfolio construction are separate problems that require separate solutions. A list of the 20 best-ranked stocks is not a portfolio — it is a collection of picks that may be heavily correlated, sector-concentrated, or sized incorrectly relative to their risk contribution.\n\n**Markowitz Mean-Variance (1952)**\nObjective: maximize μᵀw − (λ/2)wᵀΣw\nSubject to: Σwᵢ = 1, wᵢ ≥ 0, sector limits...\n\nTheoretically optimal: for given expected returns and covariance matrix, this produces the efficient frontier. Every investor who prefers more return to less risk, and less variance to more, should hold a portfolio on the efficient frontier.\n\n**Why It Often Fails in Practice**\nExpected return estimation is the problem. Small errors in μ produce dramatically different portfolios. Michaud (1989) showed that the optimizer amplifies input estimation errors — it concentrates weight in stocks with overestimated expected returns and underweights stocks with underestimated returns. The resulting portfolios are fragile, concentrated, and unstable over time.\n\n**Practical Alternatives**\n• Minimum variance: set μ = 0 and minimize wᵀΣw only. Ignores the noisy return estimates entirely, producing more stable portfolios at the cost of expected-return optimality.\n• Risk parity: weight each stock so its risk contribution (wᵢ × marginal variance) is equal. More robust than min-variance for concentrated industries.\n• Rank-weighted: set weights proportional to signal rank normalized to sum to 1. Simple, transparent, zero covariance estimation required.\n\n**Turnover Costs: The Hidden Performance Tax**\nRebalancing costs are not modeled in most textbook treatments. A high-IC signal with 100% monthly turnover at 30 bps round-trip costs 30 bps × 12 months × 2 (buy + sell) = 7.2% per year just in transaction costs. Incorporating a turnover penalty in the optimization directly reduces costs and often improves net Sharpe even if it reduces gross Sharpe.",
+     mechanics:"# CVXPY Portfolio Optimizer\nimport cvxpy as cp\nimport numpy as np\n\ndef optimize_portfolio(signal_scores, cov_matrix, prev_weights,\n                        max_weight=0.05, sector_map=None, max_sector=0.20,\n                        turnover_penalty=0.001, risk_aversion=2.0):\n  n = len(signal_scores)\n  w = cp.Variable(n)  # target weights\n\n  # 1. Objective: signal score − risk penalty − turnover penalty\n  objective = (\n    signal_scores @ w                              # signal return (normalized ranks)\n    - risk_aversion * cp.quad_form(w, cov_matrix)  # variance penalty\n    - turnover_penalty * cp.norm1(w - prev_weights) # turnover cost\n  )\n\n  # 2. Constraints\n  constraints = [\n    cp.sum(w) == 1,      # fully invested\n    w >= 0,              # long-only\n    w <= max_weight,     # position limit per stock\n  ]\n\n  # 3. Sector limits (if sector_map provided)\n  if sector_map is not None:\n    for sector_id, idx_list in sector_map.items():\n      constraints.append(cp.sum(w[idx_list]) <= max_sector)\n\n  # 4. Solve\n  prob = cp.Problem(cp.Maximize(objective), constraints)\n  prob.solve(solver=cp.OSQP, warm_start=True)\n\n  return w.value if prob.status in ['optimal', 'optimal_inaccurate'] else prev_weights",
+     intuition:"Mean-variance optimization is like using a noisy GPS that is occasionally off by 50 miles. If you follow it precisely, you end up far from your destination. A fixed speed limit (minimum variance: just control risk, ignore noisy return estimates) is worse in theory but gets you there reliably in practice.\n\nThe mathematical reason: Σ (covariance) can be estimated with reasonable precision using historical returns. μ (expected returns) cannot — the signal-to-noise ratio for expected return estimation is so low that even 10 years of monthly data does not reliably distinguish a 7% expected return from an 8% expected return. The optimizer treats both estimates as if they were precise, amplifying the noise into concentrated positions.",
+     example:"**Three Approaches: 20-Stock Universe, 36-Month OOS Backtest**\n\nSignal: cross-sectional momentum ranker (Week 3 model)\nResult comparison (36-month OOS, monthly rebalancing, 20 bps round-trip costs):\n\n                    Gross Sharpe  Net Sharpe  Max Drawdown  Ann. Turnover\nTop-20 equal-wt       0.71         0.44         -28%          142%\nMean-variance         0.84         0.29         -24%          218%  ← higher gross, lower net\nMinimum variance      0.78         0.58         -19%          96%\nRank-weighted (w∝rank) 0.73        0.52         -23%          118%\n\nMin-variance wins net of costs. Mean-variance has highest gross Sharpe but highest turnover — costs destroy it. Top-N equal-weight underperforms both. Rank-weighted is nearly as good as min-variance with simpler implementation.",
+     subtleVersion:"**The Covariance Estimation Problem**\n\nEven covariance estimation degrades with large universes. For N=500 stocks and T=60 monthly observations, the sample covariance matrix Σ has 500×501/2 = 125,250 parameters estimated from 30,000 data points. This matrix is rank-deficient and its eigenstructure is distorted by estimation error — small eigenvalues are underestimated, large ones overestimated.\n\nShrinkage estimators (Ledoit-Wolf) blend the sample Σ with a structured target (identity or factor model). This consistently improves out-of-sample optimization performance versus raw sample covariance. For universes >100 stocks, always use Ledoit-Wolf or a factor-model covariance estimate.\n\n**Risk Parity Subtlety**: Risk parity equalizes volatility contributions but not correlation contributions. In 2008, all assets with high volatility also had high pairwise correlations — risk parity portfolios were not diversified at the level that mattered (correlation), only at the level that was easy to measure (volatility).",
+     warning:"**Trap: Ignoring Turnover Costs in Optimizer Objective**\n\nTrap: Formulating the portfolio optimization problem without a turnover penalty term, then reporting net-of-costs performance as if the optimizer minimized costs.\n\nWhy it matters: an unconstrained optimizer rebalances as dramatically as the signal allows each period. For a monthly signal with high turnover, this can mean 150–200% annual turnover at 20–30 bps per trade. Even at 20 bps round-trip, 200% turnover costs 4% per year — enough to eliminate a marginal strategy's entire Sharpe.\n\nSymptom: gross Sharpe looks excellent; net Sharpe (after realistic cost assumptions) is near zero.\n\nFix: add a turnover penalty term: λ_to × ||w_target − w_current||₁ directly in the CVXPY objective. Tune λ_to to balance signal capture vs. cost reduction. The optimizer then endogenously finds the turnover level where marginal signal gain equals marginal cost.",
+     misconception:"**Misconception: 'Top-N equal-weight is good enough for a first pass'**\n\nTop-N equal-weight is a fine baseline — but it is not a portfolio construction method. It makes an implicit claim: all top-N stocks have equal expected risk-adjusted return and zero pairwise correlation differences. Both assumptions are wrong.\n\nMore practically: top-N equal-weight ignores signal strength gradations. A stock ranked 1st (very strong signal) receives the same weight as a stock ranked 20th (weak signal). Rank-weighted sizing directly exploits signal strength differences and consistently outperforms equal-weight in the top decile.\n\nAdditionally, equal-weight with no sector constraints allows 80% sector concentration when signals cluster in one industry. This happened with momentum strategies in 2020 (tech) and 2022 (energy) — a sector rotation completely destroyed the strategy when it had no sector limits.",
+     yourTurn:"**Scenario**: Your signal ranks 100 stocks. You optimize a portfolio and observe:\n• Target weights: 60% of weight in 3 Technology stocks\n• Max weight per stock: 10% (enforced)\n• Sector constraint: none specified\n• Turnover penalty: none\n• Gross Sharpe: 1.4, Net Sharpe at 30 bps: 0.3\n\n1. Why is 60% weight in 3 stocks occurring despite a 10% per-stock cap?\n2. What is the likely cause of the gross-to-net Sharpe collapse?\n3. What two constraints would you add?\n\n**Answer**:\n1. No sector constraint allows full concentration in one sector — three tech stocks at 10% each = 30%, not 60%. If it is 60%, the per-stock cap is not being enforced (check CVXPY constraint definition) or there are 6 tech stocks each at 10%.\n2. Turnover penalty is absent — optimizer rebalances fully each month, generating ~150%+ annual turnover at 30 bps = ~4.5% annual cost drag.\n3. Add: (1) sector constraint: max 25–30% per sector, and (2) turnover penalty λ × ||w_new − w_old||₁ in the objective.",
+     synthesis:"**Week 7 — Key Takeaways**\n\n☑ Mean-variance is theoretically optimal but practically fragile — estimation errors in μ dominate\n☑ Minimum variance (ignore μ, minimize risk only) often produces better net-of-cost outcomes\n☑ Always include a turnover penalty in the optimizer objective — unconstrained optimizers destroy net returns\n☑ Sector constraints prevent concentration risk when signals cluster in one industry\n☑ Rank-weighted sizing exploits signal strength gradations that equal-weight ignores\n\n**Next**: Week 8 dissects what is actually driving portfolio returns — factor decomposition reveals whether you are generating genuine alpha or just taking on more systematic risk.",
+     equation:"Portfolio variance = wᵀΣw     |     Turnover cost = λ × ||w_new − w_old||₁     |     Risk contribution of asset i = wᵢ × (Σw)ᵢ"
+    }],
+    quiz:{id:'w07-quiz', questions:[
+      {id:'w07-q01', type:'multiple_choice', question:"Why does mean-variance optimization often underperform simpler alternatives in practice?", options:['Too computationally expensive','Small errors in expected return estimates produce dramatically different, often concentrated portfolios','Cannot handle constraints','Requires normally distributed returns'], correct:1, explanation:"The optimizer treats expected return estimates as precise inputs. But expected returns are extremely hard to estimate — errors are large relative to the signal. These errors get amplified into concentrated, unstable portfolios. Minimum variance sidesteps this by ignoring the noisy return estimates entirely."},
+      {id:'w07-q02', type:'scenario', scenario:"A strategy has Gross Sharpe 1.4 and Net Sharpe 0.2 at 25 bps round-trip costs. Annual turnover is 210%.", question:"What is the approximate annual cost drag, and what is the most direct fix?", options:['Cost drag ≈ 1%/yr; use cheaper broker','Cost drag ≈ 5.25%/yr; add a turnover penalty to the optimizer objective','Cost drag ≈ 0.25%/yr; costs are not the issue — signal has degraded','Cost drag ≈ 3%/yr; switch to a lower-frequency signal'], correct:1, explanation:"Annual cost drag = 210% turnover × 25 bps × 2 sides = 210% × 0.50% = 1.05% per round-trip × 2 = ~5.25%/yr. This is catastrophic. The direct fix is a turnover penalty term in the CVXPY objective: it forces the optimizer to balance signal capture against transaction costs endogenously."},
+      {id:'w07-q03', type:'multiple_choice', question:"Why does Ledoit-Wolf shrinkage consistently outperform sample covariance in portfolio optimization?", options:['It is more computationally efficient','It blends the noisy sample covariance with a structured target, reducing estimation error especially in the eigenstructure','It produces sparser weight vectors','It accounts for non-normality in returns'], correct:1, explanation:"For N=500 stocks with T=60 observations, the sample covariance has 125,250 parameters estimated from limited data. The eigenstructure is distorted — small eigenvalues underestimated, large ones overestimated. Ledoit-Wolf shrinks toward a structured target (e.g., identity) with optimal weighting, reducing estimation error and producing more stable out-of-sample portfolio weights."}
+    ]},
+    lab:{id:'w07-lab', objective:"Build a constrained portfolio optimizer.", checks:[{id:'w07-c01',text:'CVXPY problem defined with explicit objective and all constraints written out'},{id:'w07-c02',text:'Position limits enforced (max weight per stock, min weight = 0 for long-only)'},{id:'w07-c03',text:'Sector/industry constraints enforced (max 25–30% per sector)'},{id:'w07-c04',text:'Turnover penalty term included in objective — coefficient tuned'},{id:'w07-c05',text:'Output weights sum to 1.0 and satisfy all constraints — verified numerically'}], deliverable:"07_portfolio_optimizer.ipynb with auditable weight function"},
+    evidencePrompts:["Does constrained optimization outperform naive top-N on a net-of-costs basis?","How sensitive are output weights to small changes in signal inputs?","What is the optimal turnover penalty coefficient that maximizes net Sharpe?"]
+  },
+
+  wk8:{
+    mission:{objective:"Stress-test your portfolio against factor exposures, drawdown scenarios, and model drift. Define conditions under which you would disable the model.",output:"Risk limits document and model-disable rules.",failCondition:"Reporting portfolio results without examining factor exposures or stress-testing drawdown scenarios.",whatWouldChangeMind:"A clearly defined drawdown or exposure threshold that would trigger mandatory model review."},
+    whyItMatters:"A strategy with good average performance can still be catastrophic if it concentrates risk in a single factor that reverses sharply. Risk management means understanding your exposure sources before they blow up.",
+    lessons:[{id:'w08-l01', title:'Factor Decomposition: What Really Drives Returns', duration:'8 min', competency:'RISK',
+     content:"Factor regression decomposes portfolio returns into exposures to known systematic risks. Its purpose is to answer the most important question in quant research: how much of your strategy's return is genuine alpha versus compensation for known risk exposures?\n\n**Fama-French 5-Factor Model**\nr_portfolio = α + β_mkt×Mkt-RF + β_smb×SMB + β_hml×HML + β_rmw×RMW + β_cma×CMA + ε\n\nFactors (Kenneth French Data Library — free download):\n• Mkt-RF: excess market return — compensation for general equity market risk\n• SMB (Small Minus Big): size premium — small caps historically earn more than large caps\n• HML (High Minus Low): value premium — high book/market stocks vs. growth stocks\n• RMW (Robust Minus Weak): profitability premium — profitable vs. unprofitable firms\n• CMA (Conservative Minus Aggressive): investment premium — low-investment vs. high-investment firms\n\nAlpha (α) = intercept = annualized return unexplained by all five factors = potential skill\n\n**Why Factor Betas Matter for Capital Allocation**\nFactor exposures are compensated risks. If β_mkt = 1.4, you could replicate that market exposure with 1.4× leveraged index funds — no strategy needed. True alpha is only what remains after all these systematic compensations are subtracted. A strategy with α = 0 and β_mkt = 1.4 delivers the same expected return as levered index exposure — with strategy-specific risk on top.\n\n**Drawdown Regime Analysis**\nBeyond factor regression, decompose drawdowns by market regime:\n• Crisis periods (2008, 2020 COVID): does the strategy drawdown more than the market?\n• Low-volatility regimes vs. high-volatility regimes: does IC hold in both?\n• Rising rate environments: what is the interest rate factor sensitivity?",
+     mechanics:"# Factor Regression + Drawdown Analysis\nimport pandas as pd, numpy as np\nfrom scipy.stats import linregress\nimport statsmodels.api as sm\n\ndef factor_decompose(portfolio_returns, factor_returns, frequency='monthly'):\n  \"\"\"portfolio_returns, factor_returns: pd.DataFrame aligned by date\"\"\"\n\n  # 1. Align and compute excess returns\n  rf = factor_returns['RF']  # risk-free rate (from French data)\n  excess_port = portfolio_returns - rf\n  factor_cols = ['Mkt-RF','SMB','HML','RMW','CMA']\n  X = sm.add_constant(factor_returns[factor_cols])\n\n  # 2. OLS regression\n  model = sm.OLS(excess_port, X).fit()\n  alpha_monthly = model.params['const']\n  betas = model.params[factor_cols]\n\n  # 3. Annualize alpha\n  periods = 12 if frequency == 'monthly' else 252\n  alpha_annual = alpha_monthly * periods\n\n  # 4. Factor-explained return vs. alpha decomposition\n  factor_contribution = {f: betas[f] * factor_returns[f].mean() * periods\n                         for f in factor_cols}\n\n  return {'alpha_annual': alpha_annual,\n          'alpha_tstat': model.tvalues['const'],\n          'betas': betas.to_dict(),\n          'r_squared': model.rsquared,\n          'factor_contributions': factor_contribution}\n\ndef drawdown_by_regime(returns, market_returns):\n  # Identify bear market periods (market drawdown > 15%)\n  peak = market_returns.cummax()\n  dd_mkt = (market_returns - peak) / peak\n  crisis_mask = dd_mkt < -0.15\n  print('Bear regime performance:', returns[crisis_mask].mean() * 12)\n  print('Bull regime performance:', returns[~crisis_mask].mean() * 12)",
+     intuition:"If your strategy has market beta of 1.4 and momentum loading of 0.8, you are mostly being paid for taking on known risks — not generating new information. This matters because leveraged index exposure and momentum factor ETFs cost nearly nothing. Alpha is only the return that justifies your strategy's complexity and cost.\n\nThink of it as salary decomposition. Total compensation = base salary (beta-compensated risk) + performance bonus (true alpha). If the regression shows your entire return is base salary, the strategy is overpaying for market exposure in an expensive structure. A 5-factor alpha t-stat below 2.0 means you cannot statistically reject the hypothesis that your strategy has zero genuine skill.",
+     example:"**Factor Decomposition: Strategy with Apparent 18% CAGR**\n\nMonthly regression on Fama-French 5 factors (60 months):\n\nα (intercept): +0.08%/month = 0.96%/yr  [t-stat: 0.7, NOT significant]\nβ_mkt: 1.41  [t-stat: 11.2, highly significant]\nβ_smb: 0.38  [t-stat: 2.1]\nβ_hml: -0.22  [t-stat: -1.4, not significant]\nβ_rmw: 0.31  [t-stat: 1.8]\nβ_cma: -0.05  [t-stat: -0.3]\nR²: 0.87  (87% of return variance explained by factors)\n\nFactor attribution (annualized):\nMarket (1.41 × 12.3%): +17.3%\nSize (0.38 × 2.1%): +0.8%\nAll other factors: +0.2%\nAlpha: +0.96% (not statistically significant)\nTotal explained: ~18.3% ✓\n\nConclusion: the entire 18% CAGR is explained by high market beta and a small-cap tilt. True alpha ≈ 0. This strategy is levered small-cap index exposure, not genuine alpha generation.",
+     subtleVersion:"**Alpha t-Stat Decay and Overfitting**\n\nA strategy with a significant alpha t-stat in-sample will typically show lower t-stats out-of-sample, due to the same overfitting dynamic as IC. Lopez de Prado (2018) argues that the correct p-value threshold for a published alpha is not 5% (t > 2.0) but approximately 1% (t > 2.5) after adjusting for multiple testing across strategies tested during research.\n\n**Factor Model Choice Matters**\nFama-French 5-factor omits the momentum factor (UMD = Up Minus Down). A momentum strategy will show large positive alpha in the 5-factor model because the momentum exposure is not controlled. Adding the 6th factor (MOM from French's website) will absorb that apparent alpha. Always test robustness of alpha across different factor model specifications.\n\n**Conditional Factor Betas**: Factor betas are not stable across market regimes. β_mkt often rises during crises (flight to safety affects different stocks asymmetrically). Rolling 12-month factor regressions reveal whether your exposures are stable or regime-dependent.",
+     warning:"**Trap: Claiming Alpha Without Factor Adjustment**\n\nTrap: Comparing strategy return to market return and calling the difference 'alpha' — without running a factor regression.\n\nWhy it is invalid: if your strategy has β_mkt = 1.4, it should earn 40% more than the market's excess return by construction. A strategy earning 18% vs. a market that returned 12% actually underperformed a passive 1.4× levered index. The comparison to a 1.0× index makes this look like +6% alpha when the true 5-factor alpha is close to zero.\n\nSymptom: research reports that show 'alpha = strategy return − benchmark return' without controlling for factor exposures. This is not alpha — it is return after a single, possibly incorrect, benchmark comparison.\n\nFix: always run a multifactor regression. Require alpha t-stat > 2.0 (and ideally > 2.5 after multiple testing correction) before claiming skill-based performance.",
+     misconception:"**Misconception: 'High R² is bad — it means the strategy is just a factor fund'**\n\nHigh R² in the factor regression means the factor model explains most return variance — but it says nothing directly about alpha. A strategy with R² = 0.90 and statistically significant positive alpha is excellent: the factors capture the systematic risk, and the alpha is the genuine residual skill.\n\nWhat matters is the intercept (alpha) and its t-statistic, not R². A strategy with R² = 0.20 and alpha t-stat = 0.5 is worse than a strategy with R² = 0.85 and alpha t-stat = 2.8, despite the former having 'more unexplained variance.'\n\nLow R² just means the strategy takes on idiosyncratic risk that the factor model does not capture — which could be genuine skill or could be unpriced stock-specific noise.",
+     yourTurn:"**Scenario**: Factor regression results for your Week 7 portfolio (60 monthly observations):\n\nα: +0.31%/month [t-stat: 2.3]\nβ_mkt: 0.89, β_smb: 0.52, β_hml: 0.18, β_rmw: 0.44, β_cma: 0.07\nR²: 0.81\n\n1. Is the alpha statistically significant? What does this mean?\n2. What systematic risks are you taking on beyond market exposure?\n3. Would you report this as a successful strategy?\n\n**Answer**:\n1. t-stat 2.3 > 2.0 threshold — marginally significant. With 60 observations and a single pre-specified model, this is borderline. If you tested multiple variants, the threshold should be higher (~2.5). It is encouraging, not conclusive.\n2. Beyond market: meaningful small-cap tilt (β_smb = 0.52) and profitability tilt (β_rmw = 0.44). These are compensated risk factors — some of your return is from small-cap and quality premia, not pure skill.\n3. Cautiously yes — the alpha is marginally significant, R² = 0.81 is reasonable, and factor exposures are explicable. But extend the OOS period and test whether alpha persists before committing capital.",
+     synthesis:"**Week 8 — Key Takeaways**\n\n☑ Factor regression decomposes returns into beta-compensated risk vs. true alpha — run it before claiming outperformance\n☑ Alpha t-stat > 2.0 (pre-specified) or > 2.5 (post-search) required to reject the null of zero skill\n☑ High R² does not indicate a bad strategy — it means systematic risk is well-captured\n☑ Factor betas are not stable across regimes — run rolling regressions to check stability\n☑ Model-disable rules must be written before going live: drawdown threshold, factor exposure drift limit, IC decay trigger\n\n**Next**: Week 9 builds the AI analyst layer — with structured output schemas that enforce evidence grounding at every step.",
+     equation:"True alpha = r_portfolio − (β_mkt×Mkt-RF + β_smb×SMB + β_hml×HML + β_rmw×RMW + β_cma×CMA)"
+    }],
+    quiz:{id:'w08-quiz', questions:[
+      {id:'w08-q01', type:'scenario', scenario:"Your strategy has 18% CAGR. Factor regression: β_mkt=1.4, β_momentum=0.8, both significant. Market returned 12%.", question:"What is the primary implication?", options:['Excellent — 18% >> 12%','True alpha may be zero after adjusting for factor exposures','Beta 1.4 is too low — use more leverage','Momentum loading invalidates the strategy'], correct:1, explanation:"With β_mkt=1.4, expected return from market beta alone ≈ 16.8% (= 1.4 × 12%). The momentum loading explains most of the remainder. True 5-factor alpha is statistically indistinguishable from zero. The entire 18% CAGR is compensated systematic risk, not skill."},
+      {id:'w08-q02', type:'multiple_choice', question:"What is the correct interpretation of a Fama-French 5-factor regression R² = 0.87?", options:['The strategy has 87% alpha','87% of return variance is explained by the five systematic factors — does not determine alpha','The strategy is 87% correlated with the market','Low R² would be better — high R² means no diversification'], correct:1, explanation:"R² measures how much of the return variance the factor model explains. It says nothing about whether alpha is positive, negative, or zero. A strategy with R²=0.87 and alpha t-stat=2.5 is excellent. A strategy with R²=0.15 and alpha t-stat=0.3 is poor. Focus on the alpha intercept and its t-statistic, not R²."},
+      {id:'w08-q03', type:'multiple_choice', question:"Why do rolling 12-month factor betas provide more useful information than a single full-period beta estimate?", options:['Rolling betas have less estimation error due to more data','Rolling betas reveal regime-dependent changes in factor exposure that a static estimate hides','Rolling betas are required by SEC regulation','Rolling betas use more recent data which is always more accurate'], correct:1, explanation:"Factor betas change across market regimes. A momentum strategy may have β_mkt = 0.8 in normal markets and β_mkt = 1.5 during crashes (momentum crashes are well-documented). A single 5-year average hides this variation. Rolling estimates reveal whether risk characteristics are stable or whether the strategy takes on dramatically more market risk during the periods when you can least afford it."}
+    ]},
+    lab:{id:'w08-lab', objective:"Build a risk dashboard and define model-disable rules.", checks:[{id:'w08-c01',text:'Factor regression completed using French 5-factor data (French library download)'},{id:'w08-c02',text:'Alpha t-stat computed and documented (threshold: > 2.0 for pre-specified, > 2.5 for post-search)'},{id:'w08-c03',text:'Drawdown decomposed by market regime (crisis vs. bull, pre-defined dates)'},{id:'w08-c04',text:'Rolling 12-month factor betas plotted to check stability'},{id:'w08-c05',text:'Model-disable rules written: drawdown threshold, factor drift limit, IC decay trigger'}], deliverable:"08_risk_and_drift.ipynb + risk limits document"},
+    evidencePrompts:["What is the strategy's true alpha after factor adjustment? Is it statistically significant?","Under what stress scenario does performance deteriorate most severely?","Are factor betas stable across all subperiods, or regime-dependent?"]
+  },
+
+  wk9:{
+    mission:{objective:"Build an AI analyst that produces research memos grounded in verifiable evidence — with mandatory citation to specific filing sections.",output:"5 AI research memos graded against human-verified filing facts.",failCondition:"Accepting an AI memo as valid when claims cannot be traced to specific accession numbers.",whatWouldChangeMind:"Consistent above-60% accuracy on verifiable factual questions using your pipeline."},
+    whyItMatters:"The Finance Agent Benchmark showed best AI models answer only ~47% of expert SEC questions correctly. AI analysts are useful for scale — but they require mandatory citation and human oversight to be trustworthy.",
+    lessons:[{id:'w09-l01', title:'Structured Outputs and Evidence Contracts', duration:'9 min', competency:'RESEARCH',
+     content:"Free-form LLM answers to financial questions may be confident, fluent, and wrong simultaneously. An AI analyst without a strict output contract is an unauditable system — you cannot distinguish accurate analysis from confident hallucination.\n\n**The Evidence Contract**\nEvery claim output by the system must carry mandatory evidence fields. No evidence = rejected claim. This is enforced at the schema level, not as a guideline:\n\n{\n  'claim': string,\n  'evidence_ids': [string],     // REQUIRED — empty array = claim auto-rejected\n  'confidence': 'low'|'medium'|'high',\n  'uncertainties': [string],    // what the LLM is not sure about\n  'unanswered_questions': [string]  // what it could not find evidence for\n}\n\n**System Prompt Contract**\nThe LLM's system prompt must include hard constraints:\n'You may ONLY make factual claims that are directly supported by the document chunks provided. For EVERY factual claim, you MUST cite at least one chunk_id. If you cannot find supporting evidence for a claim in the provided chunks, you MUST explicitly state the evidence is absent — do NOT generate a claim without evidence.'\n\n**Why 47% Accuracy on Expert SEC Questions?**\nThe Finance Agent Benchmark (2024) evaluated leading LLMs on expert-level SEC research questions. Best models achieved ~47% accuracy — barely above chance for 4-option questions. The failure modes were:\n1. Retrieval failure: relevant chunk not retrieved, model generated from training data\n2. Temporal confusion: model conflated 2021 filing data with 2019 filing data\n3. Hallucinated numbers: model invented precise financial figures that sounded plausible\n4. Reasoning errors: retrieved correct evidence but drew wrong analytical conclusions\n\nMandatory citations expose failure modes 1 and 3 immediately. Modes 2 and 4 require human audit.",
+     mechanics:"# AI Research Analyst with Evidence Contract\nfrom anthropic import Anthropic\nimport json\n\nclient = Anthropic()\n\nOUTPUT_SCHEMA = {\n  'type': 'object',\n  'required': ['claims', 'uncertainties', 'unanswered_questions'],\n  'properties': {\n    'claims': {\n      'type': 'array',\n      'items': {\n        'type': 'object',\n        'required': ['claim_text', 'evidence_ids', 'confidence'],\n        'properties': {\n          'claim_text': {'type': 'string'},\n          'evidence_ids': {'type': 'array', 'items': {'type': 'string'},\n                           'minItems': 1},  # enforce: at least 1 citation\n          'confidence': {'enum': ['low', 'medium', 'high']}\n        }\n      }\n    },\n    'uncertainties': {'type': 'array', 'items': {'type': 'string'}},\n    'unanswered_questions': {'type': 'array', 'items': {'type': 'string'}}\n  }\n}\n\ndef analyze_company(company, retrieved_chunks, question):\n  chunk_context = '\\n\\n'.join(\n    f'[{c[\"chunk_id\"]}] {c[\"text\"]}' for c in retrieved_chunks\n  )\n  messages = [{\n    'role': 'user',\n    'content': f'Research question: {question}\\n\\nAvailable evidence:\\n{chunk_context}'\n  }]\n\n  response = client.messages.create(\n    model='claude-haiku-4-5-20251001',\n    max_tokens=2048,\n    system='You are a financial analyst. Only make claims directly supported by provided chunks. Every claim MUST cite at least one chunk_id in evidence_ids. If evidence is absent, state it in unanswered_questions.',\n    messages=messages\n  )\n  # Parse and validate — reject any claim with empty evidence_ids\n  result = json.loads(response.content[0].text)\n  result['claims'] = [c for c in result.get('claims',[]) if c.get('evidence_ids')]\n  return result",
+     intuition:"A claims-based analyst without citations is like a lawyer who argues from memory without looking at the brief. They can make a compelling case that is completely disconnected from the actual statute. Mandatory citation forces the model to open the brief first — and then requires a specific page number.\n\nThe deeper issue is that LLMs trained on financial text have memorized vast amounts of information about public companies. They can produce detailed, numerically precise analysis of Apple, Microsoft, or Amazon without ever consulting a filing — because this information exists in their training data from news articles, analyst reports, and earnings summaries. Mandatory citation makes this memorization visible: if the chunk IDs cited do not contain the claimed information, the claim is fabricated regardless of its plausibility.",
+     example:"**Same Question — Constrained vs. Unconstrained Output**\n\nQuestion: 'What supply chain risks did Apple disclose in its FY2022 annual report?'\n\nUNCONSTRAINED (dangerous):\n'Apple disclosed significant supply chain concentration risk related to single-source suppliers for key components, with approximately 98% of manufacturing in Asia...'\nNo citation — may be training data memorization, may be from wrong year\n\nCONSTRAINED (required):\n{\n  'claims': [{\n    'claim_text': 'Apple disclosed concentration risk from geographic manufacturing in Asia',\n    'evidence_ids': ['0000320193-22-000108-1A-chunk23'],\n    'confidence': 'high'\n  }],\n  'uncertainties': ['Exact supplier count not stated in retrieved chunks'],\n  'unanswered_questions': ['Specific components at risk — not found in top-5 retrieved chunks']\n}\nVerifiable: open accession 0000320193-22-000108, Item 1A, find chunk 23.",
+     subtleVersion:"**Automated Fact Verification (Entailment Checking)**\n\nAfter generating structured output, you can run automated fact verification using natural language inference (NLI) models. The NLI model takes the claim_text and the cited chunk text as inputs and classifies: 'entails' / 'neutral' / 'contradicts.'\n\nAny claim marked 'contradicts' or 'neutral' by the NLI model failed the citation check — the cited chunk does not support the claim. This catches cases where the LLM cited a real chunk but misread or hallucinated its content.\n\nModels for NLI: cross-encoder/nli-deberta-v3-small (fast), or zero-shot classification via a larger LLM ('Does the following passage support this claim? Answer yes or no.').\n\n**Confidence Calibration**: High-confidence claims should be correct more often than low-confidence claims. If your system's high-confidence claims are correct 50% of the time and low-confidence claims are correct 48% of the time, confidence is not calibrated. Measure calibration across your 25+ audit questions and tune the system prompt if needed.",
+     warning:"**Trap: Trusting LLM Self-Assessment of Confidence**\n\nTrap: Using the model's stated confidence ('high confidence: Apple grew revenue 24%') as a proxy for claim accuracy. High LLM confidence has essentially zero correlation with factual accuracy on specific financial figures.\n\nWhy: LLMs are trained to produce fluent, decisive-sounding text. Confidence language is a stylistic register, not an epistemic signal. A model will state '24.3% revenue growth (high confidence)' with identical stylistic certainty whether the number came from a retrieved filing or from training-data hallucination.\n\nDetect: audit high-confidence claims in your test set. If high-confidence accuracy is not materially above low-confidence accuracy, confidence is noise.\n\nFix: treat confidence as a coarse filter only. All claims, regardless of stated confidence, must carry chunk citations. Accuracy must be measured empirically against source documents.",
+     misconception:"**Misconception: 'The LLM will naturally stay within provided documents'**\n\nWithout an explicit evidence contract in the system prompt, LLMs will blend retrieved chunk content with training data associations. The model does not have a clear conceptual distinction between 'what I found in the provided documents' and 'what I know about this company from training.' Both feel like memory retrieval from the model's perspective.\n\nThis is not a bug — it is how language model inference works. Suppressing training data requires explicit instruction ('you may ONLY use the provided document chunks') AND validation via citation requirements. Even with explicit instructions, some training-data leakage occurs. The citation requirement is what makes it detectable.",
+     yourTurn:"**Scenario**: Your AI analyst produces this output for a question about a company's debt maturity schedule:\n\n{\n  'claims': [{\n    'claim_text': '$2.3B in debt matures within 12 months',\n    'evidence_ids': ['0001234-23-00001-MD&A-chunk15'],\n    'confidence': 'high'\n  }],\n  'uncertainties': []\n}\n\nYou open the cited chunk and it reads: 'The company maintains a $2.3B revolving credit facility, none of which was drawn at year-end.'\n\n1. Is this claim valid? What error type is this?\n2. What does it imply about confidence calibration?\n3. How would you improve the system to catch this automatically?\n\n**Answer**:\n1. Invalid. The cited chunk describes a revolving credit facility (available credit, not debt), not a debt maturity obligation. This is a reasoning error — the chunk was retrieved correctly, but the model misinterpreted its meaning.\n2. High-confidence claim is wrong — confidence is not calibrated. This should be flagged as a low-confidence claim or as 'evidence does not directly support' by the model.\n3. Add an NLI entailment check: input (claim, chunk_text) → does chunk entail claim? This would flag 'neutral' — revolving facility ≠ debt maturity — and require human review.",
+     synthesis:"**Week 9 — Key Takeaways**\n\n☑ Evidence contracts enforce mandatory citations at the schema level — empty evidence_ids means auto-rejected claim\n☑ LLM confidence language has near-zero correlation with factual accuracy — treat it as metadata, not truth signal\n☑ Finance Agent Benchmark: ~47% accuracy for best models on expert SEC questions — human oversight is not optional\n☑ Four failure modes: retrieval failure, temporal confusion, hallucinated numbers, reasoning errors\n☑ Automated entailment checking catches reasoning errors (wrong interpretation of correctly retrieved chunks)\n\n**Next**: Week 10 builds the adversarial layer — a bear agent that actively searches for contradicting evidence to challenge every bull claim.",
+     equation:"Claim validity = (evidence_ids.length > 0) AND entailment(claim, cited_chunks) = 'entails'"
+    }],
+    quiz:{id:'w09-quiz', questions:[
+      {id:'w09-q01', type:'multiple_choice', question:"The Finance Agent Benchmark found best AI models correctly answered approximately what fraction of expert SEC research questions?", options:['85%','67%','47%','29%'], correct:2, explanation:"~47% — barely above chance for 4-option questions. This is why AI analysts require human oversight and mandatory citation. High accuracy on general benchmarks does not transfer to reliable SEC financial research."},
+      {id:'w09-q02', type:'scenario', scenario:"Your AI analyst cites chunk_id 'accession-1A-chunk5' for the claim 'revenue grew 24% YoY.' You open the chunk and it contains the text: 'Net sales increased from $8.2B in 2021 to $10.2B in 2022.'", question:"Is this claim valid? What type of verification succeeded?", options:['Invalid — the exact percentage must appear in the chunk text','Valid — the chunk entails the claim ($10.2B/$8.2B - 1 = 24.4%)','Invalid — chunk must state the percentage explicitly','Valid — any revenue citation makes the claim valid'], correct:1, explanation:"$10.2B / $8.2B − 1 = 24.4% — the claim is arithmetically derivable from the cited chunk. The entailment check passes: the chunk logically entails the percentage claim. However, note this requires the verifier to compute the arithmetic — automated entailment models may classify this as 'neutral' without reasoning support."},
+      {id:'w09-q03', type:'multiple_choice', question:"Why does requiring 'evidence_ids' as a required schema field (rather than a prompt instruction) provide stronger guarantees?", options:['Schema validation is faster than prompt interpretation','A required schema field is validated programmatically before the output is accepted — a prompt instruction may be ignored by the model under certain conditions','Schema fields are encrypted and more secure','Prompt instructions are not supported by Anthropic models'], correct:1, explanation:"Schema validation (via JSON Schema, tool definitions, or structured output parsing) enforces constraints at the API layer — the output is rejected or re-requested if evidence_ids is missing or empty. A prompt instruction ('you must cite evidence') can be overridden by the model when it generates a high-confidence answer from training memory. Programmatic validation does not rely on the model's compliance."}
+    ]},
+    lab:{id:'w09-lab', objective:"Build and audit an AI research analyst.", checks:[{id:'w09-c01',text:'Structured output schema defined with evidence_ids as required field (minItems: 1)'},{id:'w09-c02',text:'System prompt evidence contract written — LLM restricted to supplied chunks with explicit fallback to unanswered_questions'},{id:'w09-c03',text:'5 research memos generated for universe companies using RAG retrieval + structured output'},{id:'w09-c04',text:'Each memo audited: every claim verified against cited chunk text'},{id:'w09-c05',text:'Accuracy rate and error type breakdown documented (hallucination vs. retrieval failure vs. reasoning error)'}], deliverable:"09_llm_analyst.ipynb + 5 audited research memos with accuracy analysis"},
+    evidencePrompts:["What accuracy rate did your analyst achieve on verifiable factual questions?","Which error type was most common: hallucination, retrieval failure, or reasoning error?","How does accuracy differ between high-confidence and low-confidence claims?"]
+  },
+
+  wk10:{
+    mission:{objective:"Build a multi-agent adversarial committee. Boss Fight: introduce misleading evidence — does the bear agent catch it?",output:"Agent evaluation matrix and escalation rules.",failCondition:"Claiming multi-agent system works without testing it against deliberately planted misleading inputs.",whatWouldChangeMind:"Bear agent correctly identifying ≥80% of deliberately planted misleading claims."},
+    whyItMatters:"The Bull vs. Bear principle is the most important safeguard against LLM overconfidence. A single agent evaluating a company will nearly always find reasons to be bullish — especially on media-covered names.",
+    lessons:[{id:'w10-l01', title:'Why AI Is Systematically Bullish', duration:'8 min', competency:'RESEARCH',
+     content:"A single LLM agent evaluating a company will nearly always find reasons to be optimistic. This is not a calibration failure — it is a structural property of how language models learn from text.\n\n**The Media Coverage Bias**\nLLMs are trained on text corpora. Companies with extensive positive media coverage (AAPL, MSFT, NVDA, AMZN) generate vastly more training text than obscure small-caps. The model learns to associate 'extensive coverage' and 'confident analyst language' with 'good investment' — not because coverage predicts returns, but because positive coverage is more prevalent in training data than negative coverage.\n\nCarlin et al. (NBER 2026) empirically confirmed this: LLM-managed portfolios concentrate in large-cap, momentum-driven, media-visible names with no statistically significant risk-adjusted alpha after factor adjustment.\n\n**The Correlated Failure Problem**\nThe obvious solution — use two agents, have one be bullish and one bearish — fails when both agents use the same foundation model. Shared training data means shared biases, shared blind spots, and shared failure modes. When both agents fail on a question, they fail for the same reason, in the same direction.\n\nA 'bear agent' created by adding 'be critical' to the system prompt is not a genuinely independent perspective. It is the same model running the same associations with a different stylistic instruction. Under adversarial conditions (misleading evidence planted in retrieved chunks), both agents will likely be fooled by the same manipulation.\n\n**True Adversarial Design**\nGenuine adversarial diversity requires structural differences in evidence targeting:\n• Bull agent: retrieve chunks that discuss growth, competitive advantage, management guidance, future outlook\n• Bear agent: retrieve chunks from risk factors, debt schedules, regulatory filings, competitor analyses, short-seller reports\n• Neither agent is given the other's retrieved chunks — they work from different evidence pools\n• A synthesis step then reconciles claims with contradicting evidence",
+     mechanics:"# Bull-Bear Committee Design\ndef build_bull_agent(retriever, llm_client):\n  def analyze(company, query):\n    # Bull agent retrieves growth/positive evidence\n    bull_query = f'{query} growth opportunity competitive advantage guidance'\n    chunks = retriever.retrieve(bull_query, company, k=5)\n    return run_agent(llm_client, chunks, stance='bull',\n      system_suffix='Search for evidence of competitive advantage, growth drivers, and management execution.')\n  return analyze\n\ndef build_bear_agent(retriever, llm_client):\n  def analyze(company, query):\n    # Bear agent retrieves risk/negative evidence — DIFFERENT query\n    bear_query = f'{query} risk factor debt regulatory competition lawsuit'\n    chunks = retriever.retrieve(bear_query, company, k=5)\n    # Also retrieve from competitor filings, not just target company\n    comp_chunks = retriever.retrieve(bear_query, company + '_competitors', k=3)\n    return run_agent(llm_client, chunks + comp_chunks, stance='bear',\n      system_suffix='Search for evidence of risks, vulnerabilities, execution failures, and disconfirming data.')\n  return analyze\n\ndef committee_decision(bull_result, bear_result, human_gate):\n  # Identify contradicting claims between bull and bear\n  contradictions = find_contradictions(bull_result, bear_result)\n  if contradictions:\n    return human_gate.review(bull_result, bear_result, contradictions)\n  else:\n    return {'consensus': True, 'result': bear_result}  # default to bear on consensus",
+     intuition:"Asking the same model to argue both sides of a trade is like asking one person to debate themselves in different costumes. The underlying beliefs — learned from identical training data — are identical. The bear costume produces adversarial-sounding language but not genuinely adversarial analysis.\n\nTrue adversarial research works differently. A short-seller building a bear case on a company does not read the company's own press releases. They dig into supplier filings, read customer complaints, track insider selling, and stress-test the accounting. A genuine bear agent should be doing the equivalent: retrieving from a fundamentally different document set than the bull agent, not just applying a negative framing to the same documents.",
+     example:"**Planted Misinformation Test — Does the Bear Agent Catch It?**\n\nTest case: Company ACME Corp\nPlanted misleading evidence: a chunk that says 'Revenue grew 34% YoY in Q4 2022' (actual filing shows 14%)\n\nBull agent (retrieves growth-themed chunks):\n'ACME demonstrated strong revenue acceleration, with Q4 2022 growth of 34% YoY [chunk_id: acme-planted-fake], outpacing industry average...'\nResult: FOOLED — cited the planted chunk with high confidence\n\nBear agent (retrieves risk-themed chunks — different retrieval query):\nBear query does not retrieve the planted chunk (it is labeled as a growth fact)\nBear agent does not find the planted evidence in its evidence pool\nResult: MISSED the plant — not fooled, but did not catch it either\n\nCorrect adversarial architecture would have the bear agent explicitly search for claims in the bull report and attempt to find contradicting evidence for each one.",
+     subtleVersion:"**Red-Teaming the Evidence Pool**\n\nBeyond planted individual facts, adversarial testing should include planted coherent narratives — internally consistent but factually wrong stories that reinforce a bull or bear thesis. A fake narrative across 5 planted chunks is much harder to detect than a single wrong number because each chunk appears to support the others.\n\nEffective red-team: create a synthetic filing section that is plausible but describes events that did not happen (merger announcement, regulatory approval, product launch). Test whether both agents cite this synthetic evidence as high-confidence.\n\n**Escalation Rules Must Be Pre-Defined**\nThe point of the bull-bear committee is not to reach consensus — it is to identify disagreements that require human judgment. Escalation rules must be written before the system runs in production:\n• Any claim with contradicting evidence from the bear agent → escalate\n• Any high-confidence bull claim with evidence_ids ∩ bear_evidence_ids = ∅ → escalate\n• Any contradiction in financial figures > 5% → escalate automatically",
+     warning:"**Trap: Calling a 'Be Critical' Prompt a Bear Agent**\n\nTrap: Building a 'bear agent' by adding 'be critical of this company' to the system prompt of the same LLM that runs the bull agent, then claiming the system is adversarial.\n\nWhy it is insufficient: the model's underlying associations are unchanged. When processing the same retrieved chunks, the 'critical' prompt produces caveats and qualifications — but the fundamental bias toward prominent, media-covered companies persists. Under adversarial conditions (planted positive evidence), the 'critical' version will still be fooled if the bull version is fooled.\n\nDetect: run the planted evidence test. If both agents cite the planted claim, the adversarial design has failed.\n\nFix: build structural asymmetry into the evidence retrieval step, not just the generation step. Asymmetric evidence pools produce genuinely different perspectives.",
+     misconception:"**Misconception: 'Two agents produce twice the confidence'**\n\nTwo agents using the same foundation model and similar evidence pools produce approximately the same information, not 2× the information. Their agreement is correlated confirmation, not independent validation.\n\nConsider the mathematical analogy: if two weather sensors are installed next to each other and both read 72°F, you have not confirmed the temperature more strongly than with one sensor — you have confirmed that both sensors work. Independent measurement requires independent instruments measuring independently.\n\nFor AI research committees, independence requires: different retrieval strategies, access to different document types, potentially different model families, and systematic tracking of when they agree vs. disagree (and which was right in retrospect).",
+     yourTurn:"**Scenario**: You plant 10 misleading facts across your test company's evidence pool:\n• 5 bullish misinformation items (inflated growth figures)\n• 5 bearish misinformation items (invented regulatory problems)\n\nResults:\n• Bull agent cited 4 of 5 bullish plants (80% fooled rate)\n• Bear agent cited 0 of 5 bearish plants (0% fooled — did not retrieve them)\n• Bear agent caught 1 of 5 bullish plants (20% catch rate)\n\n1. What does the 0% bear-agent-fooled rate actually tell you?\n2. Why is the 20% catch rate the more important metric?\n3. What architectural change would most improve the system?\n\n**Answer**:\n1. The bear agent simply did not retrieve the bearish plants — they were not in its evidence pool. Not being fooled by evidence you never see is not robustness. The bear retrieval is too narrow.\n2. 20% catch rate means 80% of dangerous bull misinformation reaches the human gate without a challenge. That is the failure that matters for investment safety.\n3. Add a cross-checking step: after the bull agent produces citations, have the bear agent explicitly search for contradicting evidence for each cited chunk — not just retrieve from its default evidence pool. This transforms the bear from passive to active adversarial.",
+     synthesis:"**Week 10 — Key Takeaways**\n\n☑ LLMs are structurally bullish — media coverage bias is trained into the weights, not a prompt-level issue\n☑ Same-model adversarial prompting produces correlated errors, not independent perspectives\n☑ True adversarial diversity requires asymmetric evidence retrieval — different document pools, not different prompts\n☑ The bull-bear catch rate on planted evidence is the performance metric — agreement rate is not\n☑ Pre-define escalation rules before production: contradiction → human review, always\n\n**Next**: Week 11 integrates every component into a complete platform — with the human approval gate as the most important architectural component.",
+     equation:null
+    }],
+    quiz:{id:'w10-quiz', questions:[
+      {id:'w10-q01', type:'multiple_choice', question:"Why do two agents using the same foundation model produce correlated rather than independent errors?", options:['They share API rate limits','They share learned associations from identical training data','They output identical text','They use the same hardware'], correct:1, explanation:"Shared training data means shared biases, blind spots, and failure modes. When both agents fail on a question, they typically fail for the same reason. True adversarial diversity requires structurally different evidence-seeking approaches — not just different prompts on the same model."},
+      {id:'w10-q02', type:'scenario', scenario:"Your bear agent has a 15% catch rate on planted misleading bull-case evidence. Your bull agent has an 80% fooled rate by the same planted evidence.", question:"What does this combination reveal, and what is the primary fix?", options:['The bear agent is working — 15% is statistically significant','The system fails: most bull-case misinformation reaches the human gate without challenge. The fix is asymmetric evidence retrieval — bear explicitly searches for contradictions to bull claims.','The planted evidence test is too hard — real evidence would not fool the system','The bull agent should be retrained on more skeptical data'], correct:1, explanation:"15% catch rate means 85% of dangerous misinformation gets through. The bear agent is not retrieving the planted evidence because it uses a different retrieval query. Adding a contradiction-checking step — where the bear agent explicitly retrieves evidence against each bull citation — transforms the architecture from passive to genuinely adversarial."},
+      {id:'w10-q03', type:'multiple_choice', question:"When should a bull-bear committee result trigger automatic human escalation?", options:['When both agents agree — consensus may reflect shared bias','When agents disagree on any factual claim, or when bull evidence_ids and bear evidence_ids are entirely disjoint','Only when the financial figures differ by more than 50%','Human review is optional — the committee is sufficient for portfolio decisions'], correct:1, explanation:"Disagreement on factual claims means the evidence is genuinely ambiguous or misleading — exactly the conditions requiring human judgment. Completely disjoint evidence pools means the two agents were never looking at overlapping information, and their apparent agreement or disagreement is not actually about the same evidence. Both conditions are escalation triggers."}
+    ]},
+    lab:{id:'w10-lab', objective:"Build and test a bull-bear agent committee against planted misinformation.", checks:[{id:'w10-c01',text:'Bull agent implemented: retrieves growth/opportunity chunks, produces structured output with evidence_ids'},{id:'w10-c02',text:'Bear agent implemented: retrieves risk/vulnerability chunks from DIFFERENT retrieval query (not same as bull)'},{id:'w10-c03',text:'10 test cases with planted misleading evidence (5 bullish plants, 5 bearish plants)'},{id:'w10-c04',text:'Bear agent catch rate and bull agent fooled rate measured separately'},{id:'w10-c05',text:'Escalation rules defined and documented: contradiction → human review, high-confidence + disjoint evidence → escalate'}], deliverable:"10_agent_red_team.ipynb + agent evaluation matrix"},
+    evidencePrompts:["What percentage of planted misleading claims did the bear agent catch?","What systematic patterns exist in what the bear agent misses?","Is there evidence of correlated failure (both agents fooled by same planted items)?"]
+  },
+
+  wk11:{
+    mission:{objective:"Integrate all components into a working end-to-end pipeline with a human approval gate between AI recommendations and portfolio execution.",output:"Platform v1.0: ticker → evidence → quant → AI → human gate → weights → audit log.",failCondition:"Skipping the human approval gate or allowing AI agents to directly control portfolio weights.",whatWouldChangeMind:"An audit log showing the human gate prevented at least one problematic AI recommendation."},
+    whyItMatters:"Integration is where complexity compounds. The human gate is the most important safeguard — the moment where probabilistic AI recommendations meet deterministic execution and human judgment.",
+    lessons:[{id:'w11-l01', title:'The Deterministic Boundary', duration:'7 min', competency:'RESEARCH',
+     content:"The most important architectural principle in AI-assisted investing: agents analyze. Deterministic code controls weights and execution. These two layers must never be merged.\n\n**The Two-Layer Architecture**\n\nProbabilistic (AI) layer:\n• LLM analysts and RAG retrieval systems\n• ML cross-sectional rankers\n• Bull-bear agent committee\nThese components produce recommendations, explanations, and evidence citations. They are fundamentally uncertain — they can be wrong, hallucinate, or fail in systematic ways. They should NEVER directly set portfolio weights.\n\nDeterministic (execution) layer:\n• Portfolio optimizer (CVXPY — same inputs always produce same outputs)\n• Position sizing and constraint enforcement\n• Order generation and audit logging\nThis code must be: auditable, reproducible, version-controlled, constraint-enforcing, and independent of any LLM call.\n\n**The Human Approval Gate**\nThe gate sits between the AI recommendation layer and the deterministic execution layer. Its job:\n1. Present AI recommendations with confidence levels and evidence citations\n2. Show constraint status, risk limits, and factor exposures\n3. Surface any bull-bear committee contradictions\n4. Require explicit human approval before execution\n5. Log the full decision context: timestamp, AI recommendation, evidence IDs, human decision\n\n**What the Gate Prevents**\nThe audit log is not bureaucracy — it is the primary mechanism for detecting AI systematic failures. When you review 3 months of logged decisions, you will see patterns: does the AI consistently recommend overweight in sectors where the bear agent found contradicting evidence? Does it recommend ignoring its own high-stated uncertainties? The gate gives you data about the AI's failure modes.",
+     mechanics:"# Platform Integration — Data Flow\nclass ResearchPlatform:\n  def __init__(self, edgar_store, rag_pipeline, ml_ranker, optimizer, audit_log):\n    self.store = edgar_store\n    self.rag = rag_pipeline\n    self.ranker = ml_ranker\n    self.optimizer = optimizer\n    self.log = audit_log\n\n  def analyze_ticker(self, ticker, query_date):\n    # LAYER 1: Data (deterministic — PIT-correct EDGAR queries)\n    filings = self.store.query(ticker, as_of=query_date)\n\n    # LAYER 2: Quantitative signal (deterministic)\n    signal_score = self.ranker.score(ticker, features_as_of=query_date)\n\n    # LAYER 3: AI analysis (probabilistic)\n    chunks = self.rag.retrieve(ticker, filings, k=5)\n    bull = build_bull_agent()(chunks, query=f'{ticker} investment thesis')\n    bear = build_bear_agent()(chunks, query=f'{ticker} risk assessment')\n    contradictions = find_contradictions(bull, bear)\n\n    # LAYER 4: Human gate (REQUIRED — never skip)\n    recommendation = HumanGate().present(\n      ticker=ticker, signal=signal_score,\n      bull_case=bull, bear_case=bear,\n      contradictions=contradictions\n    )  # blocks until human approves or rejects\n\n    # LAYER 5: Deterministic execution (only if human approved)\n    if recommendation.approved:\n      weights = self.optimizer.solve(signal_scores, constraints)\n      self.log.record(ticker, query_date, recommendation, weights)  # immutable\n    return weights",
+     intuition:"A surgeon's diagnostic tools inform the surgeon who then performs the procedure. The diagnostic images, lab results, and AI-assisted pattern recognition are probabilistic — they can produce false positives and must be interpreted by a trained clinician. The tools never hold the scalpel. This is not a limitation on AI capability — it is an acknowledgment that consequences are asymmetric: a wrong diagnosis followed by human clinical judgment can be caught and corrected; a wrong diagnosis that directly controls the procedure cannot.\n\nThe same asymmetry applies to investment management. An AI recommendation that goes through human review and is rejected costs nothing — you simply do not trade. An AI recommendation that directly executes a position can generate real losses, regulatory violations, or concentration risk that compounds before anyone notices.",
+     example:"**A Full End-to-End Flow: One Ticker**\n\nInput: MSFT, query_date = 2024-01-15\n\nLayer 1 — Data: latest 10-K filed 2023-07-27, latest 10-Q filed 2023-10-26\nLayer 2 — Signal: ML ranker score 0.78 (78th percentile cross-sectional rank)\nLayer 3 — AI analysis:\n  Bull: 'Strong Azure growth trajectory, diversified revenue [chunk_id: 000...8-q2-chunk31]'\n  Bear: 'Increased capex for AI infrastructure raises FCF concerns [chunk_id: 000...8-1A-chunk12]'\n  Contradiction: Azure revenue growth figure in bull case (18%) not confirmed by bear agent retrieval\nLayer 4 — Human gate: presents all above + proposed weight 4.2%\n  Human: approves with note 'Azure figure needs verification — reduce to 3.0% until confirmed'\nLayer 5 — Execution: optimizer runs with modified constraint, produces weights summing to 1.0\nAudit log: timestamp 2024-01-15 14:32:07, ticker MSFT, AI proposed 4.2%, human approved 3.0%, evidence_ids listed",
+     subtleVersion:"**Audit Log as Feedback Signal**\n\nThe audit log is not just compliance documentation — it is a supervised dataset for improving the AI recommendation layer. For each human decision:\n• Human approved AI recommendation → eventual forward return is a label for 'good recommendation'\n• Human rejected AI recommendation → eventual return on the rejected trade (if tracked) is a label for 'poor recommendation'\n\nAfter 6 months of operation, you have a labeled dataset of (AI recommendation, human decision, forward return). This enables:\n1. Calibration analysis: does AI high-confidence correlate with better forward returns?\n2. Error pattern detection: which types of recommendations are consistently rejected and subsequently correct (human over-rides AI incorrectly)?\n3. Systematic bias detection: does the AI over-recommend one sector or size tier?\n\n**Versioning Discipline**: Every code change to any component (ranker, optimizer, prompt) must be logged with a version number. The audit log must record which version produced each recommendation. Without this, you cannot attribute outcome changes to specific system modifications.",
+     warning:"**Trap: Treating the Human Gate as Optional During Development**\n\nTrap: Removing or bypassing the human gate 'for speed' during development or paper-trading, with the intention of adding it back before going live.\n\nWhy it is dangerous: skipping the gate during paper trading means you have no audit data about AI recommendation quality before committing to live operation. You also build habits and mental models that do not include the gate. And the code paths that implement human-gated decisions are untested.\n\nBeyond process discipline: the value of the gate is the data it generates. Every human decision, every override, every flagged contradiction is a labeled data point about your system's failure modes. A paper portfolio run without the gate generates no such data.\n\nFix: implement the gate from day one, even for paper trading. The gate can be a simple command-line prompt that logs inputs and outputs — it does not need to be a polished UI.",
+     misconception:"**Misconception: 'The human gate introduces unacceptable latency'**\n\nFor daily or weekly rebalancing strategies, human review time is not a bottleneck. The gate adds minutes to hours of latency to a decision that would otherwise be acted on in milliseconds — and the rebalance trades on end-of-day prices regardless. The latency argument applies only to high-frequency strategies where decisions must be made in milliseconds, which is not this course's scope.\n\nFor longer-frequency fundamental research strategies, a human reviewing AI analysis for 5–15 minutes per position is not a cost — it is due diligence. The alternative (fully automated execution of AI recommendations) is operationally riskier, not faster in any meaningful sense.\n\nThe gate's cost is not latency. The cost is the organizational discipline required to make every team member treat it as non-negotiable.",
+     yourTurn:"**Scenario**: Your platform's audit log shows the following pattern over 60 decisions:\n• AI recommended LONG with high confidence: 28 cases\n• Human approved: 19 of 28 (68%)\n• Human rejected 9 of 28 — average forward return of rejected trades: +4.2% (AI was right, human was wrong)\n• Human approved 19 trades — average forward return: +2.1%\n\n1. What does this pattern suggest about your AI system vs. human judgment?\n2. Is this a reason to remove the human gate?\n3. What would you investigate before changing the system?\n\n**Answer**:\n1. The AI's high-confidence recommendations are generating better returns than the ones the human approved — suggesting the human may be applying idiosyncratic preferences that hurt performance, or the AI is picking up a genuine signal the human is overriding.\n2. No — 60 decisions is insufficient statistical evidence to conclude the AI is superior. The forward-return comparison has huge standard error. Also, the audit log contains only one period; regime dependence is unknown.\n3. Investigate why the human rejected those 9 cases — were there undisclosed quality concerns? Were they in a specific sector? Were the bull-bear contradictions unusually high? Build a richer decision-quality model before changing the gate behavior.",
+     synthesis:"**Week 11 — Key Takeaways**\n\n☑ Agents analyze — deterministic code executes. These layers must never be merged.\n☑ The human gate is not optional and not just compliance — it generates the feedback data for improving the AI layer\n☑ Every decision must be logged with timestamp, AI inputs, human decision, and evidence IDs\n☑ Version all components — you cannot attribute outcome changes without knowing which system version produced each recommendation\n☑ Audit log patterns reveal AI systematic failures that are invisible in individual recommendations\n\n**Next**: Week 12 freezes everything, writes the preregistered forward-test protocol, and begins the actual test that matters.",
+     equation:null
+    }],
+    quiz:{id:'w11-quiz', questions:[
+      {id:'w11-q01', type:'multiple_choice', question:"Which components should NEVER directly control portfolio weights?", options:['The portfolio optimizer','LLM agents and retrieval systems','The audit logging system','The risk limit engine'], correct:1, explanation:"LLM agents are probabilistic — they can be wrong, hallucinate, or produce confident errors. Portfolio weights must be set by deterministic, constraint-enforcing code. The human gate sits between AI recommendations and deterministic execution."},
+      {id:'w11-q02', type:'multiple_choice', question:"Why should the human approval gate be implemented during paper trading, not added later before going live?", options:['Regulatory requirement applies to paper trading too','The gate generates audit data about AI failure modes — skipping it means no quality data before live operation','Paper trading is riskier than live trading','The optimizer requires human approval to function'], correct:1, explanation:"Every human decision is a labeled data point about AI recommendation quality. Without gate operation during paper trading, you have no empirical evidence about your system's failure patterns before committing capital. You also leave the gate's code paths untested and fail to build the organizational habits required to use it consistently."},
+      {id:'w11-q03', type:'scenario', scenario:"Your audit log shows AI recommendations rejected by humans had better forward returns (+4.2%) than approved recommendations (+2.1%) over 60 decisions.", question:"What is the appropriate response?", options:['Remove the human gate — AI is outperforming human judgment','Investigate why the 9 rejections were made before drawing any conclusions — 60 decisions is insufficient evidence','Increase AI autonomy by reducing human override authority','Add a second human reviewer to prevent these overrides'], correct:1, explanation:"60 decisions has very high standard error for return comparisons. Before concluding the AI is superior, investigate: what were the rejection reasons? Were they in specific sectors? Were there undisclosed concerns? The pattern is a hypothesis requiring investigation, not a policy conclusion."}
+    ]},
+    lab:{id:'w11-lab', objective:"Wire together the end-to-end research platform.", checks:[{id:'w11-c01',text:'Data pipeline → ML ranker → optimizer connected end-to-end with no manual data hand-offs'},{id:'w11-c02',text:'RAG → bull-bear committee → human gate → optimizer → audit log connected'},{id:'w11-c03',text:'Every decision logged with timestamp, AI inputs/outputs, evidence_ids, human decision, and code version'},{id:'w11-c04',text:'End-to-end test: one full ticker analysis from data query to logged decision completed'}], deliverable:"11_platform_integration.ipynb + end-to-end test run log"},
+    evidencePrompts:["Where does the integrated pipeline break most frequently?","What does the audit log reveal about AI recommendation quality over time?","Is every component version-tracked so you can attribute outcomes to specific system states?"]
+  },
+
+  wk12:{
+    mission:{objective:"Freeze your models, evidence dates, and portfolio rules. Build the final Investment Committee package and defend every position against adversarial questioning.",output:"Final repo + IC deck + paper portfolio + preregistered forward-testing protocol.",failCondition:"Modifying model parameters or evidence dates after seeing final performance results.",whatWouldChangeMind:"Consistent preregistered forward-test performance after the research is completely frozen."},
+    whyItMatters:"Week 12 is not the end — it is the start of the real test. Every model here will eventually face live market data not seen during research. The strength of your package is determined by process discipline, not backtest beauty.",
+    lessons:[{id:'w12-l01', title:'Why 12 Weeks Is Not a Track Record', duration:'7 min', competency:'RESEARCH',
+     content:"A credible investment track record requires years of live performance data. Twelve weeks of research — even with rigorous PIT data and robust backtesting — establishes a methodology, not an edge. This distinction matters.\n\n**What a Backtest Proves and Does Not Prove**\n\nA well-constructed backtest proves: you can operationalize a hypothesis in code. You understand data timestamp rules. You did not overfit to a narrow parameter corner. You understand what drove historical returns. None of this is worthless — it is the prerequisite for finding genuine alpha.\n\nA backtest does not prove: the signal will persist forward. The historical period is representative of future market regimes. The strategy is economically viable at realistic costs and capacity. The effect survives publication (factor zoo decay documented by McLean & Pontiff, 2016).\n\n**Parametric Look-Ahead Bias in LLM Strategies**\nA unique and severe risk for AI-assisted research: LLMs trained through a recent date have memorized outcomes from historical periods you are testing. An LLM 'analyzing' a company's 2019 10-K may produce insights that reflect training on 2021 news about what that company subsequently did — not genuine analysis of 2019 information. This is parametric look-ahead bias (Summoning the Oracle to Slay It, 2026): the AI model's parameters contain future knowledge that the strategy's historical analysis appears to have 'discovered.'\n\n**Preregistration: The Single Most Important Discipline**\nPreregistration requires committing in writing, before observing any forward results, to:\n• The exact model specification (frozen parameters, frozen evidence dates)\n• What success looks like (CAGR threshold, IR threshold, benchmark comparison)\n• What failure looks like (drawdown threshold, IC decay trigger, regime conditions)\n• When you will abandon the strategy\n\nA strategy without a preregistered stopping condition can be kept running indefinitely, surviving failures on the logic that 'the regime was wrong' or 'the model needs more time.' This is the equivalent of never-ending hypothesis testing with perpetual excuse generation.",
+     mechanics:"# Preregistration Template (write BEFORE observing forward data)\n\nPREREGISTRATION DATE: {today}\nFORWARD TEST START: {today + 1 month}\nFORWARD TEST END: {today + 13 months}\n\n# Frozen model specification\nMODEL VERSION: git commit hash {hash}\nDATA VERSION: EDGAR store snapshot {timestamp}\nUNIVERSE: S&P 500 constituent list as of {today} (FROZEN — no additions)\n\n# Success criteria (pre-specified — cannot be revised after forward test begins)\nSUCCESS = (\n  net_cagr(forward_12mo) > equal_weight_cagr(forward_12mo) + 0.02  # +200bps over baseline\n  AND information_ratio(monthly_excess_returns) >= 0.30\n  AND max_drawdown(forward_12mo) < 0.20  # less than 20%\n)\n\n# Stopping conditions (pre-specified)\nIMMEDIATE_STOP_IF = (\n  drawdown > 0.15  # 15% peak-to-trough at any point\n  OR monthly_ic_rolling_3mo < -0.02  # signal has reversed\n  OR any_factor_exposure > 1.5  # unexpected factor concentration\n)\n\n# Revision rules\nMODEL_PARAMETERS: cannot be changed after forward test begins\nEVIDENCE_DATES: cannot be amended retroactively\nSUCCESS_CRITERIA: cannot be weakened after forward data observed",
+     intuition:"A beautiful 12-week backtest is like a perfect practice round before the actual tournament. It proves you understand the rules, can execute the shots, and have studied the course. But the tournament is played with real stakes, real opponents, and real uncertainty — against market participants who have also been preparing, many with far more resources.\n\nPreregistration is how you separate genuine prediction from post-hoc rationalization. Anyone can explain why a strategy worked after seeing the results. Only pre-specified, timestamped predictions can distinguish skill from luck. This is why academic journals now require preregistration for clinical trials and, increasingly, for empirical finance papers. Your forward test without preregistration is anecdote. Your forward test with preregistration is evidence.",
+     example:"**Preregistration Statement: Written Before Observing Forward Data**\n\nWritten: January 15, 2025\nStrategy: Week 7 Constrained Optimizer with Week 3 cross-sectional ranker\nForward test period: February 1, 2025 – January 31, 2026\n\nSuccess criterion:\n'This strategy will be considered to have shown statistical evidence of value if, over the 12-month forward period beginning February 1, 2025, the paper portfolio net CAGR (after 20 bps round-trip assumed costs) exceeds the simultaneously tracked equal-weight paper portfolio CAGR by ≥ 2.0%, AND the rolling 12-month information ratio of monthly excess returns is ≥ 0.30.'\n\nStopping condition:\n'The strategy will be paused for mandatory review if peak-to-trough drawdown exceeds 15% at any point during the forward period, or if the rolling 3-month rank-IC falls below -0.02 for two consecutive months.'\n\nThis statement was timestamped and stored in the Git commit log before February 1 data was observed. It cannot be revised after February 1.",
+     subtleVersion:"**McLean & Pontiff (2016): Factor Zoo Decay**\n\nA landmark study documented that anomaly returns drop by ~32% post-publication, and a further fraction from the date of data collection. The mechanism: publication reveals the signal to arbitrageurs who trade against it, reducing profitability. This implies that even genuinely out-of-sample backtests suffer from a form of look-ahead bias — the research community's awareness of the signal class already occurred by the time your test begins.\n\nFor LLM-based strategies, the decay mechanism is especially severe: LLM training data includes published factor research, analyst reports, and earnings call summaries that may describe the patterns you are trying to 'discover.'\n\n**Statistical Power of 12-Month Forward Tests**\nA 12-month forward test with monthly rebalancing gives 12 monthly return observations. The standard error of a Sharpe ratio estimate with 12 observations is √(1 + SR²/2)/√12 ≈ 0.30 for SR=0.5. The 95% CI is [SR − 0.59, SR + 0.59]. You cannot reject zero alpha with this precision. Plan for a 36-month forward test as the minimum for statistically meaningful evidence.",
+     warning:"**Trap: Modifying the Model After Observing Forward Performance**\n\nTrap: Running a forward test, observing that returns in months 4–6 are below expectations, 'debugging' the model by adjusting a feature weight or adding a regime filter, and continuing to call the result a 'forward test.'\n\nWhy it is fatal: any model modification after observing forward results converts subsequent forward performance into in-sample performance. The evaluation is contaminated. The original 12 months of forward data that prompted the change becomes part of the model's training universe, however indirectly.\n\nThis is the most common failure mode in live strategy management. Every practitioner knows it is wrong. Almost every practitioner eventually does it under business pressure.\n\nFix: preregistration with explicit modification rules. The preregistered document must state: 'Any modification to model parameters, data sources, or universe rules after the forward test start date voids the evaluation and requires a new 12-month forward test from a new start date.'",
+     misconception:"**Misconception: 'I can start a forward test and evaluate monthly as it progresses'**\n\nMonthly evaluation of an active forward test introduces a form of continuous multiple testing. If you evaluate performance monthly and would stop or modify the strategy based on any given month's observation, you are running 12 sequential hypothesis tests — each at 5% significance — giving a family-wise error rate far above 5%.\n\nThe Bonferroni correction for 12 tests requires each individual test significance level to be 0.05/12 ≈ 0.4%. The practical implication: do not treat monthly forward test results as evidence of anything. The only valid evaluation point is the preregistered end date, evaluated against preregistered success criteria.\n\nYou can and should monitor for stopping conditions (15% drawdown trigger, IC reversal) during the forward test. But this is risk management, not evaluation. The evaluation happens once, at the end.",
+     yourTurn:"**Scenario**: Your forward test results at month 6:\n• Net CAGR (annualized): +5.2% vs. baseline +8.1% (strategy is underperforming)\n• Rolling 3-month IC: +0.02 (barely positive)\n• Max drawdown: -8% (within the 15% limit)\n• Factor exposure check: all within limits\n\nYour preregistered success criteria required net CAGR > baseline + 2%.\n\n1. Have any stopping conditions been triggered?\n2. Should you modify the model to try to improve performance?\n3. What is the correct action?\n\n**Answer**:\n1. No stopping conditions triggered — drawdown is -8% (limit is 15%), IC is positive (limit is -0.02). Rolling 3-month IC at +0.02 is thin but positive.\n2. No — absolutely not. Modifying the model after observing that month-6 performance is below expectations converts all subsequent performance into in-sample. The preregistration prohibits this.\n3. Continue to the preregistered end date (month 12) without modification. Underperformance at month 6 is expected variance — 12 months of monthly observations have enormous uncertainty. Document your observation in a log, but do not act on it. The evaluation happens at month 12 against the preregistered criteria.",
+     synthesis:"**Week 12 — Key Takeaways**\n\n☑ 12 weeks of research produces a methodology and hypothesis — not a track record or proof of edge\n☑ Parametric look-ahead bias is unique to LLM strategies: model weights may contain future knowledge about historical periods\n☑ Preregistration is the single most important discipline: commit to success criteria and stopping conditions before observing forward data\n☑ Factor zoo decay (McLean & Pontiff): published anomalies lose ~32% of returns post-publication — replications are always less valuable than original discovery\n☑ The only valid evaluation point is the preregistered end date — monthly monitoring is risk management, not evaluation\n\n**This is the beginning**: the research platform is built, the methodology is documented, and the real test has started. Evidence-based alpha discovery is a years-long process — this course built the foundation.",
+     equation:null
+    }],
+    quiz:{id:'w12-quiz', questions:[
+      {id:'w12-q01', type:'multiple_choice', question:"What is 'parametric look-ahead bias' in LLM-based backtesting?", options:['Using too many hyperparameters','LLM training data containing outcomes from the backtest period — making past predictions informed by future knowledge','Running too many parameter combinations','Not adjusting for lookback period'], correct:1, explanation:"LLMs trained through a recent date may 'know' which companies succeeded, failed, merged, or made notable decisions during a historical backtest period. This means the model's apparent historical insights may reflect training data memorization rather than genuine signal discovery — a subtle but severe form of look-ahead bias."},
+      {id:'w12-q02', type:'multiple_choice', question:"McLean & Pontiff (2016) found that anomaly returns after publication dropped by approximately what fraction?", options:['~5%','~32%','~65%','~90%'], correct:1, explanation:"~32% — returns decline post-publication as arbitrageurs discover and trade against the anomaly. A further fraction decays even before publication once a researcher uses data collected by others who are aware of the pattern. Any strategy replicating published factor research starts with a head start disadvantage."},
+      {id:'w12-q03', type:'scenario', scenario:"At month 7 of your forward test, strategy is underperforming the baseline. You identify a new feature that would have significantly improved the backtest. You add it, call months 8-12 a 'forward test of the improved model.'", question:"What has occurred?", options:['A valid iterative improvement — research should be adaptive','The forward test is contaminated — months 1-7 (which prompted the change) are now in-sample for the new model. The evaluation is invalidated.','The improvement is valid only if back-tested independently','The improvement is valid because the first 7 months are still OOS'], correct:1, explanation:"Any modification triggered by observing forward results converts subsequent forward performance into in-sample. Months 1-7 of underperformance became training signal for the new model. The only valid path is to freeze the original model through the preregistered end date and start a new 12-month forward test for the improved model from scratch."}
+    ]},
+    lab:{id:'w12-lab', objective:"Produce the final Investment Committee package.", checks:[{id:'w12-c01',text:'All models frozen with documented version hashes (git commit SHA recorded)'},{id:'w12-c02',text:'Evidence dates frozen — EDGAR store snapshot timestamped, no post-hoc additions'},{id:'w12-c03',text:'Final paper portfolio positions documented: thesis + disconfirming evidence for each position'},{id:'w12-c04',text:'Forward-testing protocol preregistered (timestamped, committed to repo) before any forward data observed'},{id:'w12-c05',text:'Preregistration includes: success criteria, stopping conditions, and modification prohibition rule'}], deliverable:"12_final_ic.ipynb + IC deck + preregistered forward test protocol"},
+    evidencePrompts:["What is the strongest argument against your final strategy?","Under what conditions would you expect the strategy to fail?","What is your preregistered forward-test stopping condition?"]
+  }
+};
+
+/* ── Pure helpers ── */
+function getWkProgress(course, wkId){
+  return (course.weekProgress||{})[wkId] || {};
+}
+function calcWeekCompletion(wk, prog, content){
+  if(!content) return wk.done ? 100 : 0;
+  const lessons = content.lessons || [];
+  const labChecks = content.lab?.checks || [];
+  const quizQs = content.quiz?.questions || [];
+  const lessonsDone = lessons.filter(l=>(prog.lessonsRead||[]).includes(l.id)).length;
+  const labDone = labChecks.filter(c=>(prog.labChecks||[]).includes(c.id)).length;
+  const hasAttemptedQuiz = (prog.quizAttempts||[]).length > 0;
+  const delivDone = prog.deliverableDone;
+  let score = 0, total = 0;
+  if(lessons.length){ score += lessonsDone; total += lessons.length; }
+  if(labChecks.length){ score += labDone; total += labChecks.length; }
+  if(quizQs.length){ score += hasAttemptedQuiz ? 1 : 0; total += 1; }
+  if(total){ score += delivDone ? 1 : 0; total += 1; }
+  return total ? Math.round(100*score/total) : (wk.done?100:0);
+}
+function calcWeekMastery(prog, content){
+  if(!content) return 0;
+  const lessons = content.lessons || [];
+  const labChecks = content.lab?.checks || [];
+  const quizQs = content.quiz?.questions || [];
+  const lessonPct = lessons.length ? (prog.lessonsRead||[]).filter(id=>lessons.find(l=>l.id===id)).length / lessons.length : 0;
+  const labPct = labChecks.length ? (prog.labChecks||[]).filter(id=>labChecks.find(c=>c.id===id)).length / labChecks.length : 0;
+  const bestScore = (prog.quizAttempts||[]).reduce((best,a)=>Math.max(best,a.score||0),0);
+  const quizPct = quizQs.length ? bestScore / quizQs.length : 0;
+  const bullBearPct = ((prog.bullCase||'').length>20 && (prog.bearCase||'').length>20) ? 1 : 0;
+  return Math.round(100*(0.30*lessonPct + 0.35*quizPct + 0.25*labPct + 0.10*bullBearPct));
+}
+function totalCourseXP(weekProgressMap, allContent){
+  let xp = 0;
+  Object.entries(weekProgressMap||{}).forEach(([wkId, prog])=>{
+    const content = allContent[wkId];
+    if(!content) return;
+    xp += (prog.lessonsRead||[]).length * 10;
+    const best = (prog.quizAttempts||[]).reduce((b,a)=>Math.max(b,a.score||0),0);
+    const total = (content.quiz?.questions||[]).length;
+    if(best>0) xp += total>0 && best===total ? 50 : 20;
+    const labPct = content.lab?.checks?.length ? (prog.labChecks||[]).length/content.lab.checks.length : 0;
+    if(labPct>=1) xp += 40;
+    else if(labPct>=0.5) xp += 20;
+    if(prog.deliverableDone) xp += 100;
+    xp += (prog.evidenceItems||[]).length * 15;
+  });
+  return xp;
+}
+
+/* ─────────────────── WEEK WORKSPACE ─────────────────── */
+function WeekWorkspace({wk, content, prog, onProgress, onBack, isMobile}){
+  const [wsTab, setWsTab] = useState('overview');
+  const [lessonOpen, setLessonOpen] = useState(null);
+  const [quizAnswers, setQuizAnswers] = useState({});
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [evidenceDraft, setEvidenceDraft] = useState({claim:'',for:'',against:'',confidence:'medium',notes:''});
+  const [journalDraft, setJournalDraft] = useState('');
+  const [showJournal, setShowJournal] = useState(false);
+
+  const phaseColor = wk.num<=2?'#6366f1':wk.num<=4?'#8b5cf6':wk.num<=6?'#3b82f6':wk.num<=8?'#10b981':wk.num<=10?'#f59e0b':'#f97316';
+  const completion = calcWeekCompletion(wk, prog, content);
+  const mastery = calcWeekMastery(prog, content);
+  const lessons = content?.lessons || [];
+  const quizQs  = content?.quiz?.questions || [];
+  const labChecks = content?.lab?.checks || [];
+
+  function markLessonRead(id){
+    const next = [...new Set([...(prog.lessonsRead||[]), id])];
+    onProgress({lessonsRead: next});
+  }
+  function toggleLabCheck(id){
+    const curr = prog.labChecks || [];
+    const next = curr.includes(id) ? curr.filter(x=>x!==id) : [...curr, id];
+    onProgress({labChecks: next});
+  }
+  function submitQuiz(){
+    if(Object.keys(quizAnswers).length < quizQs.length){ return; }
+    const score = quizQs.filter(q=>quizAnswers[q.id]===q.correct).length;
+    const attempt = {score, answers:quizAnswers, total:quizQs.length, ts:new Date().toISOString()};
+    const prevAttempts = prog.quizAttempts || [];
+    onProgress({quizAttempts:[...prevAttempts, attempt]});
+    setQuizSubmitted(true);
+  }
+  function retryQuiz(){ setQuizAnswers({}); setQuizSubmitted(false); }
+  function addEvidence(){
+    if(!evidenceDraft.claim.trim()) return;
+    const items = [...(prog.evidenceItems||[]), {...evidenceDraft, id:uid(), ts:new Date().toISOString()}];
+    onProgress({evidenceItems:items});
+    setEvidenceDraft({claim:'',for:'',against:'',confidence:'medium',notes:''});
+  }
+  function removeEvidence(id){ onProgress({evidenceItems:(prog.evidenceItems||[]).filter(e=>e.id!==id)}); }
+  function addJournal(){
+    if(!journalDraft.trim()) return;
+    const entries = [...(prog.journal||[]), {id:uid(), text:journalDraft, ts:new Date().toISOString(), context:wsTab}];
+    onProgress({journal:entries});
+    setJournalDraft('');
+  }
+
+  const bestScore = (prog.quizAttempts||[]).reduce((b,a)=>Math.max(b,a.score||0),0);
+  const latestAttempt = (prog.quizAttempts||[]).slice(-1)[0];
+
+  const TABS = [
+    {id:'overview',label:'Overview'},
+    {id:'learn',label:'Learn'},
+    {id:'lab',label:'Lab'},
+    {id:'test',label:'Test'},
+    {id:'evidence',label:'Evidence'},
+    {id:'submit',label:'Submit'},
+  ];
+
+  return (
+    <div>
+      {/* Workspace header */}
+      <div className="mb-4">
+        <button onClick={onBack} className="text-xs mb-3 flex items-center gap-1.5" style={{color:phaseColor}}>← Back to Missions</button>
+        <div className="glass rounded-xl p-4" style={{border:`1px solid ${wk.bossFight?'rgba(239,68,68,0.3)':phaseColor+'30'}`}}>
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 text-2xl w-10 text-center">{wk.emoji}</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-widest mb-0.5" style={{color:phaseColor}}>Week {wk.num} · {wk.phase}</div>
+              <div className="text-lg font-bold" style={{color:'#e2e8f0'}}>{wk.name}</div>
+              <div className="text-xs mt-1" style={{color:'#475569'}}>{wk.hours} · {content?.lessons?.length||0} lessons · {labChecks.length} lab checks</div>
+              {wk.bossFight && <div className="text-xs mt-1 font-bold" style={{color:'#f87171'}}>⚔️ Boss Fight Week</div>}
+            </div>
+          </div>
+          {/* Completion vs Mastery */}
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <div>
+              <div className="flex justify-between text-xs mb-1"><span style={{color:'#475569'}}>Completion</span><span style={{color:'#64748b'}}>{completion}%</span></div>
+              <div style={{height:'5px',background:'rgba(255,255,255,0.05)',borderRadius:'3px',overflow:'hidden'}}>
+                <div style={{width:`${completion}%`,height:'100%',background:'#10b981',borderRadius:'3px',transition:'width .3s'}}/>
+              </div>
+            </div>
+            <div>
+              <div className="flex justify-between text-xs mb-1"><span style={{color:'#475569'}}>Mastery</span><span style={{color:'#64748b'}}>{mastery}%</span></div>
+              <div style={{height:'5px',background:'rgba(255,255,255,0.05)',borderRadius:'3px',overflow:'hidden'}}>
+                <div style={{width:`${mastery}%`,height:'100%',background:phaseColor,borderRadius:'3px',transition:'width .3s'}}/>
+              </div>
+            </div>
+          </div>
+          <div className="text-xs mt-2" style={{color:'#334155'}}>Completion ≠ Mastery. Clicking labs and lessons builds completion. Quiz scores, Bull/Bear analysis, and evidence quality build mastery.</div>
+        </div>
+      </div>
+
+      {/* Tab navigation */}
+      <div className="mb-4" style={{overflowX:'auto'}}>
+        <div className="flex gap-0.5 p-1 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',minWidth:'max-content'}}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>setWsTab(t.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all"
+              style={{background:wsTab===t.id?`${phaseColor}20`:'transparent',color:wsTab===t.id?phaseColor:'#475569',border:wsTab===t.id?`1px solid ${phaseColor}40`:'1px solid transparent'}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── OVERVIEW TAB ── */}
+      {wsTab==='overview' && content && (
+        <div className="space-y-3">
+          {/* Mission brief */}
+          <div className="rounded-xl p-4" style={{background:'rgba(0,0,0,0.3)',border:`1px solid ${phaseColor}30`}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:phaseColor}}>Mission Brief</div>
+            <div className="text-sm font-medium mb-2" style={{color:'#e2e8f0'}}>{content.mission.objective}</div>
+            <div className="space-y-2">
+              {[['Your Output',content.mission.output,'#10b981'],['Fail Condition',content.mission.failCondition,'#ef4444'],['Evidence That Changes Your Mind',content.mission.whatWouldChangeMind,'#6366f1']].map(([label,text,c])=>(
+                <div key={label} className="text-xs p-2.5 rounded-lg" style={{background:`${c}08`,border:`1px solid ${c}20`}}>
+                  <div className="font-semibold mb-0.5" style={{color:c}}>{label}</div>
+                  <div style={{color:'#94a3b8'}}>{text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Why it matters */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:'#475569'}}>Why This Matters</div>
+            <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{content.whyItMatters}</div>
+          </div>
+          {/* Objectives */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:phaseColor}}>Learning Objectives</div>
+            <ul className="space-y-1.5">
+              {(wk.objectives||[]).map((o,i)=>(
+                <li key={i} className="flex items-start gap-2 text-xs" style={{color:'#94a3b8'}}>
+                  <span style={{color:phaseColor,flexShrink:0}}>▸</span>{o}
+                </li>
+              ))}
+            </ul>
+          </div>
+          {/* No-Time-Machine check */}
+          <div className="p-3 rounded-xl" style={{background:'rgba(139,92,246,0.06)',border:'1px solid rgba(139,92,246,0.2)'}}>
+            <div className="text-xs font-bold mb-1" style={{color:'#a78bfa'}}>⏳ No-Time-Machine Check</div>
+            <div className="text-xs" style={{color:'#7c3aed'}}>Every feature, filing, and data point used in this week must satisfy: available_at ≤ decision_time. No exceptions.</div>
+          </div>
+          {/* Boss Fight briefing */}
+          {wk.bossFight && (
+            <div className="p-4 rounded-xl" style={{background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.25)'}}>
+              <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:'#f87171'}}>⚔️ Boss Fight Briefing</div>
+              <div className="text-sm" style={{color:'#f87171'}}>You will receive a suspiciously profitable strategy or misleading evidence. Your job: diagnose exactly why it is wrong before it corrupts your portfolio. Hint: the most dangerous errors are subtle. Look for timing, survivorship, and parameter selection issues first.</div>
+              <div className="mt-2 text-xs" style={{color:'#ef4444'}}>After submission: the After-Action Review will reveal what was deliberately planted.</div>
+            </div>
+          )}
+        </div>
+      )}
+      {wsTab==='overview' && !content && (
+        <div className="glass rounded-xl p-6 text-center" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+          <div className="text-sm" style={{color:'#334155'}}>Week content is loading. Mark complete or check objectives above.</div>
+        </div>
+      )}
+
+      {/* ── LEARN TAB ── */}
+      {wsTab==='learn' && (
+        <div className="space-y-3">
+          {!lessons.length && <div className="text-sm text-center py-6" style={{color:'#334155'}}>No lessons defined for this week yet.</div>}
+          {lessons.map(lesson=>{
+            const isRead = (prog.lessonsRead||[]).includes(lesson.id);
+            const isOpen = lessonOpen===lesson.id;
+            return (
+              <div key={lesson.id} className="glass rounded-xl" style={{border:`1px solid ${isRead?phaseColor+'30':'rgba(255,255,255,0.06)'}`}}>
+                <div className="flex items-center gap-3 p-4 cursor-pointer" onClick={()=>setLessonOpen(isOpen?null:lesson.id)}>
+                  <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
+                    style={{background:isRead?`${phaseColor}20`:'rgba(255,255,255,0.04)',border:`1px solid ${isRead?phaseColor+'40':'rgba(255,255,255,0.08)'}`,color:isRead?phaseColor:'#475569'}}>
+                    {isRead?'✓':'📖'}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold" style={{color:'#e2e8f0'}}>{lesson.title}</div>
+                    <div className="text-xs mt-0.5" style={{color:'#475569'}}>{lesson.duration} · {lesson.competency}</div>
+                  </div>
+                  <span style={{color:'#334155',fontSize:'11px'}}>{isOpen?'▲':'▼'}</span>
+                </div>
+                {isOpen && (
+                  <div className="px-4 pb-4 space-y-3" style={{borderTop:'1px solid rgba(255,255,255,0.04)'}}>
+                    <div className="h-1"/>
+                    {/* Main content */}
+                    <div className="text-sm leading-relaxed whitespace-pre-line" style={{color:'#94a3b8'}}>{lesson.content}</div>
+                    {/* Mechanics */}
+                    {lesson.mechanics && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(6,182,212,0.06)',border:'1px solid rgba(6,182,212,0.18)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#22d3ee'}}>⚙ Mechanics</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line font-mono" style={{color:'#67e8f9'}}>{lesson.mechanics}</div>
+                      </div>
+                    )}
+                    {/* Intuition */}
+                    {lesson.intuition && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#818cf8'}}>💡 Intuition</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#a5b4fc'}}>{lesson.intuition}</div>
+                      </div>
+                    )}
+                    {/* Example */}
+                    {lesson.example && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(16,185,129,0.06)',border:'1px solid rgba(16,185,129,0.15)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#10b981'}}>Worked Example</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line font-mono" style={{color:'#6ee7b7'}}>{lesson.example}</div>
+                      </div>
+                    )}
+                    {/* Subtle Version */}
+                    {lesson.subtleVersion && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(139,92,246,0.07)',border:'1px solid rgba(139,92,246,0.2)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#a78bfa'}}>🔍 Subtle Version</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#c4b5fd'}}>{lesson.subtleVersion}</div>
+                      </div>
+                    )}
+                    {/* Equation */}
+                    {lesson.equation && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.08)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#475569'}}>Formula</div>
+                        <div className="text-sm font-mono whitespace-pre-line" style={{color:'#c7d2fe'}}>{lesson.equation}</div>
+                      </div>
+                    )}
+                    {/* Warning */}
+                    {lesson.warning && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(245,158,11,0.06)',border:'1px solid rgba(245,158,11,0.2)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#f59e0b'}}>⚠ Research Trap</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#fcd34d'}}>{lesson.warning}</div>
+                      </div>
+                    )}
+                    {/* Common Misconception */}
+                    {lesson.misconception && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.18)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#f87171'}}>✗ Common Misconception</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#fca5a5'}}>{lesson.misconception}</div>
+                      </div>
+                    )}
+                    {/* Your Turn */}
+                    {lesson.yourTurn && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.25)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#fbbf24'}}>◎ Your Turn</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#fde68a'}}>{lesson.yourTurn}</div>
+                      </div>
+                    )}
+                    {/* Synthesis */}
+                    {lesson.synthesis && (
+                      <div className="p-3 rounded-lg" style={{background:'rgba(16,185,129,0.05)',border:'1px solid rgba(16,185,129,0.18)'}}>
+                        <div className="text-xs font-bold mb-2" style={{color:'#34d399'}}>✦ Key Takeaway</div>
+                        <div className="text-xs leading-relaxed whitespace-pre-line" style={{color:'#6ee7b7'}}>{lesson.synthesis}</div>
+                      </div>
+                    )}
+                    {/* Mark read */}
+                    <button onClick={()=>markLessonRead(lesson.id)} className="w-full py-2 rounded-lg text-xs font-bold transition-all"
+                      style={{background:isRead?'rgba(16,185,129,0.08)':'rgba(99,102,241,0.15)',color:isRead?'#10b981':'#818cf8',border:`1px solid ${isRead?'rgba(16,185,129,0.25)':'rgba(99,102,241,0.3)'}`}}>
+                      {isRead?'✓ Lesson Read':'Mark as Read +10 XP'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {/* Journal prompt */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#475569'}}>Research Journal</div>
+              <button onClick={()=>setShowJournal(!showJournal)} className="text-xs" style={{color:'#475569'}}>{showJournal?'▲':'▼'}</button>
+            </div>
+            {showJournal && (
+              <div className="space-y-2">
+                <div className="text-xs" style={{color:'#334155'}}>What surprised you? What assumption are you least confident about?</div>
+                <textarea rows={3} value={journalDraft} onChange={e=>setJournalDraft(e.target.value)} className="w-full bg-transparent text-xs rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} placeholder="Your observation..."/>
+                <button onClick={addJournal} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{background:'rgba(255,255,255,0.06)',color:'#94a3b8'}}>Save Note</button>
+                {(prog.journal||[]).filter(j=>j.context==='learn').map(j=>(
+                  <div key={j.id} className="text-xs p-2 rounded" style={{background:'rgba(255,255,255,0.02)',color:'#64748b'}}>{j.text}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── LAB TAB ── */}
+      {wsTab==='lab' && (
+        <div className="space-y-3">
+          {content?.lab ? (
+            <>
+              <div className="glass rounded-xl p-4" style={{border:`1px solid ${phaseColor}20`}}>
+                <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:phaseColor}}>Lab Objective</div>
+                <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{content.lab.objective}</div>
+                {content.lab.dataset && <div className="text-xs mt-2" style={{color:'#475569'}}>Dataset: {content.lab.dataset}</div>}
+              </div>
+              {/* Steps */}
+              {(content.lab.steps||[]).length>0 && (
+                <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                  <div className="text-xs font-bold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Steps</div>
+                  <ol className="space-y-2">
+                    {(content.lab.steps||[]).map((step,i)=>(
+                      <li key={i} className="flex items-start gap-2 text-xs" style={{color:'#94a3b8'}}>
+                        <span className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs" style={{background:'rgba(255,255,255,0.04)',color:'#475569'}}>{i+1}</span>
+                        {step}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              {/* Interactive validation checklist */}
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs font-bold uppercase tracking-widest" style={{color:'#475569'}}>Validation Checklist</div>
+                  <div className="text-xs font-semibold" style={{color:(prog.labChecks||[]).filter(id=>labChecks.find(c=>c.id===id)).length===labChecks.length&&labChecks.length>0?'#10b981':'#475569'}}>
+                    {(prog.labChecks||[]).filter(id=>labChecks.find(c=>c.id===id)).length}/{labChecks.length}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {labChecks.map(check=>{
+                    const checked = (prog.labChecks||[]).includes(check.id);
+                    return (
+                      <label key={check.id} className="flex items-start gap-3 cursor-pointer p-2.5 rounded-lg" style={{background:checked?'rgba(16,185,129,0.04)':'rgba(255,255,255,0.01)',border:`1px solid ${checked?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.04)'}`}}>
+                        <input type="checkbox" checked={checked} onChange={()=>toggleLabCheck(check.id)} className="flex-shrink-0 mt-0.5" style={{accentColor:'#10b981'}}/>
+                        <span className="text-xs leading-relaxed" style={{color:checked?'#6ee7b7':'#94a3b8',textDecoration:checked?'line-through':'none'}}>{check.text}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 p-2.5 rounded-lg text-xs" style={{background:'rgba(245,158,11,0.06)',border:'1px solid rgba(245,158,11,0.15)',color:'#f59e0b'}}>
+                  ⚠ Checking boxes = completion. Passing the checks correctly = mastery. These are not the same.
+                </div>
+              </div>
+              {/* Deliverable */}
+              {content.lab.deliverable && (
+                <div className="glass rounded-xl p-4" style={{border:`1px solid ${phaseColor}20`,background:`${phaseColor}04`}}>
+                  <div className="text-xs font-bold uppercase tracking-widest mb-1" style={{color:phaseColor}}>Deliverable</div>
+                  <div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{content.lab.deliverable}</div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-sm text-center py-6" style={{color:'#334155'}}>Lab content for this week is being finalized.</div>
+          )}
+        </div>
+      )}
+
+      {/* ── TEST TAB ── */}
+      {wsTab==='test' && (
+        <div className="space-y-3">
+          {!quizQs.length ? (
+            <div className="text-sm text-center py-6" style={{color:'#334155'}}>Knowledge check for this week coming soon.</div>
+          ) : (
+            <>
+              {/* Score history */}
+              {(prog.quizAttempts||[]).length>0 && (
+                <div className="glass rounded-xl p-3 flex items-center gap-4" style={{border:`1px solid ${phaseColor}25`}}>
+                  <div className="text-xs"><span style={{color:'#475569'}}>Best: </span><span className="font-bold" style={{color:phaseColor}}>{bestScore}/{quizQs.length}</span></div>
+                  <div className="text-xs"><span style={{color:'#475569'}}>Attempts: </span><span style={{color:'#94a3b8'}}>{(prog.quizAttempts||[]).length}</span></div>
+                  {(prog.quizAttempts||[]).length>0 && <button onClick={retryQuiz} className="ml-auto text-xs px-2 py-1 rounded" style={{color:'#6366f1',border:'1px solid rgba(99,102,241,0.2)'}}>Retry</button>}
+                </div>
+              )}
+              {/* Questions */}
+              {quizQs.map((q,qi)=>(
+                <div key={q.id} className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                  <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#475569'}}>Question {qi+1}</div>
+                  {q.scenario && (
+                    <div className="p-2.5 rounded-lg mb-3 text-xs leading-relaxed" style={{background:'rgba(99,102,241,0.06)',border:'1px solid rgba(99,102,241,0.12)',color:'#94a3b8'}}>{q.scenario}</div>
+                  )}
+                  <div className="text-sm font-medium mb-3" style={{color:'#e2e8f0'}}>{q.question}</div>
+                  <div className="space-y-2">
+                    {q.options.map((opt,oi)=>{
+                      const selected = quizAnswers[q.id]===oi;
+                      const correct = quizSubmitted && oi===q.correct;
+                      const wrong = quizSubmitted && selected && oi!==q.correct;
+                      return (
+                        <button key={oi} onClick={()=>!quizSubmitted&&setQuizAnswers(a=>({...a,[q.id]:oi}))}
+                          className="w-full text-left text-xs p-2.5 rounded-lg transition-all"
+                          style={{background:correct?'rgba(16,185,129,0.12)':wrong?'rgba(239,68,68,0.1)':selected?'rgba(99,102,241,0.12)':'rgba(255,255,255,0.02)',
+                            border:`1px solid ${correct?'rgba(16,185,129,0.4)':wrong?'rgba(239,68,68,0.3)':selected?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.05)'}`,
+                            color:correct?'#10b981':wrong?'#ef4444':selected?'#a5b4fc':'#94a3b8',cursor:quizSubmitted?'default':'pointer'}}>
+                          {String.fromCharCode(65+oi)}. {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {quizSubmitted && (
+                    <div className="mt-3 p-3 rounded-lg text-xs leading-relaxed" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)',color:'#64748b'}}>
+                      <span className="font-bold" style={{color:'#94a3b8'}}>Explanation: </span>{q.explanation}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!quizSubmitted ? (
+                <button onClick={submitQuiz}
+                  disabled={Object.keys(quizAnswers).length<quizQs.length}
+                  className="w-full py-3 rounded-xl text-sm font-bold"
+                  style={{background:Object.keys(quizAnswers).length<quizQs.length?'rgba(255,255,255,0.04)':'rgba(99,102,241,0.2)',color:Object.keys(quizAnswers).length<quizQs.length?'#334155':'#818cf8',border:`1px solid ${Object.keys(quizAnswers).length<quizQs.length?'rgba(255,255,255,0.06)':'rgba(99,102,241,0.3)'}`}}>
+                  {Object.keys(quizAnswers).length<quizQs.length?`Answer all ${quizQs.length} questions to submit`:'Submit Answers'}
+                </button>
+              ) : (
+                <div className="glass rounded-xl p-4 text-center" style={{border:`1px solid ${bestScore===quizQs.length?'rgba(16,185,129,0.3)':'rgba(245,158,11,0.3)'}`}}>
+                  <div className="text-2xl font-bold" style={{color:bestScore===quizQs.length?'#10b981':'#f59e0b'}}>{latestAttempt?.score}/{quizQs.length}</div>
+                  <div className="text-xs mt-1" style={{color:'#475569'}}>{latestAttempt?.score===quizQs.length?'Perfect score — mastery demonstrated':'Review explanations above, then retry for higher mastery'}</div>
+                  <button onClick={retryQuiz} className="mt-2 px-4 py-1.5 rounded-lg text-xs font-bold" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.2)'}}>Retry Quiz</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── EVIDENCE TAB ── */}
+      {wsTab==='evidence' && (
+        <div className="space-y-3">
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:'#475569'}}>Evidence Ledger</div>
+            <div className="text-xs mb-3" style={{color:'#334155'}}>Log evidence for and against claims you are investigating. A negative result is as valuable as a positive one.</div>
+            {/* Evidence prompts */}
+            {(content?.evidencePrompts||[]).length>0 && (
+              <div className="space-y-1 mb-3">
+                {(content.evidencePrompts||[]).map((p,i)=>(
+                  <div key={i} className="text-xs p-2 rounded-lg cursor-pointer" style={{background:'rgba(99,102,241,0.06)',border:'1px solid rgba(99,102,241,0.1)',color:'#818cf8'}}
+                    onClick={()=>setEvidenceDraft(d=>({...d,claim:p}))}>
+                    → {p}
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Add form */}
+            <div className="space-y-2">
+              <input value={evidenceDraft.claim} onChange={e=>setEvidenceDraft(d=>({...d,claim:e.target.value}))} placeholder="Claim you are testing..." className="w-full bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}/>
+              <div className="grid grid-cols-2 gap-2">
+                <textarea rows={2} value={evidenceDraft.for} onChange={e=>setEvidenceDraft(d=>({...d,for:e.target.value}))} placeholder="Evidence supporting the claim..." className="bg-transparent text-xs rounded-lg p-2 resize-none" style={{border:'1px solid rgba(16,185,129,0.2)',color:'#6ee7b7'}}/>
+                <textarea rows={2} value={evidenceDraft.against} onChange={e=>setEvidenceDraft(d=>({...d,against:e.target.value}))} placeholder="Evidence against the claim..." className="bg-transparent text-xs rounded-lg p-2 resize-none" style={{border:'1px solid rgba(239,68,68,0.2)',color:'#f87171'}}/>
+              </div>
+              <div className="flex gap-2 items-center">
+                <select value={evidenceDraft.confidence} onChange={e=>setEvidenceDraft(d=>({...d,confidence:e.target.value}))} className="bg-transparent text-xs rounded px-2 py-1.5 border" style={{borderColor:'rgba(255,255,255,0.1)',color:'#94a3b8'}}>
+                  <option value="low">Low confidence</option><option value="medium">Medium</option><option value="high">High confidence</option>
+                </select>
+                <button onClick={addEvidence} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>Add Evidence +15 XP</button>
+              </div>
+            </div>
+          </div>
+          {/* Evidence list */}
+          {(prog.evidenceItems||[]).length===0 && (
+            <div className="text-center py-6 text-xs" style={{color:'#334155'}}>No evidence recorded yet. Start by writing the claim you are trying to test.</div>
+          )}
+          {(prog.evidenceItems||[]).map(item=>(
+            <div key={item.id} className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="text-sm font-medium" style={{color:'#e2e8f0'}}>{item.claim}</div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className="text-xs px-1.5 py-0.5 rounded" style={{background:item.confidence==='high'?'rgba(16,185,129,0.1)':item.confidence==='medium'?'rgba(245,158,11,0.1)':'rgba(99,102,241,0.1)',color:item.confidence==='high'?'#10b981':item.confidence==='medium'?'#f59e0b':'#818cf8'}}>{item.confidence}</span>
+                  <button onClick={()=>removeEvidence(item.id)} style={{color:'#475569',fontSize:'12px'}}>×</button>
+                </div>
+              </div>
+              {item.for && <div className="text-xs mb-1"><span style={{color:'#10b981'}}>For: </span><span style={{color:'#6ee7b7'}}>{item.for}</span></div>}
+              {item.against && <div className="text-xs"><span style={{color:'#ef4444'}}>Against: </span><span style={{color:'#f87171'}}>{item.against}</span></div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── SUBMIT TAB ── */}
+      {wsTab==='submit' && (
+        <div className="space-y-3">
+          {/* Bull vs Bear */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-3" style={{color:'#475569'}}>🐂 Bull vs 🐻 Bear Analysis</div>
+            <div className="text-xs mb-2" style={{color:'#334155'}}>Required before a research experiment can be considered fully evaluated. Both fields must contain substantive analysis.</div>
+            <div className="space-y-3">
+              {[['bullCase','🐂 Bull Case — Why might this work?','rgba(16,185,129,0.15)','#10b981'],['bearCase','🐻 Bear Case — Why might the result be fake?','rgba(239,68,68,0.08)','#ef4444']].map(([field,ph,bg,c])=>(
+                <div key={field}>
+                  <div className="text-xs font-semibold mb-1" style={{color:c}}>{ph}</div>
+                  <textarea rows={3} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:`1px solid ${c}30`,color:'#94a3b8',background:bg}}
+                    placeholder={field==='bullCase'?'Economic mechanism, behavioral bias, structural edge, risk premium...':'Noise, data mining, leakage, omitted costs, survivorship, regime dependence, parameter instability...'}
+                    value={prog[field]||''} onChange={e=>onProgress({[field]:e.target.value})}/>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Research Decision */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Research Decision</div>
+            <div className="text-xs mb-2" style={{color:'#334155'}}>A scientifically justified REJECT earns full research credit. Do not manufacture positive results.</div>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              {[['ship','🟢 Ship','rgba(16,185,129,0.15)','#10b981'],['revise','🟡 Revise','rgba(245,158,11,0.1)','#f59e0b'],['reject','🔴 Reject','rgba(239,68,68,0.1)','#ef4444'],['inconclusive','⚪ Inconclusive','rgba(255,255,255,0.04)','#94a3b8']].map(([v,l,bg,c])=>(
+                <button key={v} onClick={()=>onProgress({decision:v})} className="p-2 rounded-lg text-xs font-bold transition-all"
+                  style={{background:prog.decision===v?bg:'transparent',color:prog.decision===v?c:'#475569',border:`1px solid ${prog.decision===v?c+'40':'rgba(255,255,255,0.06)'}`}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <textarea rows={2} className="w-full bg-transparent text-xs rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#94a3b8'}}
+              placeholder="Rationale for your decision..." value={prog.decisionRationale||''} onChange={e=>onProgress({decisionRationale:e.target.value})}/>
+          </div>
+          {/* Deliverable note */}
+          <div className="glass rounded-xl p-4" style={{border:`1px solid ${phaseColor}20`}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:phaseColor}}>Deliverable</div>
+            {content?.lab?.deliverable && <div className="text-xs mb-2" style={{color:'#475569'}}>{content.lab.deliverable}</div>}
+            <textarea rows={2} className="w-full bg-transparent text-xs rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#94a3b8'}}
+              placeholder="Notes about your deliverable, notebook path, etc." value={prog.deliverableNote||''} onChange={e=>onProgress({deliverableNote:e.target.value})}/>
+            <button onClick={()=>onProgress({deliverableDone:!prog.deliverableDone})} className="w-full mt-2 py-2 rounded-lg text-xs font-bold"
+              style={{background:prog.deliverableDone?'rgba(16,185,129,0.12)':'rgba(255,255,255,0.04)',color:prog.deliverableDone?'#10b981':'#475569',border:`1px solid ${prog.deliverableDone?'rgba(16,185,129,0.3)':'rgba(255,255,255,0.08)'}`}}>
+              {prog.deliverableDone?'✓ Deliverable Shipped — +100 XP':'Mark Deliverable Complete'}
+            </button>
+          </div>
+          {/* Reflection prompts */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+            <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:'#475569'}}>Reflection Prompts</div>
+            {['What surprised you this week?','What assumption are you least confident about?','What would you test next?','What did not work, and why?'].map((p,i)=>(
+              <div key={i} className="text-xs mb-1" style={{color:'#334155'}}>→ {p}</div>
+            ))}
+            <textarea rows={3} className="w-full bg-transparent text-xs rounded-lg p-2.5 resize-none mt-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#94a3b8'}}
+              placeholder="Your reflections for this week..." value={prog.reflection||''} onChange={e=>onProgress({reflection:e.target.value})}/>
+            <button onClick={()=>{if(prog.reflection) addJournal();}} className="mt-2 px-3 py-1.5 rounded-lg text-xs font-bold" style={{background:'rgba(255,255,255,0.05)',color:'#64748b'}}>Save to Journal</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoldenEggPanel({data, setData, toasts, isMobile}){
   const ge = data.goldenEgg || {};
   const [tab, setTab] = useState('overview');
@@ -6738,8 +9024,32 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
   const [strategyDraft, setStrategyDraft] = useState(ge.strategyStatement||'');
   const [expandedTrack, setExpandedTrack] = useState(null);
   const [sectorNote, setSectorNote] = useState({});
+  const [activeWeek, setActiveWeek] = useState(null);
+  const [show14, setShow14] = useState(true);
+  const [courseSection, setCourseSection] = useState('missions');
 
   const upGE = (patch) => setData(d=>({...d, goldenEgg:{...(d.goldenEgg||{}), ...patch}}));
+  const upWeekProgress = (wkId, patch) => {
+    const curr = (course.weekProgress||{})[wkId] || {};
+    upGE({aiCourse:{...course, weekProgress:{...(course.weekProgress||{}), [wkId]:{...curr,...patch}}}});
+  };
+
+  const course = ge.aiCourse || {};
+  const _savedWkDone = Object.fromEntries((course.weeks||[]).filter(w=>w.done).map(w=>[w.id,true]));
+  const _savedDayDone = Object.fromEntries((course.firstFourteen||[]).filter(d=>d.done).map(d=>[d.id,true]));
+  const courseWeeks = GE_COURSE_WEEKS.map(w=>({...w, done:!!_savedWkDone[w.id]}));
+  const days14 = GE_COURSE_DAYS14.map(d=>({...d, done:!!_savedDayDone[d.id]}));
+  const courseWeeksDone = courseWeeks.filter(w=>w.done).length;
+  const days14Done = days14.filter(d=>d.done).length;
+
+  const toggleWeek = (id) => {
+    const next = courseWeeks.map(w=>w.id===id?{...w,done:!w.done}:w);
+    upGE({aiCourse:{...course, weeks:next.map(w=>({id:w.id,done:w.done}))}});
+  };
+  const toggleDay14 = (id) => {
+    const next = days14.map(d=>d.id===id?{...d,done:!d.done}:d);
+    upGE({aiCourse:{...course, firstFourteen:next.map(d=>({id:d.id,done:d.done}))}});
+  };
 
   const toggleTopic = (trackId, topicId) => {
     const curr = ge.curriculum||[];
@@ -6764,7 +9074,7 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
   const f30done = (ge.firstThirtyDays||[]).filter(i=>i.done).length;
   const f30total = (ge.firstThirtyDays||[]).length;
 
-  const tabs = [{id:'overview',label:'Overview'},{id:'curriculum',label:'Curriculum'},{id:'timeline',label:'Timeline'},{id:'sectors',label:'Sectors'}];
+  const tabs = [{id:'overview',label:'Overview'},{id:'curriculum',label:'Curriculum'},{id:'timeline',label:'Timeline'},{id:'sectors',label:'Sectors'},{id:'ai-course',label:'Course'}];
 
   return (
     <div className="max-w-3xl">
@@ -6934,6 +9244,356 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
         </div>
       )}
 
+      {/* AI COURSE */}
+      {tab==='ai-course' && (
+        <div className="space-y-4">
+
+          {/* ── Hero header ── */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(245,158,11,0.3)',background:'linear-gradient(135deg,rgba(245,158,11,0.06),rgba(249,115,22,0.04))'}}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#f59e0b'}}>$0 · Free · 12-Week Build</div>
+                <div className="text-base font-bold leading-snug" style={{color:'#fbbf24'}}>AI Portfolio Investing Course</div>
+                <div className="text-xs mt-1 italic" style={{color:'#78716c'}}>"Build a research OS where ML ranks, LLMs read and challenge, deterministic code controls, and humans decide."</div>
+              </div>
+              <div className="text-3xl flex-shrink-0">📈</div>
+            </div>
+            {/* Stat chips */}
+            <div className="flex flex-wrap gap-2 mt-3">
+              {[
+                [`${courseWeeksDone}/12`,'Weeks Done','#6366f1'],
+                [`${days14Done}/14`,'Sprint Days','#10b981'],
+                [`${courseWeeks.filter(w=>w.bossFight&&w.done).length}/3`,'Boss Fights','#ef4444'],
+                ['~65h','Total Time','#8b5cf6'],
+              ].map(([v,l,c])=>(
+                <div key={l} className="px-3 py-1.5 rounded-lg text-center" style={{background:`${c}12`,border:`1px solid ${c}25`}}>
+                  <div className="text-sm font-bold" style={{color:c}}>{v}</div>
+                  <div className="text-xs" style={{color:'#475569'}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            {/* Master progress bar */}
+            <div className="mt-3">
+              <div style={{height:'8px',background:'rgba(255,255,255,0.05)',borderRadius:'4px',overflow:'hidden'}}>
+                <div style={{width:`${Math.round(100*courseWeeksDone/12)}%`,height:'100%',background:'linear-gradient(90deg,#6366f1,#f59e0b,#f97316)',borderRadius:'4px',transition:'width 0.4s ease'}}/>
+              </div>
+            </div>
+            {/* Phase strip */}
+            <div className="flex gap-1 mt-2">
+              {[['Foundations','#6366f1',1,2],['Machine Learning','#8b5cf6',3,4],['Research Intel','#3b82f6',5,6],['Portfolio','#10b981',7,8],['AI Analysts','#f59e0b',9,10],['Integration','#f97316',11,12]].map(([ph,c,s,e])=>{
+                const pd=courseWeeks.filter(w=>w.num>=s&&w.num<=e&&w.done).length;
+                const done=pd===2;
+                return (
+                  <div key={ph} className="flex-1 text-center py-1 rounded" style={{background:done?`${c}20`:'rgba(255,255,255,0.02)',border:`1px solid ${done?c+'40':'rgba(255,255,255,0.04)'}`}}>
+                    <div className="text-xs" style={{color:done?c:'#334155',fontSize:'9px',fontWeight:600}}>{done?'✓ ':''}{ph.split(' ')[0]}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Rules of the Game ── */}
+          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+            <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Rules of the Game</div>
+            <div className="grid grid-cols-2 gap-2">
+              {GE_COURSE_RULES.map(r=>(
+                <div key={r.name} className="p-2.5 rounded-lg" style={{background:`${r.color}08`,border:`1px solid ${r.color}20`}}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span style={{fontSize:'14px'}}>{r.icon}</span>
+                    <span className="text-xs font-bold" style={{color:r.color}}>{r.name}</span>
+                  </div>
+                  <div className="text-xs leading-relaxed" style={{color:'#475569'}}>{r.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Section nav ── */}
+          <div className="flex gap-1 p-1 rounded-xl" style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.05)'}}>
+            {[['missions','🗺 Missions'],['sprint','⚡ Sprint'],['library','📚 Library'],['arsenal','🛠 Arsenal']].map(([s,l])=>(
+              <button key={s} onClick={()=>setCourseSection(s)}
+                className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={{background:courseSection===s?'rgba(245,158,11,0.15)':'transparent',color:courseSection===s?'#f59e0b':'#475569',border:courseSection===s?'1px solid rgba(245,158,11,0.25)':'1px solid transparent'}}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {/* ── MISSIONS section ── */}
+          {courseSection==='missions' && (
+            activeWeek ? (
+              /* ── Full Week Workspace ── */
+              (() => {
+                const wk = courseWeeks.find(w=>w.id===activeWeek);
+                if(!wk) return null;
+                const contentKey = `wk${wk.num}`;
+                const content = GE_WEEK_CONTENT[contentKey] || null;
+                const prog = getWkProgress(course, wk.id);
+                return (
+                  <WeekWorkspace
+                    wk={wk}
+                    content={content}
+                    prog={prog}
+                    onProgress={(patch)=>upWeekProgress(wk.id, patch)}
+                    onBack={()=>setActiveWeek(null)}
+                    isMobile={isMobile}
+                  />
+                );
+              })()
+            ) : (
+              /* ── Mission List ── */
+              <div className="space-y-2">
+                {/* XP & mastery summary */}
+                <div className="glass rounded-xl p-3 mb-1" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div className="text-xs"><span style={{color:'#475569'}}>Total XP: </span><span className="font-bold" style={{color:'#f59e0b'}}>{totalCourseXP(course.weekProgress, GE_WEEK_CONTENT)}</span></div>
+                    <div className="text-xs"><span style={{color:'#475569'}}>Completed: </span><span className="font-bold" style={{color:'#10b981'}}>{courseWeeks.filter(w=>w.done).length}/{courseWeeks.length} weeks</span></div>
+                    <div className="text-xs" style={{color:'#334155'}}>Click a week to open its workspace. Mastery ≠ completion.</div>
+                  </div>
+                </div>
+                {courseWeeks.map((wk)=>{
+                  const pc = wk.num<=2?'#6366f1':wk.num<=4?'#8b5cf6':wk.num<=6?'#3b82f6':wk.num<=8?'#10b981':wk.num<=10?'#f59e0b':'#f97316';
+                  const contentKey = `wk${wk.num}`;
+                  const prog = getWkProgress(course, wk.id);
+                  const content = GE_WEEK_CONTENT[contentKey] || null;
+                  const completion = calcWeekCompletion(wk, prog, content);
+                  const mastery = calcWeekMastery(prog, content);
+                  return (
+                    <div key={wk.id} className="glass rounded-xl cursor-pointer" onClick={()=>setActiveWeek(wk.id)}
+                      style={{border:`1px solid ${wk.done?'rgba(16,185,129,0.3)':wk.bossFight?'rgba(239,68,68,0.2)':'rgba(255,255,255,0.06)'}`,background:wk.done?'rgba(16,185,129,0.02)':wk.bossFight&&!wk.done?'rgba(239,68,68,0.02)':'transparent'}}>
+                      <div className="flex items-center gap-3 p-3">
+                        <div className="flex-shrink-0 text-xl w-8 text-center">{wk.emoji}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                            <span className="text-sm font-semibold" style={{color:'#e2e8f0'}}>Wk {wk.num}: {wk.name}</span>
+                            {wk.bossFight && <span className="text-xs px-1.5 py-0.5 rounded-full font-bold" style={{background:'rgba(239,68,68,0.15)',color:'#f87171',border:'1px solid rgba(239,68,68,0.3)'}}>⚔️ Boss</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:`${pc}12`,color:pc}}>{wk.phase}</span>
+                            <span className="text-xs" style={{color:'#334155'}}>{wk.hours}</span>
+                          </div>
+                          {/* Dual progress bars */}
+                          <div className="flex gap-2 mt-1.5 items-center">
+                            <div style={{flex:1,height:'3px',background:'rgba(255,255,255,0.05)',borderRadius:'2px',overflow:'hidden'}}>
+                              <div style={{width:`${completion}%`,height:'100%',background:'#10b981',borderRadius:'2px'}}/>
+                            </div>
+                            <div style={{flex:1,height:'3px',background:'rgba(255,255,255,0.05)',borderRadius:'2px',overflow:'hidden'}}>
+                              <div style={{width:`${mastery}%`,height:'100%',background:pc,borderRadius:'2px'}}/>
+                            </div>
+                            <span className="text-xs font-mono flex-shrink-0" style={{color:'#334155',fontSize:'10px'}}>{completion}%/{mastery}%</span>
+                          </div>
+                        </div>
+                        <span style={{color:pc,fontSize:'12px',flexShrink:0}}>→</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="text-xs text-center mt-2" style={{color:'#1e293b'}}>Left bar = completion · Right bar = mastery</div>
+              </div>
+            )
+          )}
+
+          {/* ── SPRINT section ── */}
+          {courseSection==='sprint' && (
+            <div className="space-y-3">
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(16,185,129,0.2)',background:'rgba(16,185,129,0.03)'}}>
+                <div className="text-sm font-bold mb-1" style={{color:'#10b981'}}>Foundation Sprint — First 14 Days</div>
+                <div className="text-xs leading-relaxed" style={{color:'#64748b'}}>After these 14 days you'll have something most AI-investing tutorials never build: a point-in-time data system, a reproducible $1M benchmark, an explicit investment policy, and automated tests designed to stop you from cheating. <em>Only then should AI begin.</em></div>
+                <div className="flex items-center gap-3 mt-3">
+                  <div className="flex-1" style={{height:'6px',background:'rgba(255,255,255,0.06)',borderRadius:'3px',overflow:'hidden'}}>
+                    <div style={{width:`${Math.round(100*days14Done/14)}%`,height:'100%',background:'linear-gradient(90deg,#10b981,#6366f1)',borderRadius:'3px',transition:'width 0.3s'}}/>
+                  </div>
+                  <span className="text-xs font-semibold flex-shrink-0" style={{color:days14Done===14?'#10b981':'#475569'}}>{days14Done}/14 done</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {days14.map(d=>(
+                  <div key={d.id} className="glass rounded-xl flex items-start gap-3 p-3 cursor-pointer" onClick={()=>toggleDay14(d.id)}
+                    style={{border:`1px solid ${d.done?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.05)'}`,background:d.done?'rgba(16,185,129,0.03)':'transparent'}}>
+                    <div className="flex-shrink-0 w-10 h-10 rounded-lg flex flex-col items-center justify-center font-bold"
+                      style={{background:d.done?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.04)',border:d.done?'1px solid rgba(16,185,129,0.4)':'1px solid rgba(255,255,255,0.08)',color:d.done?'#10b981':'#475569'}}>
+                      {d.done ? <span style={{fontSize:'16px'}}>✓</span> : <><span style={{fontSize:'9px',color:'#334155'}}>Day</span><span style={{fontSize:'13px',lineHeight:1}}>{d.day}</span></>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs leading-relaxed" style={{color:d.done?'#334155':'#94a3b8',textDecoration:d.done?'line-through':'none'}}>{d.action}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {days14Done===14 && (
+                <div className="glass rounded-xl p-4 text-center" style={{border:'1px solid rgba(16,185,129,0.3)',background:'rgba(16,185,129,0.05)'}}>
+                  <div className="text-2xl mb-1">🎉</div>
+                  <div className="text-sm font-bold" style={{color:'#10b981'}}>Foundation Complete!</div>
+                  <div className="text-xs mt-1" style={{color:'#64748b'}}>Tag the repo <code style={{background:'rgba(255,255,255,0.08)',padding:'1px 4px',borderRadius:'3px'}}>foundation-v1</code>. Week 3 ML work may begin.</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── LIBRARY section ── */}
+          {courseSection==='library' && (
+            <div className="space-y-3">
+              <div className="text-xs mb-1 leading-relaxed" style={{color:'#475569'}}>
+                The reading list is weighted toward 2024–2026 primary research. Older material is used only where it remains foundational. Note: many 2026 results are NBER working papers or arXiv preprints — excellent material for understanding the frontier, but not yet settled evidence of persistent alpha.
+              </div>
+              {GE_RESEARCH_SPINE.map((p,i)=>(
+                <div key={i} className="glass rounded-xl p-3" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.2)'}}>{i+1}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold leading-snug" style={{color:'#e2e8f0'}}>{p.title}</div>
+                      <div className="text-xs mt-0.5" style={{color:'#475569'}}>{p.authors && `${p.authors} · `}{p.venue}</div>
+                      <div className="text-xs mt-1.5 leading-relaxed" style={{color:'#64748b'}}>→ {p.why}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {/* Free path comparison */}
+              <div className="glass rounded-xl p-4 mt-2" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>vs. Existing Free Paths</div>
+                {[
+                  ['Georgia Tech CS7646','🟡','Excellent ML/finance foundation. Missing: LLM/RAG era, SEC-RAG, agent benchmarks, 2026 leakage work.','Best older foundation — supplement, not replace.'],
+                  ['Udacity Free AI Modules','🟡','Very current GenAI concepts (updated mid-2026). Missing: rigorous portfolio research discipline.','Best for current GenAI concepts — not a complete investing curriculum.'],
+                  ['MIT OCW — Investments','🟢','Strong portfolio theory and asset pricing fundamentals. Missing: modern ML/LLM stack entirely.','Best theory supplement — weakest match to "modern AI research platform."'],
+                ].map(([name,dot,missing,verdict])=>(
+                  <div key={name} className="mb-3 pb-3" style={{borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span>{dot}</span>
+                      <span className="text-xs font-semibold" style={{color:'#94a3b8'}}>{name}</span>
+                    </div>
+                    <div className="text-xs" style={{color:'#475569'}}>Missing: {missing}</div>
+                    <div className="text-xs mt-0.5 italic" style={{color:'#64748b'}}>{verdict}</div>
+                  </div>
+                ))}
+                <div className="text-xs p-2.5 rounded-lg" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.15)',color:'#818cf8'}}>
+                  This course borrows portfolio fundamentals from MIT, practical ML habits from Georgia Tech, and current LLM concepts from Udacity — then connects them with SEC APIs and 2024–2026 financial-AI research.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── ARSENAL section ── */}
+          {courseSection==='arsenal' && (
+            <div className="space-y-4">
+              {/* Weekly time budget */}
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Weekly Time Budget (~5–6h/week)</div>
+                <div className="space-y-2">
+                  {[
+                    ['Interactive concept lesson','50–60 min','#6366f1'],
+                    ['"Paper clinic" — current research digest','35–45 min','#8b5cf6'],
+                    ['Guided Python notebook','90–110 min','#3b82f6'],
+                    ['Build mission — ship a working component','90–120 min','#10b981'],
+                    ['Quiz + red-team review','20–30 min','#f59e0b'],
+                  ].map(([component,time,c])=>(
+                    <div key={component} className="flex items-center justify-between py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:c}}/>
+                        <span className="text-xs" style={{color:'#94a3b8'}}>{component}</span>
+                      </div>
+                      <span className="text-xs font-semibold flex-shrink-0 ml-2" style={{color:c}}>{time}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Free Stack */}
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#475569'}}>Free Stack — $0 Required</div>
+                <div className="text-xs mb-3" style={{color:'#334155'}}>No mandatory paid model, financial-data API, compute service, textbook, or certificate.</div>
+                <div className="space-y-1.5">
+                  {[
+                    ['SEC EDGAR / data.sec.gov','Core','No API key; submissions + XBRL update daily; 10 req/sec limit'],
+                    ['yfinance','Educational','Convenient EOD prices — unofficial; intended for personal/research use only'],
+                    ['FRED / ALFRED','Core macro','Historical observations + vintage dates; essential for point-in-time macro testing'],
+                    ['Kenneth French Lib','Core factors','Market, size, value, profitability, investment factors + benchmark portfolios'],
+                    ['Ollama','Core LLM','Run local LLMs with no per-token fees; supports JSON/Pydantic-schema-constrained outputs'],
+                    ['VectorBT','Default backtester','Fast portfolio simulation + strategy sweeps; pandas/NumPy-native'],
+                    ['CVXPY','Core optimizer','Portfolio constraints + quadratic mean-variance optimization'],
+                    ['DuckDB + Parquet','Data lake','Point-in-time data storage; fast analytical queries on immutable raw data'],
+                    ['scikit-learn','ML models','Gradient-boosted rankers, linear baselines, walk-forward cross-validation'],
+                    ['Pydantic + requests','Agent layer','Structured agent outputs + SEC EDGAR API calls'],
+                    ['LangGraph','Optional','Stateful workflows + human-in-the-loop gates; plain Python is fine until Week 11'],
+                    ['IEX Cloud','⛔ Avoid','Sunset Aug 31 2024 — no longer viable'],
+                  ].map(([name,badge,note])=>(
+                    <div key={name} className="flex items-start gap-2 py-1.5" style={{borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+                      <span className="text-xs font-bold flex-shrink-0" style={{color:'#94a3b8',minWidth:'140px'}}>{name}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" style={{background:badge==='Core'||badge==='Core LLM'||badge==='Core macro'||badge==='Core factors'||badge==='Core optimizer'?'rgba(16,185,129,0.1)':badge==='Optional'?'rgba(99,102,241,0.1)':badge==='⛔ Avoid'?'rgba(239,68,68,0.1)':'rgba(255,255,255,0.05)',color:badge==='Core'||badge==='Core LLM'||badge==='Core macro'||badge==='Core factors'||badge==='Core optimizer'?'#10b981':badge==='Optional'?'#818cf8':badge==='⛔ Avoid'?'#f87171':'#64748b'}}>{badge}</span>
+                      <span className="text-xs leading-relaxed" style={{color:'#475569'}}>{note}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Rubric */}
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#475569'}}>Final Project Rubric — 100 pts</div>
+                <div className="text-xs mb-3" style={{color:'#334155'}}>Grading makes it impossible to pass by producing a lucky backtest alone.</div>
+                <div className="space-y-2">
+                  {[
+                    [20,'Point-in-time data integrity','#ef4444','Immutable raw data, availability timestamps, no label leakage, automated leakage tests, filing accession provenance'],
+                    [15,'ML methodology','#f97316','Walk-forward design, simple baselines, robustness testing, cost sensitivity, interpretable diagnostics, honest limitations'],
+                    [15,'Financial retrieval / RAG','#f59e0b','Evidence-grounded answers, provenance to filings, evaluated retrieval (Recall@k), correct period/entity, abstention when evidence is absent'],
+                    [15,'Portfolio construction','#10b981','Explicit objective, sensible constraints, comparison vs. naïve allocations, turnover/risk treatment, no hidden discretionary edits'],
+                    [10,'Risk management','#3b82f6','Concentration/exposure controls, stress scenarios, model-drift triggers, kill switch, benchmark discipline'],
+                    [10,'LLM / agent engineering','#8b5cf6','Structured output, separate roles, deterministic tool boundaries, evidence validation, adversarial review, human approval gate'],
+                    [10,'$1M investment memo','#6366f1','Every position: thesis + evidence + sizing rationale + risks + disconfirming evidence + exit/review conditions'],
+                    [5,'Reproducibility & audit trail','#94a3b8','Git history, config files, model versions, decision IDs, saved prompts/evidence, one-command or documented rebuild'],
+                  ].map(([pts,c,color,desc])=>(
+                    <div key={c} className="p-3 rounded-lg" style={{background:`${color}06`,border:`1px solid ${color}18`}}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold" style={{color:'#e2e8f0'}}>{c}</span>
+                        <span className="text-sm font-bold" style={{color}}>{pts} pts</span>
+                      </div>
+                      <div className="text-xs leading-relaxed" style={{color:'#475569'}}>{desc}</div>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between p-3 rounded-lg" style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.2)'}}>
+                    <span className="text-sm font-bold" style={{color:'#e2e8f0'}}>Total</span>
+                    <span className="text-xl font-bold" style={{color:'#f59e0b'}}>100 pts</span>
+                  </div>
+                  <div className="p-3 rounded-lg" style={{background:'rgba(239,68,68,0.06)',border:'1px solid rgba(239,68,68,0.15)'}}>
+                    <div className="text-xs font-bold mb-1" style={{color:'#f87171'}}>⚠ Hard Penalties</div>
+                    <div className="text-xs leading-relaxed" style={{color:'#f87171',opacity:0.8}}>
+                      Undisclosed look-ahead / data leakage → <strong>score capped</strong> until repaired.<br/>
+                      Fabricated source or evidence IDs → <strong>evidence component failed</strong>.<br/>
+                      A model that makes no money but passes all rubric tests is a <em>better outcome</em> than a spectacular contaminated Sharpe ratio.
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Milestones */}
+              <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Project Milestones</div>
+                <div className="space-y-2">
+                  {[
+                    ['Data contract','End Wk 1','Every dataset has source, timestamp, availability rule, and licensing note'],
+                    ['Baseline $1M ledger','End Wk 2','Dumb benchmark is live; metrics and benchmark frozen'],
+                    ['ML Ranker v1','End Wk 3','Walk-forward predictions and ranks saved out-of-sample'],
+                    ['Research audit','End Wk 4','Leakage checks and specification sensitivity pass'],
+                    ['EDGAR warehouse','End Wk 5','Filing metadata/text/XBRL retrievable by decision date'],
+                    ['RAG v1','End Wk 6','Evidence retrieval measured against manually labeled questions'],
+                    ['Portfolio engine','End Wk 7','ML scores → constrained target weights, reproducibly'],
+                    ['Risk engine','End Wk 8','Exposure, concentration, drawdown, and drift rules active'],
+                    ['AI Analyst','End Wk 9','Every material assertion carries valid evidence IDs'],
+                    ['Multi-agent committee','End Wk 10','Bull/bear/risk outputs evaluated; human gate enforced'],
+                    ['Platform v1','End Wk 11','End-to-end candidate-to-paper-decision workflow works'],
+                    ['$1M launch packet','End Wk 12','Models/rules frozen; IC memo, target allocation, forward protocol complete'],
+                  ].map(([ms,deadline,def])=>(
+                    <div key={ms} className="flex items-start gap-3 py-1.5" style={{borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+                      <div className="flex-shrink-0">
+                        <div className="text-xs font-semibold" style={{color:'#e2e8f0'}}>{ms}</div>
+                        <div className="text-xs" style={{color:'#f59e0b'}}>{deadline}</div>
+                      </div>
+                      <div className="text-xs leading-relaxed" style={{color:'#475569'}}>{def}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
       {/* SECTORS */}
       {tab==='sectors' && (
         <div className="space-y-3">
@@ -7025,6 +9685,995 @@ function WatchlistAddForm({onAdd}){
   );
 }
 
+/* ================== §7 RESEARCH PANEL ================== */
+function ResearchPanel({data, setData, toasts, isMobile}){
+  const [subtab, setSubtab] = useState('thesis');
+  const theses = data.theses || [];
+  const watchlist = data.companyWatchlist || [];
+  const decisions = data.decisionJournal || [];
+
+  const upTheses = v => setData(d=>({...d, theses:v}));
+  const upWatch  = v => setData(d=>({...d, companyWatchlist:v}));
+  const upDec    = v => setData(d=>({...d, decisionJournal:v}));
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-2xl font-bold">Research</h2>
+        <div className="flex gap-0.5 p-1 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>
+          {[['thesis','Theses'],['watchlist','Watchlist'],['decisions','Decisions']].map(([v,l])=>(
+            <button key={v} onClick={()=>setSubtab(v)}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+              style={subtab===v?{background:'rgba(255,255,255,0.1)',color:'#e2e8f0'}:{color:'#64748b'}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {subtab==='thesis'    && <ThesisSubtab    theses={theses}    upTheses={upTheses}    toasts={toasts} watchlist={watchlist} isMobile={isMobile} />}
+      {subtab==='watchlist' && <WatchlistSubtab  watchlist={watchlist} upWatch={upWatch} theses={theses}  toasts={toasts} />}
+      {subtab==='decisions' && <DecisionSubtab   decisions={decisions} upDec={upDec}     toasts={toasts} theses={theses} />}
+    </div>
+  );
+}
+
+const CONVICTION_COLORS = {low:'#475569', medium:'#f59e0b', high:'#10b981', very_high:'#6366f1'};
+const STATUS_COLORS = {watching:'#64748b', active:'#6366f1', closed:'#334155'};
+
+function ThesisSubtab({theses, upTheses, toasts, watchlist, isMobile}){
+  const [detail, setDetail] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({company:'',thesis:'',variantPerception:'',catalysts:'',counterArgument:'',convictionLevel:'medium',status:'watching'});
+
+  function save(){
+    if(!draft.company.trim()){ toasts.push('Company name required'); return; }
+    const entry = {...draft, id:uid(), catalysts:draft.catalysts.split(',').map(s=>s.trim()).filter(Boolean), lastUpdated:new Date().toISOString()};
+    upTheses([...theses, entry]);
+    setDraft({company:'',thesis:'',variantPerception:'',catalysts:'',counterArgument:'',convictionLevel:'medium',status:'watching'});
+    setShowForm(false);
+    toasts.push('Thesis saved');
+  }
+
+  function del(id){ upTheses(theses.filter(t=>t.id!==id)); toasts.push('Deleted'); setDetail(null); }
+  function toggle(id, field){ upTheses(theses.map(t=>t.id===id?{...t,[field]:!t[field],lastUpdated:new Date().toISOString()}:t)); }
+  function patch(id, updates){ upTheses(theses.map(t=>t.id===id?{...t,...updates,lastUpdated:new Date().toISOString()}:t)); }
+
+  const filtered = filter==='all' ? theses : theses.filter(t=>t.status===filter || t.convictionLevel===filter);
+
+  if(detail){
+    const t = theses.find(x=>x.id===detail);
+    if(!t) { setDetail(null); return null; }
+    return (
+      <div className="space-y-4">
+        <button onClick={()=>setDetail(null)} className="text-sm" style={{color:'#6366f1'}}>← Back to list</button>
+        <div className="glass rounded-xl p-5" style={{border:'1px solid rgba(255,255,255,0.08)'}}>
+          <div className="flex items-start justify-between gap-3 mb-4">
+            <div>
+              <div className="text-xl font-bold">{t.company}</div>
+              <div className="flex gap-2 mt-1">
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{background:`${CONVICTION_COLORS[t.convictionLevel]||'#475569'}20`,color:CONVICTION_COLORS[t.convictionLevel]||'#475569'}}>{t.convictionLevel} conviction</span>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{background:`${STATUS_COLORS[t.status]||'#475569'}20`,color:STATUS_COLORS[t.status]||'#475569'}}>{t.status}</span>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <select value={t.status} onChange={e=>patch(t.id,{status:e.target.value})} className="text-xs rounded px-2 py-1 bg-transparent border" style={{borderColor:'rgba(255,255,255,0.1)',color:'#94a3b8'}}>
+                {['watching','active','closed'].map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+              <button onClick={()=>del(t.id)} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',border:'1px solid rgba(239,68,68,0.2)'}}>Delete</button>
+            </div>
+          </div>
+          {[['Thesis',t.thesis,'thesis'],['Variant Perception',t.variantPerception,'variantPerception'],['Counter-Argument',t.counterArgument,'counterArgument']].map(([label,val,field])=>(
+            <div key={field} className="mb-4">
+              <div className="text-xs font-semibold uppercase tracking-widest mb-1.5" style={{color:'#475569'}}>{label}</div>
+              <textarea rows={3} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+                value={val||''} onChange={e=>patch(t.id,{[field]:e.target.value})} placeholder={`Write ${label.toLowerCase()}…`}/>
+            </div>
+          ))}
+          <div className="mb-4">
+            <div className="text-xs font-semibold uppercase tracking-widest mb-1.5" style={{color:'#475569'}}>Catalysts</div>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {(t.catalysts||[]).map((c,i)=>(
+                <span key={i} className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>
+                  {c} <button onClick={()=>patch(t.id,{catalysts:(t.catalysts||[]).filter((_,j)=>j!==i)})} style={{color:'#475569'}}>×</button>
+                </span>
+              ))}
+            </div>
+            <input className="w-full bg-transparent text-xs rounded px-2 py-1.5" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#94a3b8'}}
+              placeholder="Add catalyst and press Enter…" onKeyDown={e=>{ if(e.key==='Enter'&&e.target.value.trim()){ patch(t.id,{catalysts:[...(t.catalysts||[]),e.target.value.trim()]}); e.target.value=''; }}}/>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs" style={{color:'#475569'}}>Conviction:</span>
+            {['low','medium','high','very_high'].map(lv=>(
+              <button key={lv} onClick={()=>patch(t.id,{convictionLevel:lv})} className="text-xs px-2 py-0.5 rounded-full transition-all"
+                style={{background:t.convictionLevel===lv?`${CONVICTION_COLORS[lv]}25`:'transparent',color:t.convictionLevel===lv?CONVICTION_COLORS[lv]:'#475569',border:`1px solid ${t.convictionLevel===lv?CONVICTION_COLORS[lv]+'40':'rgba(255,255,255,0.06)'}`}}>
+                {lv.replace('_',' ')}
+              </button>
+            ))}
+          </div>
+          {t.lastUpdated && <div className="text-xs mt-3" style={{color:'#334155'}}>Last updated {new Date(t.lastUpdated).toLocaleDateString()}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 mb-2">
+        <div className="flex gap-1 flex-wrap">
+          {['all','watching','active','closed'].map(f=>(
+            <button key={f} onClick={()=>setFilter(f)} className="text-xs px-2.5 py-1 rounded-full transition-all"
+              style={{background:filter===f?'rgba(99,102,241,0.15)':'transparent',color:filter===f?'#818cf8':'#475569',border:`1px solid ${filter===f?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.06)'}`}}>
+              {f}
+            </button>
+          ))}
+        </div>
+        <button onClick={()=>setShowForm(!showForm)} className="ml-auto px-3 py-1.5 rounded-xl text-sm font-semibold"
+          style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>+ Thesis</button>
+      </div>
+
+      {showForm && (
+        <div className="glass rounded-xl p-4 space-y-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+          <div className="text-sm font-semibold" style={{color:'#818cf8'}}>New Thesis</div>
+          {[['company','Company / Ticker'],['thesis','Thesis'],['variantPerception','Variant Perception'],['counterArgument','Counter-Argument']].map(([k,ph])=>(
+            <textarea key={k} rows={k==='company'?1:2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none block" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+              placeholder={ph} value={draft[k]} onChange={e=>setDraft(d=>({...d,[k]:e.target.value}))}/>
+          ))}
+          <input className="w-full bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+            placeholder="Catalysts (comma-separated)" value={draft.catalysts} onChange={e=>setDraft(d=>({...d,catalysts:e.target.value}))}/>
+          <div className="flex gap-3 items-center">
+            <select value={draft.convictionLevel} onChange={e=>setDraft(d=>({...d,convictionLevel:e.target.value}))} className="bg-transparent text-xs rounded px-2 py-1.5 border" style={{borderColor:'rgba(255,255,255,0.1)',color:'#94a3b8'}}>
+              {['low','medium','high','very_high'].map(v=><option key={v} value={v}>{v.replace('_',' ')} conviction</option>)}
+            </select>
+            <button onClick={save} className="px-4 py-1.5 rounded-xl text-sm font-bold" style={{background:'rgba(16,185,129,0.15)',color:'#10b981',border:'1px solid rgba(16,185,129,0.25)'}}>Save</button>
+            <button onClick={()=>setShowForm(false)} className="text-xs" style={{color:'#475569'}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!filtered.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No theses yet — tap + to add your first.</div>}
+      {filtered.map(t=>(
+        <div key={t.id} className="glass rounded-xl p-4 cursor-pointer hover:bg-white/3 transition-colors" onClick={()=>setDetail(t.id)}
+          style={{border:`1px solid ${t.convictionLevel==='very_high'?'rgba(99,102,241,0.25)':t.convictionLevel==='high'?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.06)'}`}}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold" style={{color:'#e2e8f0'}}>{t.company}</div>
+              {t.thesis && <div className="text-sm mt-1 line-clamp-2" style={{color:'#64748b'}}>{t.thesis}</div>}
+            </div>
+            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{background:`${CONVICTION_COLORS[t.convictionLevel]||'#475569'}20`,color:CONVICTION_COLORS[t.convictionLevel]||'#475569'}}>{t.convictionLevel?.replace('_',' ')}</span>
+              <span className="text-xs px-1.5 py-0.5 rounded" style={{background:'rgba(255,255,255,0.03)',color:STATUS_COLORS[t.status]||'#475569'}}>{t.status}</span>
+            </div>
+          </div>
+          {(t.catalysts||[]).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {(t.catalysts||[]).slice(0,3).map((c,i)=><span key={i} className="text-xs px-1.5 py-0.5 rounded" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{c}</span>)}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const SECTOR_LIST = ['Technology','Industrials','Healthcare','Financial','Consumer','Energy','Materials','Utilities','Real Estate','Niche Software','Payments/Fintech','Aerospace/Defense','Waste/Environmental','Education/Workforce','Medical Devices','Specialty Finance'];
+
+function WatchlistSubtab({watchlist, upWatch, theses, toasts}){
+  const [detail, setDetail] = useState(null);
+  const [sectorFilter, setSectorFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({ticker:'',name:'',sector:'',thesisSummary:'',linkedThesisId:'',goldenEgg:false});
+
+  function save(){
+    if(!draft.ticker.trim()){ toasts.push('Ticker required'); return; }
+    upWatch([...watchlist, {...draft, id:uid(), ticker:draft.ticker.toUpperCase(), redFlags:[], catalysts:[], lastUpdated:new Date().toISOString()}]);
+    setDraft({ticker:'',name:'',sector:'',thesisSummary:'',linkedThesisId:'',goldenEgg:false});
+    setShowForm(false); toasts.push('Added to watchlist');
+  }
+  function patch(id,updates){ upWatch(watchlist.map(w=>w.id===id?{...w,...updates,lastUpdated:new Date().toISOString()}:w)); }
+  function del(id){ upWatch(watchlist.filter(w=>w.id!==id)); setDetail(null); toasts.push('Removed'); }
+
+  const now = Date.now();
+  const filtered = watchlist
+    .filter(w=>sectorFilter==='all'||w.sector===sectorFilter)
+    .filter(w=>!search||w.ticker.toLowerCase().includes(search.toLowerCase())||w.name?.toLowerCase().includes(search.toLowerCase()));
+
+  const sectors = [...new Set(watchlist.map(w=>w.sector).filter(Boolean))];
+
+  if(detail){
+    const w = watchlist.find(x=>x.id===detail);
+    if(!w){ setDetail(null); return null; }
+    const stale = w.lastUpdated && (now - new Date(w.lastUpdated).getTime()) > 60*24*3600000;
+    return (
+      <div className="space-y-4">
+        <button onClick={()=>setDetail(null)} className="text-sm" style={{color:'#6366f1'}}>← Back</button>
+        <div className="glass rounded-xl p-5" style={{border:`1px solid ${stale?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.08)'}`}}>
+          <div className="flex items-start justify-between gap-3 mb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-bold" style={{color:'#e2e8f0'}}>{w.ticker}</span>
+                {w.goldenEgg && <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b'}}>🥚 Fund</span>}
+                {stale && <span className="text-xs px-1.5 py-0.5 rounded-full" style={{background:'rgba(245,158,11,0.1)',color:'#f59e0b'}}>⚠ Stale 60d+</span>}
+              </div>
+              <div className="text-sm mt-0.5" style={{color:'#64748b'}}>{w.name} · {w.sector}</div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={()=>patch(w.id,{goldenEgg:!w.goldenEgg})} className="text-xs px-2 py-1 rounded" style={{color:w.goldenEgg?'#f59e0b':'#475569',border:`1px solid ${w.goldenEgg?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.08)'}`}}>
+                {w.goldenEgg?'🥚 Fund':'+ Fund'}
+              </button>
+              <button onClick={()=>del(w.id)} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',border:'1px solid rgba(239,68,68,0.2)'}}>Remove</button>
+            </div>
+          </div>
+          {[['thesisSummary','Thesis Summary',3],['valuationSnapshot','Valuation Snapshot',2]].map(([f,label,rows])=>(
+            <div key={f} className="mb-4">
+              <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#475569'}}>{label}</div>
+              <textarea rows={rows} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+                value={w[f]||''} onChange={e=>patch(w.id,{[f]:e.target.value})} placeholder={`Add ${label.toLowerCase()}…`}/>
+            </div>
+          ))}
+          {/* Red flags */}
+          <div className="mb-4">
+            <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#ef4444'}}>Red Flags</div>
+            {(w.redFlags||[]).map((f,i)=>(
+              <div key={i} className="flex items-center gap-2 mb-1">
+                <span className="flex-1 text-sm" style={{color:'#f87171'}}>{f}</span>
+                <button onClick={()=>patch(w.id,{redFlags:(w.redFlags||[]).filter((_,j)=>j!==i)})} style={{color:'#475569',fontSize:'12px'}}>×</button>
+              </div>
+            ))}
+            <input className="w-full bg-transparent text-xs rounded px-2 py-1.5 mt-1" style={{border:'1px solid rgba(239,68,68,0.2)',color:'#94a3b8'}}
+              placeholder="Add red flag…" onKeyDown={e=>{ if(e.key==='Enter'&&e.target.value.trim()){ patch(w.id,{redFlags:[...(w.redFlags||[]),e.target.value.trim()]}); e.target.value=''; }}}/>
+          </div>
+          {/* Catalysts */}
+          <div className="mb-4">
+            <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#10b981'}}>Catalysts</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {(w.catalysts||[]).map((c,i)=>(
+                <span key={i} className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" style={{background:'rgba(16,185,129,0.12)',color:'#10b981'}}>
+                  {c} <button onClick={()=>patch(w.id,{catalysts:(w.catalysts||[]).filter((_,j)=>j!==i)})} style={{color:'#475569'}}>×</button>
+                </span>
+              ))}
+            </div>
+            <input className="w-full bg-transparent text-xs rounded px-2 py-1.5" style={{border:'1px solid rgba(16,185,129,0.15)',color:'#94a3b8'}}
+              placeholder="Add catalyst…" onKeyDown={e=>{ if(e.key==='Enter'&&e.target.value.trim()){ patch(w.id,{catalysts:[...(w.catalysts||[]),e.target.value.trim()]}); e.target.value=''; }}}/>
+          </div>
+          {/* Link to thesis */}
+          {theses.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#475569'}}>Linked Thesis</div>
+              <select value={w.linkedThesisId||''} onChange={e=>patch(w.id,{linkedThesisId:e.target.value})} className="bg-transparent text-sm rounded-lg px-2.5 py-2 border w-full" style={{borderColor:'rgba(255,255,255,0.08)',color:'#94a3b8'}}>
+                <option value="">None</option>
+                {theses.map(t=><option key={t.id} value={t.id}>{t.company}</option>)}
+              </select>
+            </div>
+          )}
+          {w.lastUpdated && <div className="text-xs mt-3" style={{color:'#334155'}}>Updated {new Date(w.lastUpdated).toLocaleDateString()}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 mb-2">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search ticker or name…" className="flex-1 bg-transparent text-sm rounded-xl px-3 py-2" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}/>
+        <button onClick={()=>setShowForm(!showForm)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',flexShrink:0}}>+ Add</button>
+      </div>
+      {sectors.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          <button onClick={()=>setSectorFilter('all')} className="text-xs px-2 py-0.5 rounded-full" style={{background:sectorFilter==='all'?'rgba(99,102,241,0.15)':'transparent',color:sectorFilter==='all'?'#818cf8':'#475569',border:`1px solid ${sectorFilter==='all'?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.06)'}`}}>All ({watchlist.length})</button>
+          {sectors.map(s=>(
+            <button key={s} onClick={()=>setSectorFilter(s)} className="text-xs px-2 py-0.5 rounded-full" style={{background:sectorFilter===s?'rgba(99,102,241,0.15)':'transparent',color:sectorFilter===s?'#818cf8':'#475569',border:`1px solid ${sectorFilter===s?'rgba(99,102,241,0.3)':'rgba(255,255,255,0.06)'}`}}>{s}</button>
+          ))}
+        </div>
+      )}
+      {showForm && (
+        <div className="glass rounded-xl p-4 space-y-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+          <div className="text-sm font-semibold" style={{color:'#818cf8'}}>Add to Watchlist</div>
+          <div className="grid grid-cols-2 gap-2">
+            <input className="bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} placeholder="Ticker *" value={draft.ticker} onChange={e=>setDraft(d=>({...d,ticker:e.target.value.toUpperCase()}))}/>
+            <input className="bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} placeholder="Company Name" value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/>
+          </div>
+          <select value={draft.sector} onChange={e=>setDraft(d=>({...d,sector:e.target.value}))} className="w-full bg-transparent text-sm rounded-lg px-2.5 py-2 border" style={{borderColor:'rgba(255,255,255,0.08)',color:'#94a3b8'}}>
+            <option value="">Select sector…</option>
+            {SECTOR_LIST.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+          <div className="flex items-center gap-3">
+            <button onClick={save} className="px-4 py-1.5 rounded-xl text-sm font-bold" style={{background:'rgba(16,185,129,0.15)',color:'#10b981',border:'1px solid rgba(16,185,129,0.25)'}}>Add</button>
+            <button onClick={()=>setShowForm(false)} className="text-xs" style={{color:'#475569'}}>Cancel</button>
+            <label className="flex items-center gap-1.5 ml-auto text-xs" style={{color:'#f59e0b'}}>
+              <input type="checkbox" checked={draft.goldenEgg} onChange={e=>setDraft(d=>({...d,goldenEgg:e.target.checked}))}/> 🥚 Fund
+            </label>
+          </div>
+        </div>
+      )}
+      {!filtered.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No companies yet. Aim for 50–300 entries across 2–3 sectors.</div>}
+      <div className="grid gap-2">
+        {filtered.map(w=>{
+          const stale = w.lastUpdated && (now - new Date(w.lastUpdated).getTime()) > 60*24*3600000;
+          return (
+            <div key={w.id} className="glass rounded-xl px-4 py-3 cursor-pointer flex items-center gap-3" onClick={()=>setDetail(w.id)}
+              style={{border:`1px solid ${stale?'rgba(245,158,11,0.2)':'rgba(255,255,255,0.06)'}`}}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm" style={{color:'#e2e8f0'}}>{w.ticker}</span>
+                  {w.goldenEgg && <span style={{fontSize:'13px'}}>🥚</span>}
+                  {stale && <span className="text-xs" style={{color:'#f59e0b'}}>⚠</span>}
+                </div>
+                <div className="text-xs mt-0.5 truncate" style={{color:'#475569'}}>{w.name} {w.sector && `· ${w.sector}`}</div>
+              </div>
+              {(w.redFlags||[]).length > 0 && <span className="text-xs flex-shrink-0" style={{color:'#f87171'}}>⚑ {(w.redFlags||[]).length}</span>}
+              {w.lastUpdated && <span className="text-xs flex-shrink-0" style={{color:'#334155'}}>{new Date(w.lastUpdated).toLocaleDateString('en',{month:'short',day:'numeric'})}</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DecisionSubtab({decisions, upDec, toasts, theses}){
+  const [detail, setDetail] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({decision:'',reasoningAtTheTime:'',expectedOutcome:'',confidenceLevel:'medium',linkedThesisId:''});
+
+  function save(){
+    if(!draft.decision.trim()){ toasts.push('Decision text required'); return; }
+    upDec([...decisions, {...draft, id:uid(), date:new Date().toISOString(), actualOutcome:'', whatIWasRight:'', whatIWasWrong:''}]);
+    setDraft({decision:'',reasoningAtTheTime:'',expectedOutcome:'',confidenceLevel:'medium',linkedThesisId:''});
+    setShowForm(false); toasts.push('Decision logged');
+  }
+  function patch(id,u){ upDec(decisions.map(d=>d.id===id?{...d,...u}:d)); }
+  function del(id){ upDec(decisions.filter(d=>d.id!==id)); setDetail(null); }
+
+  const now = Date.now();
+  const needsPostmortem = decisions.filter(d=>!d.actualOutcome&&(now-new Date(d.date).getTime())>90*24*3600000);
+
+  if(detail){
+    const d = decisions.find(x=>x.id===detail);
+    if(!d){ setDetail(null); return null; }
+    const daysOld = Math.floor((now-new Date(d.date).getTime())/86400000);
+    const pmDue = !d.actualOutcome && daysOld >= 90;
+    return (
+      <div className="space-y-4">
+        <button onClick={()=>setDetail(null)} className="text-sm" style={{color:'#6366f1'}}>← Back</button>
+        <div className="glass rounded-xl p-5 space-y-4" style={{border:`1px solid ${pmDue?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.08)'}`}}>
+          {pmDue && <div className="text-xs p-2.5 rounded-lg" style={{background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.2)',color:'#f59e0b'}}>⚠ {daysOld} days old — postmortem due</div>}
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#475569'}}>Decision</div>
+            <textarea rows={2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} value={d.decision} onChange={e=>patch(d.id,{decision:e.target.value})}/>
+          </div>
+          {[['reasoningAtTheTime','Reasoning at the Time'],['expectedOutcome','Expected Outcome'],['actualOutcome','Actual Outcome (postmortem)'],['whatIWasRight','What I Was Right About'],['whatIWasWrong','What I Was Wrong About']].map(([f,label])=>(
+            <div key={f}>
+              <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:f.startsWith('actual')||f.startsWith('what')?'#10b981':'#475569'}}>{label}</div>
+              <textarea rows={2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:`1px solid ${f.startsWith('actual')||f.startsWith('what')?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.06)'}`,color:'#e2e8f0'}}
+                value={d[f]||''} onChange={e=>patch(d.id,{[f]:e.target.value})} placeholder={label}/>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <div className="text-xs" style={{color:'#334155'}}>Logged {new Date(d.date).toLocaleDateString()} · {daysOld}d ago · Confidence: {d.confidenceLevel}</div>
+            <button onClick={()=>del(d.id)} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',border:'1px solid rgba(239,68,68,0.2)'}}>Delete</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {needsPostmortem.length > 0 && (
+        <div className="p-3 rounded-xl" style={{background:'rgba(245,158,11,0.06)',border:'1px solid rgba(245,158,11,0.2)'}}>
+          <div className="text-xs font-semibold" style={{color:'#f59e0b'}}>⚠ {needsPostmortem.length} decision{needsPostmortem.length>1?'s':''} 90d+ old without postmortem</div>
+          {needsPostmortem.slice(0,2).map(d=><div key={d.id} className="text-xs mt-1 cursor-pointer underline" style={{color:'#f59e0b'}} onClick={()=>setDetail(d.id)}>{d.decision.slice(0,60)}…</div>)}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <button onClick={()=>setShowForm(!showForm)} className="px-3 py-1.5 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white'}}>+ Log Decision</button>
+      </div>
+      {showForm && (
+        <div className="glass rounded-xl p-4 space-y-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+          <div className="text-sm font-semibold" style={{color:'#818cf8'}}>Log Decision — right now, at decision time</div>
+          {[['decision','Decision (what exactly are you deciding?)'],['reasoningAtTheTime','Reasoning at this moment'],['expectedOutcome','Expected outcome']].map(([k,ph])=>(
+            <textarea key={k} rows={k==='decision'?1:2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none block" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+              placeholder={ph} value={draft[k]} onChange={e=>setDraft(d=>({...d,[k]:e.target.value}))}/>
+          ))}
+          <div className="flex gap-3 items-center">
+            <select value={draft.confidenceLevel} onChange={e=>setDraft(d=>({...d,confidenceLevel:e.target.value}))} className="bg-transparent text-xs rounded px-2 py-1.5 border" style={{borderColor:'rgba(255,255,255,0.1)',color:'#94a3b8'}}>
+              {['low','medium','high'].map(v=><option key={v} value={v}>{v} confidence</option>)}
+            </select>
+            {theses.length > 0 && <select value={draft.linkedThesisId} onChange={e=>setDraft(d=>({...d,linkedThesisId:e.target.value}))} className="bg-transparent text-xs rounded px-2 py-1.5 border" style={{borderColor:'rgba(255,255,255,0.1)',color:'#94a3b8'}}>
+              <option value="">Link thesis…</option>
+              {theses.map(t=><option key={t.id} value={t.id}>{t.company}</option>)}
+            </select>}
+            <button onClick={save} className="px-4 py-1.5 rounded-xl text-sm font-bold" style={{background:'rgba(16,185,129,0.15)',color:'#10b981',border:'1px solid rgba(16,185,129,0.25)'}}>Log</button>
+            <button onClick={()=>setShowForm(false)} className="text-xs" style={{color:'#475569'}}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {!decisions.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No decisions logged yet. Log at decision time — not after.</div>}
+      {decisions.slice().reverse().map(d=>{
+        const daysOld = Math.floor((now-new Date(d.date).getTime())/86400000);
+        const pmDue = !d.actualOutcome && daysOld>=90;
+        const pmDone = !!d.actualOutcome;
+        return (
+          <div key={d.id} className="glass rounded-xl p-4 cursor-pointer" onClick={()=>setDetail(d.id)}
+            style={{border:`1px solid ${pmDue?'rgba(245,158,11,0.25)':pmDone?'rgba(16,185,129,0.15)':'rgba(255,255,255,0.06)'}`}}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium line-clamp-2" style={{color:'#e2e8f0'}}>{d.decision}</div>
+                <div className="text-xs mt-1" style={{color:'#475569'}}>{new Date(d.date).toLocaleDateString()} · {daysOld}d ago · {d.confidenceLevel} confidence</div>
+              </div>
+              <span className="text-xs flex-shrink-0 px-1.5 py-0.5 rounded" style={{background:pmDone?'rgba(16,185,129,0.1)':pmDue?'rgba(245,158,11,0.1)':'rgba(255,255,255,0.04)',color:pmDone?'#10b981':pmDue?'#f59e0b':'#334155'}}>
+                {pmDone?'✓ PM done':pmDue?'PM due':'pending'}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ================== §8 MENTAL MODELS PANEL ================== */
+function MentalModelsPanel({data, setData, toasts}){
+  const models = data.mentalModels || [];
+  const [detail, setDetail] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [search, setSearch] = useState('');
+  const [draft, setDraft] = useState({name:'',description:'',whenToUse:'',example:'',tags:''});
+
+  function save(){
+    if(!draft.name.trim()){ toasts.push('Name required'); return; }
+    setData(d=>({...d, mentalModels:[...d.mentalModels||[], {...draft, id:uid(), tags:draft.tags.split(',').map(s=>s.trim()).filter(Boolean)}]}));
+    setDraft({name:'',description:'',whenToUse:'',example:'',tags:''}); setShowForm(false); toasts.push('Model saved');
+  }
+  function del(id){ setData(d=>({...d, mentalModels:(d.mentalModels||[]).filter(m=>m.id!==id)})); setDetail(null); }
+  function patch(id,u){ setData(d=>({...d, mentalModels:(d.mentalModels||[]).map(m=>m.id===id?{...m,...u}:m)})); }
+
+  const filtered = models.filter(m=>!search||m.name.toLowerCase().includes(search.toLowerCase())||m.description?.toLowerCase().includes(search.toLowerCase())||(m.tags||[]).some(t=>t.toLowerCase().includes(search.toLowerCase())));
+
+  if(detail){
+    const m = models.find(x=>x.id===detail);
+    if(!m){ setDetail(null); return null; }
+    return (
+      <div className="space-y-4">
+        <button onClick={()=>setDetail(null)} className="text-sm" style={{color:'#6366f1'}}>← Back</button>
+        <div className="glass rounded-xl p-5 space-y-4" style={{border:'1px solid rgba(139,92,246,0.2)'}}>
+          <div className="text-xl font-bold">{m.name}</div>
+          {(m.tags||[]).length > 0 && <div className="flex flex-wrap gap-1">{(m.tags||[]).map(t=><span key={t} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(139,92,246,0.12)',color:'#a78bfa'}}>{t}</span>)}</div>}
+          {[['description','Description','#e2e8f0'],['whenToUse','When to Use','#94a3b8'],['example','Example','#64748b']].map(([f,label,c])=>(
+            <div key={f}>
+              <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#475569'}}>{label}</div>
+              <textarea rows={3} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:c}}
+                value={m[f]||''} onChange={e=>patch(m.id,{[f]:e.target.value})} placeholder={label}/>
+            </div>
+          ))}
+          <button onClick={()=>del(m.id)} className="text-xs px-2 py-1 rounded" style={{color:'#ef4444',border:'1px solid rgba(239,68,68,0.2)'}}>Delete model</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-2xl font-bold">Mental Models</h2>
+        <button onClick={()=>setShowForm(!showForm)} className="px-3 py-1.5 rounded-xl text-sm font-semibold" style={{background:'linear-gradient(90deg,#8b5cf6,#6366f1)',color:'white'}}>+ Add</button>
+      </div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search models…" className="w-full bg-transparent text-sm rounded-xl px-3 py-2 mb-4" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}/>
+      {showForm && (
+        <div className="glass rounded-xl p-4 mb-4 space-y-3" style={{border:'1px solid rgba(139,92,246,0.2)'}}>
+          <div className="text-sm font-semibold" style={{color:'#a78bfa'}}>New Mental Model</div>
+          <input className="w-full bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} placeholder="Name *" value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))}/>
+          {[['description','Description'],['whenToUse','When to Use'],['example','Example']].map(([k,ph])=>(
+            <textarea key={k} rows={2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none block" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+              placeholder={ph} value={draft[k]} onChange={e=>setDraft(d=>({...d,[k]:e.target.value}))}/>
+          ))}
+          <input className="w-full bg-transparent text-sm rounded-lg px-2.5 py-2" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}} placeholder="Tags (comma-separated): investing, strategy…" value={draft.tags} onChange={e=>setDraft(d=>({...d,tags:e.target.value}))}/>
+          <div className="flex gap-3">
+            <button onClick={save} className="px-4 py-1.5 rounded-xl text-sm font-bold" style={{background:'rgba(139,92,246,0.2)',color:'#a78bfa',border:'1px solid rgba(139,92,246,0.3)'}}>Save</button>
+            <button onClick={()=>setShowForm(false)} className="text-xs" style={{color:'#475569'}}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {!filtered.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No models match — search or add one.</div>}
+      <div className="grid gap-3">
+        {filtered.map(m=>(
+          <div key={m.id} className="glass rounded-xl p-4 cursor-pointer" onClick={()=>setDetail(m.id)} style={{border:'1px solid rgba(139,92,246,0.12)'}}>
+            <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>{m.name}</div>
+            <div className="text-sm line-clamp-2" style={{color:'#64748b'}}>{m.description}</div>
+            {(m.tags||[]).length > 0 && <div className="flex flex-wrap gap-1 mt-2">{(m.tags||[]).map(t=><span key={t} className="text-xs px-1.5 py-0.5 rounded-full" style={{background:'rgba(139,92,246,0.1)',color:'#a78bfa'}}>{t}</span>)}</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ================== §12 DEEP WORK RAMP PANEL ================== */
+function DeepWorkRampPanel({data, setData, toasts}){
+  const rampSessions = data.rampSessions || [];
+  const ritual = data.rampRitual || {cue:'',timerMin:75};
+  const [phase, setPhase] = useState('start'); // start | step1..7 | running | closeout | history
+  const [stepIdx, setStepIdx] = useState(0);
+  const [sessionDraft, setSessionDraft] = useState({deliverable:'',residue:'',intention:'',challengeRating:'edge',envChecks:[false,false,false,false],cueConfirmed:false,timerLengthMin:ritual.timerMin||75});
+  const [timerSecs, setTimerSecs] = useState(0);
+  const [timerActive, setTimerActive] = useState(false);
+  const timerRef = useRef(null);
+  const sessionStartRef = useRef(null);
+
+  // Timer tick — 1s interval
+  useEffect(()=>{
+    if(timerActive){
+      timerRef.current = setInterval(()=>setTimerSecs(s=>s-1), 1000);
+    } else {
+      clearInterval(timerRef.current);
+    }
+    return ()=>clearInterval(timerRef.current);
+  },[timerActive]);
+
+  // Timer expired → closeout
+  useEffect(()=>{
+    if(timerSecs <= 0 && timerActive){ setTimerActive(false); setPhase('closeout'); }
+  },[timerSecs, timerActive]);
+
+  function startTimer(){
+    const secs = (sessionDraft.timerLengthMin||75)*60;
+    setTimerSecs(secs);
+    setTimerActive(true);
+    sessionStartRef.current = new Date().toISOString();
+    setPhase('running');
+  }
+
+  function stopEarly(){ setTimerActive(false); setPhase('closeout'); }
+
+  const [closeoutNote, setCloseoutNote] = useState('');
+  const [nextMicro, setNextMicro] = useState('');
+
+  function finishSession(){
+    const session = {
+      id:uid(), startedAt:sessionStartRef.current||new Date().toISOString(),
+      deliverable:sessionDraft.deliverable, implementationIntention:sessionDraft.intention,
+      challengeRating:sessionDraft.challengeRating,
+      timerLengthMin:sessionDraft.timerLengthMin, completed:true,
+      outcomeNote:closeoutNote, nextMicroAction:nextMicro,
+    };
+    setData(d=>({...d, rampSessions:[...(d.rampSessions||[]), session]}));
+    toasts.push('Session logged');
+    setPhase('start');
+    setStepIdx(0);
+    setCloseoutNote(''); setNextMicro('');
+    setSessionDraft({deliverable:'',residue:'',intention:'',challengeRating:'edge',envChecks:[false,false,false,false],cueConfirmed:false,timerLengthMin:ritual.timerMin||75});
+  }
+
+  const ENV_ITEMS = ['Single focused tab/app open','Phone in another room or on DND','Water or coffee ready','Headphones/quiet environment set'];
+  const totalSecs = (sessionDraft.timerLengthMin||75)*60;
+  const pct = timerSecs > 0 ? Math.round(100*timerSecs/totalSecs) : 0;
+  const minsLeft = Math.floor(timerSecs/60), secsLeft = timerSecs%60;
+  const recentSessions = rampSessions.slice(-10).reverse();
+
+  // STEPS
+  const steps = [
+    {label:'Residue Dump', emoji:'🧠', tip:'Leave the last task behind. What were you doing, and exactly where did you leave it?'},
+    {label:'Define Deliverable', emoji:'🎯', tip:'One concrete, checkable output for this session. Not "work on X" — "complete the Y section of Z."'},
+    {label:'Implementation Intention', emoji:'✍️', tip:'"When the timer starts, I will [deliverable] until [stopping point]."'},
+    {label:'Environment Lock', emoji:'🔒', tip:'Quick checklist. Distraction removal is the cheapest focus upgrade.'},
+    {label:'Challenge Calibration', emoji:'⚖️', tip:'Flow requires the task to sit slightly above current skill. Too easy or too hard → adjust scope.'},
+    {label:'Entry Cue', emoji:'🎬', tip:'Run your fixed micro-ritual — the same sequence every time. Consistency is the mechanism, not the content.'},
+  ];
+
+  if(phase==='history'){
+    return (
+      <div>
+        <div className="flex items-center gap-3 mb-5">
+          <button onClick={()=>setPhase('start')} className="text-sm" style={{color:'#6366f1'}}>← Back</button>
+          <h2 className="text-xl font-bold">Session History</h2>
+        </div>
+        {!recentSessions.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No sessions yet.</div>}
+        <div className="space-y-3">
+          {recentSessions.map(s=>(
+            <div key={s.id} className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium" style={{color:'#e2e8f0'}}>{s.deliverable}</div>
+                  <div className="text-xs mt-1" style={{color:'#475569'}}>{new Date(s.startedAt).toLocaleDateString()} · {s.timerLengthMin}min · {s.challengeRating}</div>
+                  {s.outcomeNote && <div className="text-xs mt-1" style={{color:'#64748b'}}>Outcome: {s.outcomeNote}</div>}
+                  {s.nextMicroAction && <div className="text-xs mt-0.5" style={{color:'#6366f1'}}>Next: {s.nextMicroAction}</div>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if(phase==='running'){
+    return (
+      <div className="flex flex-col items-center justify-center py-8 gap-6">
+        <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#475569'}}>Deep Work Session</div>
+        <div className="relative w-40 h-40">
+          <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+            <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8"/>
+            <circle cx="50" cy="50" r="42" fill="none" stroke="#6366f1" strokeWidth="8" strokeLinecap="round"
+              strokeDasharray={`${2*Math.PI*42}`} strokeDashoffset={`${2*Math.PI*42*(1-pct/100)}`} style={{transition:'stroke-dashoffset 1s linear'}}/>
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="text-3xl font-bold tabular-nums">{String(minsLeft).padStart(2,'0')}:{String(secsLeft).padStart(2,'0')}</div>
+            <div className="text-xs" style={{color:'#475569'}}>remaining</div>
+          </div>
+        </div>
+        <div className="glass rounded-xl p-3 text-sm text-center max-w-xs" style={{border:'1px solid rgba(99,102,241,0.2)',color:'#a5b4fc'}}>
+          {sessionDraft.intention || sessionDraft.deliverable}
+        </div>
+        <button onClick={stopEarly} className="px-4 py-2 rounded-xl text-sm" style={{color:'#475569',border:'1px solid rgba(255,255,255,0.08)'}}>Stop early →</button>
+      </div>
+    );
+  }
+
+  if(phase==='closeout'){
+    return (
+      <div className="space-y-4">
+        <div className="text-xl font-bold">Session Close-Out</div>
+        <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(16,185,129,0.2)'}}>
+          <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#10b981'}}>Deliverable was: {sessionDraft.deliverable}</div>
+          <textarea rows={3} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+            placeholder="What actually got done vs. what you planned?" value={closeoutNote} onChange={e=>setCloseoutNote(e.target.value)}/>
+        </div>
+        <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+          <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#6366f1'}}>Exact next micro-action</div>
+          <div className="text-xs mb-2" style={{color:'#475569'}}>Capture where exactly you left off — this feeds the next session's residue dump and lowers intrusive "unfinished" pull.</div>
+          <textarea rows={2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
+            placeholder="The NEXT specific micro-action when I return: …" value={nextMicro} onChange={e=>setNextMicro(e.target.value)}/>
+        </div>
+        <button onClick={finishSession} className="w-full py-3 rounded-xl font-bold text-sm" style={{background:'rgba(16,185,129,0.15)',color:'#10b981',border:'1px solid rgba(16,185,129,0.25)'}}>Log & Finish</button>
+      </div>
+    );
+  }
+
+  // WIZARD: steps 0–5
+  if(phase==='steps'){
+    const step = steps[stepIdx];
+    return (
+      <div className="space-y-4">
+        {/* Progress bar */}
+        <div className="flex gap-1 mb-2">
+          {steps.map((_,i)=>(
+            <div key={i} className="flex-1 h-1 rounded-full" style={{background:i<=stepIdx?'#6366f1':'rgba(255,255,255,0.08)'}}/>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <span style={{fontSize:'24px'}}>{step.emoji}</span>
+          <div>
+            <div className="font-bold">Step {stepIdx+1} of {steps.length}: {step.label}</div>
+            <div className="text-xs mt-0.5" style={{color:'#475569'}}>{step.tip}</div>
+          </div>
+        </div>
+
+        {/* Step 0: Residue dump */}
+        {stepIdx===0 && (
+          <textarea rows={4} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+            placeholder="What were you just doing, and where exactly did you leave it?" value={sessionDraft.residue} onChange={e=>setSessionDraft(d=>({...d,residue:e.target.value}))}/>
+        )}
+
+        {/* Step 1: Deliverable */}
+        {stepIdx===1 && (
+          <>
+            <textarea rows={3} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+              placeholder='E.g. "Write the counter-argument section of the [[Company X]] thesis"' value={sessionDraft.deliverable} onChange={e=>setSessionDraft(d=>({...d,deliverable:e.target.value}))}/>
+            {!sessionDraft.deliverable.trim() && <div className="text-xs" style={{color:'#f59e0b'}}>⚠ Be specific — reject vague goals like "work on thesis"</div>}
+          </>
+        )}
+
+        {/* Step 2: Implementation intention */}
+        {stepIdx===2 && (
+          <>
+            <div className="text-xs mb-2" style={{color:'#475569'}}>Auto-generated from your deliverable — edit freely:</div>
+            <textarea rows={3} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(99,102,241,0.2)',color:'#c7d2fe'}}
+              value={sessionDraft.intention || `When the timer starts, I will ${sessionDraft.deliverable||'[deliverable]'} until the session ends.`}
+              onChange={e=>setSessionDraft(d=>({...d,intention:e.target.value}))}/>
+          </>
+        )}
+
+        {/* Step 3: Environment lock */}
+        {stepIdx===3 && (
+          <div className="space-y-2">
+            {ENV_ITEMS.map((item,i)=>(
+              <label key={i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.02)',border:`1px solid ${sessionDraft.envChecks[i]?'rgba(16,185,129,0.25)':'rgba(255,255,255,0.06)'}`}}>
+                <input type="checkbox" checked={sessionDraft.envChecks[i]} onChange={e=>{const c=[...sessionDraft.envChecks]; c[i]=e.target.checked; setSessionDraft(d=>({...d,envChecks:c}));}}/>
+                <span className="text-sm" style={{color:sessionDraft.envChecks[i]?'#10b981':'#94a3b8'}}>{item}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {/* Step 4: Challenge calibration */}
+        {stepIdx===4 && (
+          <div className="space-y-3">
+            {[['easy','Too easy','#475569','Cut the scope or add a harder constraint'],['edge','Right at the edge ✓','#10b981','Perfect — proceed'],['hard','Too hard','#f59e0b','Narrow scope: cut to just the outline or first sub-section']].map(([v,l,c,hint])=>(
+              <div key={v} onClick={()=>setSessionDraft(d=>({...d,challengeRating:v}))} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer"
+                style={{background:sessionDraft.challengeRating===v?`${c}15`:'rgba(255,255,255,0.02)',border:`1px solid ${sessionDraft.challengeRating===v?c+'40':'rgba(255,255,255,0.06)'}`}}>
+                <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center" style={{borderColor:c,background:sessionDraft.challengeRating===v?c:'transparent'}}>
+                  {sessionDraft.challengeRating===v && <div className="w-2 h-2 rounded-full bg-white"/>}
+                </div>
+                <div>
+                  <div className="text-sm font-medium" style={{color:c}}>{l}</div>
+                  <div className="text-xs" style={{color:'#475569'}}>{hint}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Step 5: Entry cue */}
+        {stepIdx===5 && (
+          <div className="space-y-3">
+            {!ritual.cue ? (
+              <div className="space-y-2">
+                <div className="text-sm" style={{color:'#94a3b8'}}>Define your fixed entry ritual (set once, run every session):</div>
+                <textarea rows={2} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+                  placeholder={`E.g. "Start lo-fi playlist, type 'focus mode activated', take 3 deep breaths"`}
+                  onChange={e=>setData(d=>({...d,rampRitual:{...(d.rampRitual||{}),cue:e.target.value}}))}/>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)'}}>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#6366f1'}}>Your ritual:</div>
+                <div className="text-sm" style={{color:'#c7d2fe'}}>{ritual.cue}</div>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
+              <span className="text-sm" style={{color:'#94a3b8'}}>Session length:</span>
+              <input type="number" min={25} max={180} className="w-20 bg-transparent text-sm rounded px-2 py-1 text-center" style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}
+                value={sessionDraft.timerLengthMin} onChange={e=>setSessionDraft(d=>({...d,timerLengthMin:parseInt(e.target.value)||75}))}/>
+              <span className="text-sm" style={{color:'#475569'}}>min</span>
+            </div>
+            <div className="text-xs" style={{color:'#334155'}}>Suggested: 50–90 min blocks. Take a real break between.</div>
+          </div>
+        )}
+
+        {/* Nav */}
+        <div className="flex gap-3 pt-2">
+          {stepIdx > 0 && <button onClick={()=>setStepIdx(i=>i-1)} className="px-4 py-2 rounded-xl text-sm" style={{color:'#475569',border:'1px solid rgba(255,255,255,0.08)'}}>← Back</button>}
+          {stepIdx < steps.length-1 ? (
+            <button onClick={()=>{
+              if(stepIdx===1&&!sessionDraft.deliverable.trim()){ toasts.push('Write a specific deliverable first'); return; }
+              if(stepIdx===2&&!sessionDraft.intention.trim()) setSessionDraft(d=>({...d,intention:`When the timer starts, I will ${d.deliverable} until the session ends.`}));
+              setStepIdx(i=>i+1);
+            }} className="flex-1 py-2 rounded-xl text-sm font-bold" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>
+              Next →
+            </button>
+          ) : (
+            <button onClick={startTimer} className="flex-1 py-3 rounded-xl text-sm font-bold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',boxShadow:'0 0 20px rgba(99,102,241,0.4)'}}>
+              🚀 Start {sessionDraft.timerLengthMin}min session
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // START screen
+  const streak = rampSessions.length;
+  const lastNext = rampSessions.length ? rampSessions[rampSessions.length-1].nextMicroAction : null;
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Deep Work Ramp</h2>
+          <div className="text-xs mt-1" style={{color:'#475569'}}>Pre-session protocol · ~3 min to start · {streak} session{streak!==1?'s':''} logged</div>
+        </div>
+        <button onClick={()=>setPhase('history')} className="text-xs px-2 py-1 rounded" style={{color:'#475569',border:'1px solid rgba(255,255,255,0.08)'}}>History</button>
+      </div>
+      {lastNext && (
+        <div className="glass rounded-xl p-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
+          <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#6366f1'}}>Next micro-action from last session:</div>
+          <div className="text-sm" style={{color:'#c7d2fe'}}>{lastNext}</div>
+        </div>
+      )}
+      <div className="grid gap-2">
+        {steps.map((s,i)=>(
+          <div key={i} className="flex items-center gap-3 p-3 rounded-xl" style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.05)'}}>
+            <span style={{fontSize:'18px'}}>{s.emoji}</span>
+            <div>
+              <div className="text-sm font-medium">Step {i+1}: {s.label}</div>
+              <div className="text-xs" style={{color:'#334155'}}>{s.tip.slice(0,60)}…</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={()=>{ setPhase('steps'); setStepIdx(0); }}
+        className="w-full py-4 rounded-2xl text-base font-bold transition-all"
+        style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',boxShadow:'0 0 24px rgba(99,102,241,0.35)'}}>
+        Begin Ramp Protocol →
+      </button>
+    </div>
+  );
+}
+
+/* ================== §6 REVIEW DIGEST PANEL ================== */
+function ReviewPanel({data, toasts}){
+  const [mode, setMode] = useState('daily');
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0,10);
+  const weekAgo  = new Date(now.getTime()-7*86400000);
+
+  // ── Daily digest data ──
+  const todayJournals = (data.journals||[]).filter(j=>j.date===todayStr);
+  const todayTasks = (data.assignments||[]).filter(t=>{ const d=t.dueDate; return d===todayStr; });
+  const doneTodayTasks = todayTasks.filter(t=>t.status==='Done');
+  const slippedTasks = todayTasks.filter(t=>t.status!=='Done');
+  const todayHabits = (data.habits||[]);
+  const inboxUntriaged = (data.inbox||[]);
+  const oldInbox = inboxUntriaged.filter(i=>new Date(i.createdAt)<new Date(now.getTime()-48*3600000));
+  const todayEvents = (data.events||[]).filter(e=>e.when?.day===((now.getDay()+6)%7));
+  const rampToday = (data.rampSessions||[]).filter(s=>s.startedAt?.slice(0,10)===todayStr);
+  const decisionsPmDue = (data.decisionJournal||[]).filter(d=>!d.actualOutcome&&(now-new Date(d.date).getTime())>90*86400000);
+
+  // People follow-up
+  const followUps = (data.social||[]).filter(s=>{
+    if(!s.nextFollowUp) return false;
+    return new Date(s.nextFollowUp)<=now;
+  });
+
+  // ── Weekly digest data ──
+  const weekJournals = (data.journals||[]).filter(j=>new Date(j.date)>=weekAgo);
+  const weekTasks = (data.assignments||[]).filter(t=>{
+    if(t.status==='Done'&&t.completedAt) return new Date(t.completedAt)>=weekAgo;
+    return false;
+  });
+  const weekWatchUpdated = (data.companyWatchlist||[]).filter(w=>w.lastUpdated&&new Date(w.lastUpdated)>=weekAgo);
+  const weekTheses = (data.theses||[]).filter(t=>t.lastUpdated&&new Date(t.lastUpdated)>=weekAgo);
+  const weekRamp = (data.rampSessions||[]).filter(s=>s.startedAt&&new Date(s.startedAt)>=weekAgo);
+
+  // GE progress
+  const geWeeks = (data.goldenEgg?.aiCourse?.weeks||[]);
+  const geDone = geWeeks.filter(w=>w.done).length;
+
+  // Philosophy streak approximation
+  const philDay = data.philosophyBriefing?.currentDay || 0;
+  const philTheme = data.philosophyBriefing?.currentTheme || '—';
+  const bizTheme = data.businessAcumenBriefing?.currentWeekTheme || '—';
+  const bizDay = data.businessAcumenBriefing?.currentDayInTheme || 0;
+
+  // Mental models weakness
+  const activeWeaknessPhil = data.philosophyBriefing?.activeWeakness || null;
+  const activeWeaknessBiz  = data.businessAcumenBriefing?.activeWeakness || null;
+
+  const Section = ({title, color, children}) => (
+    <div className="glass rounded-xl p-4 mb-3" style={{border:`1px solid ${color||'rgba(255,255,255,0.06)'}`}}>
+      <div className="text-xs font-bold uppercase tracking-widest mb-3" style={{color:color||'#475569'}}>{title}</div>
+      {children}
+    </div>
+  );
+
+  const Row = ({label, value, sub, valueColor}) => (
+    <div className="flex items-start justify-between gap-3 py-1.5" style={{borderBottom:'1px solid rgba(255,255,255,0.03)'}}>
+      <div>
+        <div className="text-sm" style={{color:'#94a3b8'}}>{label}</div>
+        {sub && <div className="text-xs" style={{color:'#334155'}}>{sub}</div>}
+      </div>
+      <div className="text-sm font-semibold flex-shrink-0" style={{color:valueColor||'#e2e8f0'}}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-2xl font-bold">Review</h2>
+        <div className="flex gap-0.5 p-1 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>
+          {[['daily','Daily'],['weekly','Weekly']].map(([v,l])=>(
+            <button key={v} onClick={()=>setMode(v)} className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+              style={mode===v?{background:'rgba(255,255,255,0.1)',color:'#e2e8f0'}:{color:'#64748b'}}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {mode==='daily' && (
+        <div>
+          <div className="text-xs mb-4" style={{color:'#475569'}}>{now.toLocaleDateString('en',{weekday:'long',month:'long',day:'numeric'})}</div>
+
+          {oldInbox.length > 0 && (
+            <div className="p-3 rounded-xl mb-3" style={{background:'rgba(245,158,11,0.06)',border:'1px solid rgba(245,158,11,0.2)'}}>
+              <div className="text-xs font-semibold" style={{color:'#f59e0b'}}>⚠ {oldInbox.length} inbox item{oldInbox.length>1?'s':''} 48h+ untriaged</div>
+            </div>
+          )}
+
+          <Section title="Journal" color="rgba(99,102,241,0.3)">
+            <Row label="Entries today" value={todayJournals.length}/>
+            {todayJournals.map(j=><div key={j.id} className="text-xs mt-1 line-clamp-2" style={{color:'#475569'}}>{j.body.slice(0,100)}…</div>)}
+          </Section>
+
+          <Section title="Tasks" color="rgba(16,185,129,0.3)">
+            <Row label="Due today — done" value={`${doneTodayTasks.length}/${todayTasks.length}`} valueColor={doneTodayTasks.length===todayTasks.length&&todayTasks.length>0?'#10b981':'#e2e8f0'}/>
+            {slippedTasks.slice(0,3).map(t=><div key={t.id} className="text-xs mt-1" style={{color:'#f87171'}}>⚑ {t.title}</div>)}
+          </Section>
+
+          {todayHabits.length > 0 && (
+            <Section title="Habits" color="rgba(139,92,246,0.3)">
+              {todayHabits.map(h=><Row key={h.id} label={h.name} value={h.streak||0+' day streak'} valueColor="#a78bfa"/>)}
+            </Section>
+          )}
+
+          <Section title="Calendar" color="rgba(255,255,255,0.1)">
+            <Row label="Events today" value={todayEvents.length}/>
+            {todayEvents.slice(0,4).map(e=><div key={e.id} className="text-xs mt-1" style={{color:'#64748b'}}>{e.title}</div>)}
+          </Section>
+
+          {rampToday.length > 0 && (
+            <Section title="Deep Work" color="rgba(99,102,241,0.2)">
+              <Row label="Sessions today" value={rampToday.length}/>
+              {rampToday.map(s=><div key={s.id} className="text-xs mt-1" style={{color:'#475569'}}>{s.deliverable?.slice(0,80)}</div>)}
+            </Section>
+          )}
+
+          {followUps.length > 0 && (
+            <Section title="People Follow-ups Due" color="rgba(245,158,11,0.3)">
+              {followUps.map(p=><Row key={p.id} label={p.name} value="Follow up" valueColor="#f59e0b"/>)}
+            </Section>
+          )}
+
+          {decisionsPmDue.length > 0 && (
+            <Section title="Decisions Awaiting Postmortem" color="rgba(239,68,68,0.2)">
+              {decisionsPmDue.map(d=><div key={d.id} className="text-xs mb-1" style={{color:'#f87171'}}>{d.decision.slice(0,80)}</div>)}
+            </Section>
+          )}
+
+          <Section title="Inbox" color="rgba(255,255,255,0.06)">
+            <Row label="Untriaged items" value={inboxUntriaged.length} valueColor={inboxUntriaged.length>5?'#f59e0b':'#e2e8f0'}/>
+            <Row label="48h+ stale" value={oldInbox.length} valueColor={oldInbox.length>0?'#f59e0b':'#e2e8f0'}/>
+          </Section>
+        </div>
+      )}
+
+      {mode==='weekly' && (
+        <div>
+          <div className="text-xs mb-4" style={{color:'#475569'}}>Week of {weekAgo.toLocaleDateString('en',{month:'short',day:'numeric'})} – {now.toLocaleDateString('en',{month:'short',day:'numeric'})}</div>
+
+          <Section title="Journal & Tasks" color="rgba(99,102,241,0.2)">
+            <Row label="Journal entries" value={weekJournals.length}/>
+            <Row label="Tasks completed" value={weekTasks.length}/>
+            <Row label="Deep work sessions" value={weekRamp.length}/>
+          </Section>
+
+          <Section title="Research" color="rgba(16,185,129,0.2)">
+            <Row label="Watchlist updates" value={weekWatchUpdated.length}/>
+            <Row label="Thesis updates" value={weekTheses.length}/>
+            <Row label="Active theses" value={(data.theses||[]).filter(t=>t.status==='active').length}/>
+          </Section>
+
+          <Section title="Golden Egg Capital" color="rgba(245,158,11,0.2)">
+            <Row label="AI Course progress" value={`${geDone}/12 weeks`} valueColor="#f59e0b"/>
+          </Section>
+
+          <Section title="Briefing Streaks" color="rgba(139,92,246,0.2)">
+            <Row label="Philosophy — Day" value={philDay} sub={philTheme}/>
+            <Row label="Business Acumen — Day" value={bizDay} sub={bizTheme}/>
+            {activeWeaknessPhil && <div className="text-xs mt-1" style={{color:'#a78bfa'}}>Phil weakness: {activeWeaknessPhil}</div>}
+            {activeWeaknessBiz  && <div className="text-xs mt-1" style={{color:'#a78bfa'}}>Biz weakness: {activeWeaknessBiz}</div>}
+          </Section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------- Error Boundary -------------------- */
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state={error:null}; }
+  static getDerivedStateFromError(e){ return {error:e}; }
+  componentDidCatch(e, info){ console.error('React render error:', e, info); }
+  render(){
+    if(this.state.error){
+      const msg = this.state.error && (this.state.error.stack || this.state.error.message || String(this.state.error));
+      return React.createElement('div',{style:{color:'#ff6b6b',padding:'24px',fontFamily:'monospace',fontSize:'13px',whiteSpace:'pre-wrap',background:'#1e0000',border:'2px solid #ff0000',borderRadius:'8px',margin:'20px'}},
+        'React render error:\n\n' + msg
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* -------------------- Render -------------------- */
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(App, null));
+root.render(React.createElement(ErrorBoundary, null, React.createElement(App, null)));

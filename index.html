@@ -91,11 +91,50 @@
       <div class="dot-grid"></div>
     </div>
     <div id="root"></div>
+    <div id="js-error-overlay" style="display:none;position:fixed;top:0;left:0;right:0;padding:20px;background:#1e0000;color:#ff6b6b;font-family:monospace;font-size:13px;z-index:99999;white-space:pre-wrap;border-bottom:2px solid #ff0000;"></div>
+    <!-- Intercept console.error early so Babel parse errors appear in the overlay -->
+    <script>
+      (function() {
+        var _orig = console.error.bind(console);
+        console.error = function() {
+          _orig.apply(console, arguments);
+          var msg = Array.from(arguments).map(function(a){ return typeof a==='object'?JSON.stringify(a):String(a); }).join(' ');
+          // Only show Babel/script errors, not React's internal noisy warnings
+          if(msg.indexOf('[Babel]')!==-1 || msg.indexOf('SyntaxError')!==-1 || msg.indexOf('ReferenceError')!==-1 || msg.indexOf('TypeError')!==-1) {
+            var d = document.getElementById('js-error-overlay');
+            if(d) { d.style.display='block'; d.textContent = (d.textContent?d.textContent+'\n\n':'')+msg; }
+          }
+        };
+      })();
+    </script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script type="text/babel" data-presets="react" src="./App.jsx?v=59"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.9/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=76"></script>
     <script>
+      // Catch and display JS errors visually so we can diagnose blank-screen issues
+      function showErr(msg) {
+        const d = document.getElementById('js-error-overlay');
+        if(d) { d.style.display = 'block'; d.textContent = (d.textContent ? d.textContent + '\n\n' : '') + msg; }
+        console.error('[overlay]', msg);
+      }
+      window.addEventListener('error', function(e) {
+        showErr('JS Error: ' + (e.message || 'unknown') + '\nFile: ' + (e.filename||'') + ':' + (e.lineno||'') + (e.error && e.error.stack ? '\n\nStack:\n' + e.error.stack : ''));
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        showErr('Unhandled promise rejection: ' + (e.reason && (e.reason.stack || e.reason.message || e.reason) || 'unknown'));
+      });
+      // If root is still empty after 8s, React failed to mount — show message
+      setTimeout(function() {
+        var root = document.getElementById('root');
+        if(root && root.childNodes.length === 0) {
+          showErr('App failed to mount after 8 seconds. React did not render. Check console for Babel/JS errors.\nTip: open DevTools (F12) → Console to see the full error.');
+        }
+      }, 8000);
       // Register service worker after page loads
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
