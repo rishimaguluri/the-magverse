@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v78 executing');
+console.log('[Magverse] App.jsx v79 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -584,7 +584,7 @@ function MainAssistant({data, setData, toasts, isMobile}){
 
   async function handleSend(msg){
     if(!msg || !msg.trim()) return;
-    // try Anthropic if api key present
+    // try OpenAI if api key present
     const apiKey = (ls('magverse:v1')?.settings?.apiKey) || '';
     if(apiKey){
       try{
@@ -6440,7 +6440,7 @@ function ChatDrawer({hub, onClose, data, setData, toasts}){
       const apiKey = savedSettings.apiKey || '';
       if(!apiKey){
         await new Promise(r=>setTimeout(r,600));
-        const reply = 'Add your Anthropic API key in Settings to enable real AI responses.';
+        const reply = 'Add your OpenAI API key in Settings to enable AI responses.';
         setMessages(m=>[...m, {id:uid(), role:'ai', text:reply, at:new Date().toISOString()}]);
         setTyping(false); return;
       }
