@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v77 executing');
+console.log('[Magverse] App.jsx v78 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -158,6 +158,7 @@ const defaultState = () => ({
   career: { contacts: [], questions: [], applications: [] },
   resumeEditor: null,
   consulting: null,
+  reflect: null,
   seenDeals: [],
   inbox: [], // §3 universal capture
   // §7 Research panels
@@ -3499,22 +3500,26 @@ function InboxPanel({data, setData, toasts, isMobile, setActive}){
 
 
 /* -------------------- Notes / Journal / Habits Panel -------------------- */
-function NotesPanel({data, setData, toasts}){
+function NotesPanel({data, setData, toasts, isMobile}){
   const [subtab, setSubtab] = useState('notes');
+  const [reflectEntryId, setReflectEntryId] = useState(null);
+  function goReflect(entryId){setReflectEntryId(entryId||null);setSubtab('reflect');}
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h2 className="text-xl font-semibold">Notes</h2>
-        <div className="flex gap-2">
-          {[['notes','Notes'],['journal','Journal'],['habits','Habits'],['planner','Life Planner']].map(([t,label])=> (
-            <button key={t} className={`px-3 py-1 rounded ${subtab===t?'bg-white/10':'hover:bg-white/3'}`} onClick={()=>setSubtab(t)}>{label}</button>
+        <div className="flex gap-1 flex-wrap">
+          {[['notes','Notes'],['journal','Journal'],['habits','Habits'],['planner','Life Planner'],['reflect','Reflect']].map(([t,label])=> (
+            <button key={t} className={`px-3 py-1 rounded text-sm ${subtab===t?'bg-white/10':'hover:bg-white/5'}`}
+              style={subtab===t?{color:'#a5b4fc'}:{}} onClick={()=>setSubtab(t)}>{label}</button>
           ))}
         </div>
       </div>
       {subtab==='notes'   && <NotesSubtab        data={data} setData={setData} toasts={toasts} />}
-      {subtab==='journal' && <JournalSubtab       data={data} setData={setData} toasts={toasts} />}
+      {subtab==='journal' && <JournalSubtab       data={data} setData={setData} toasts={toasts} onTalkAboutThis={goReflect}/>}
       {subtab==='habits'  && <HabitsSubtab        data={data} setData={setData} toasts={toasts} />}
       {subtab==='planner' && <LifePlannerSubtab   data={data} setData={setData} toasts={toasts} />}
+      {subtab==='reflect' && <ReflectPanel        data={data} setData={setData} toasts={toasts} isMobile={isMobile} initialEntryId={reflectEntryId}/>}
     </div>
   );
 }
@@ -3800,7 +3805,7 @@ function JournalGraph({entries, selectedId, onSelect, onUpdatePositions}){
   );
 }
 
-function JournalSubtab({data, setData, toasts}){
+function JournalSubtab({data, setData, toasts, onTalkAboutThis}){
   const voyageKey=data.settings?.voyageKey||'';
   const journals=data.journals||[];
   const today=new Date().toISOString().slice(0,10);
@@ -3906,7 +3911,10 @@ function JournalSubtab({data, setData, toasts}){
               placeholder="Tags: ideas, finance, goals  (comma-separated)"
               value={tagsInput} onChange={e=>setTagsInput(e.target.value)}
             />
-            <button className="self-end px-4 py-1.5 rounded bg-indigo-600" onClick={save}>Save Entry</button>
+            <div className="flex gap-2 self-end">
+              {existing&&onTalkAboutThis&&<button className="px-3 py-1.5 rounded text-sm" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}} onClick={()=>onTalkAboutThis(existing.id)}>Talk About This →</button>}
+              <button className="px-4 py-1.5 rounded bg-indigo-600" onClick={save}>Save Entry</button>
+            </div>
           </div>
           <div className="glass p-4 rounded border-subtle">
             <div className="font-semibold mb-3 text-sm">Past Entries</div>
@@ -4860,6 +4868,553 @@ function HabitsSubtab({data, setData, toasts}){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ==================== REFLECT ==================== */
+function getDefaultReflect(){
+  return{sessions:[],memories:[],lifeContext:'',prefs:{useJournalEntries:true,useReflectHistory:true,useLifeContext:true,personalizedStarters:true,challengeMode:'balanced',voiceEnabled:true,autoSaveReflections:false}};
+}
+
+const REFLECT_MODES=[
+  {id:'talk',    label:'Just Talk',         emoji:'💬', hint:'Open conversation. Follow the user wherever they need to go.'},
+  {id:'checkin', label:'Check In',          emoji:'📊', hint:'Brief structured reflection. Ask about energy, recent highlights, what\'s on their mind. Keep it short.'},
+  {id:'untangle',label:'Untangle',          emoji:'🧶', hint:'Something is bothering the user but they can\'t name it. Help identify the root. Ask what specifically happened, separate feeling from interpretation.'},
+  {id:'decide',  label:'Decide',            emoji:'⚖️', hint:'Help with a decision. Surface facts, assumptions, emotions, values, and tradeoffs separately. Do not push toward any outcome. Offer a Decision Snapshot when the conversation reaches a natural conclusion.'},
+  {id:'relationships',label:'Relationships',emoji:'👥', hint:'Think through interpersonal dynamics. What did the user observe vs. what are they interpreting? Do not diagnose other people.'},
+  {id:'goals',   label:'Goals',             emoji:'🎯', hint:'Connect daily behavior to longer-term intentions. Ask whether goals still feel alive. Surface discrepancies without shaming.'},
+  {id:'patterns',label:'Pattern Finder',    emoji:'🔍', hint:'Look across journal history for recurring themes. Report with confidence levels. Show evidence, not invented narratives.'},
+  {id:'weekly',  label:'Weekly Reflection', emoji:'📅', hint:'Review recent journal entries and produce a structured weekly reflection: what occupied their mind, what went well, what drained them, what they may be avoiding.'},
+];
+
+const REFLECT_CRISIS=['suicide','kill myself','end my life','want to die','self-harm','cutting myself','hurt myself','don\'t want to be here','no reason to live','thinking about suicide'];
+
+function checkCrisis(text){
+  const l=text.toLowerCase();
+  if(REFLECT_CRISIS.some(w=>l.includes(w))) return "What you're describing sounds serious — this is beyond what this tool can appropriately support. Please reach out to someone right now. In the US: 988 Suicide & Crisis Lifeline (call or text 988). You deserve real support from a real person.";
+  return null;
+}
+
+function retrieveRelevantEntries(journals,query,prefs){
+  if(!prefs?.useJournalEntries||!journals?.length) return [];
+  const filtered=journals.filter(j=>!j.excludeFromReflect);
+  if(!filtered.length) return [];
+  const STOP=new Set(['the','and','for','that','this','with','have','from','but','are','was','were','been','has','had','will','would','could','should','its','their','they','them','then','than','when','what','which','who','how','not','can','all','out','into','our','you','your','about','more','just','also','time','some','like','very','only','even','any','there','one','two','i','me','my','im','ive','its']);
+  const tok=t=>t.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w.length>2&&!STOP.has(w));
+  const qTokens=new Set(tok(query));
+  if(!qTokens.size) return filtered.slice(-3).reverse();
+  const now=Date.now();
+  const scored=filtered.map(j=>{
+    const bToks=tok(j.body||'');
+    const tToks=tok((j.tags||[]).join(' '));
+    const bodyMatch=bToks.filter(w=>qTokens.has(w)).length;
+    const tagMatch=tToks.filter(w=>qTokens.has(w)).length;
+    let score=bodyMatch*0.7+tagMatch*1.5;
+    const daysAgo=(now-new Date(j.date).getTime())/86400000;
+    if(daysAgo<14) score+=0.4; else if(daysAgo<60) score+=0.15;
+    return {j,score};
+  });
+  return scored.filter(x=>x.score>0.3).sort((a,b)=>b.score-a.score).slice(0,5).map(x=>x.j);
+}
+
+function buildReflectSystem(mode,lifeCtx,memories,relevantEntries,challengeMode,userName){
+  const modeHint=REFLECT_MODES.find(m=>m.id===mode)?.hint||'Open conversation.';
+  const challenge=challengeMode==='challenge'
+    ?'Challenge the user\'s assumptions frequently. Ask for evidence. Note when they repeat patterns without changing them. Remain respectful but direct.'
+    :challengeMode==='gentle'
+    ?'Be warm and gentle. Still ask clarifying questions — just avoid hard pushback.'
+    :'Balance empathy with honest challenge. Acknowledge feelings without treating every interpretation as fact.';
+  let sys=`You are Reflect — a thoughtful personal reflection companion for ${userName||'this user'}.
+
+Your job: help the user understand themselves, think clearly, recognize patterns, examine assumptions, make decisions, and connect present experiences with relevant context from their life.
+
+YOU ARE NOT a licensed therapist, psychologist, or counselor. Never claim to be. Never diagnose the user or people in their life.
+
+BEHAVIORAL PRINCIPLES:
+- Understand before advising. Ask before prescribing.
+- Prefer one good specific question over a list of observations.
+- Use retrieved context naturally — never announce "According to your journal from..."
+- Distinguish facts from interpretations. Separate feelings from conclusions.
+- Never invent memories. If uncertain, ask.
+- Use calibrated language: "you've mentioned this a few times", "this seems similar to what you described before", "I may be connecting two things incorrectly, but..."
+- Avoid these hollow phrases: "That sounds really hard", "Your feelings are valid", "Let's unpack that", "Give yourself grace". They are generic and empty.
+- Response length: 1–3 paragraphs for conversation. One strong observation + one specific question is often enough.
+- ${challenge}
+
+CURRENT MODE: ${modeHint}
+
+SAFETY: If the user mentions self-harm, suicidal ideation, or immediate danger — stop the normal conversation and provide crisis resources (988 in the US).`;
+  if(lifeCtx?.trim()) sys+=`\n\nUSER'S LIFE CONTEXT (explicitly provided by them):\n${lifeCtx.trim().slice(0,600)}`;
+  const activeMems=(memories||[]).filter(m=>m.active&&m.userApproved);
+  if(activeMems.length) sys+=`\n\nKNOWN ABOUT USER:\n${activeMems.slice(0,12).map(m=>`[${m.type.toUpperCase()}] ${m.content}`).join('\n')}`;
+  if(relevantEntries?.length){
+    const excerpts=relevantEntries.map(j=>`Journal — ${j.date}${(j.tags||[]).length?' ['+j.tags.join(', ')+']':''}:\n"${(j.body||'').slice(0,350)}${(j.body||'').length>350?'…':''}"`).join('\n\n');
+    sys+=`\n\nRELEVANT JOURNAL CONTEXT (use naturally, never cite mechanically):\n${excerpts}`;
+  }
+  return sys;
+}
+
+function ReflectPanel({data,setData,toasts,isMobile,initialEntryId}){
+  const reflect=data.reflect||getDefaultReflect();
+  const setReflect=patch=>setData(d=>({...d,reflect:{...(d.reflect||getDefaultReflect()),...(typeof patch==='function'?patch(d.reflect||getDefaultReflect()):patch)}}));
+  const [view,setView]=useState(initialEntryId?'talk':'home');
+  const [mode,setMode]=useState('talk');
+  const [sessionMsgs,setSessionMsgs]=useState([]);
+  const [sessionCtx,setSessionCtx]=useState(()=>{
+    if(!initialEntryId) return [];
+    const e=(data.journals||[]).find(j=>j.id===initialEntryId);
+    return e?[e]:[];
+  });
+  const [sessionPrivate,setSessionPrivate]=useState(false);
+  const apiKey=data.settings?.apiKey||'';
+  const userName=data.settings?.userName||'You';
+  function startSession(m,entryId){
+    setMode(m);
+    if(entryId){const e=(data.journals||[]).find(j=>j.id===entryId);if(e)setSessionCtx([e]);}
+    else setSessionCtx([]);
+    setSessionMsgs([]);setView('talk');
+  }
+  function endSession(msgs){
+    if(!sessionPrivate&&msgs.length>1){
+      const session={id:uid('rs'),startedAt:new Date().toISOString(),endedAt:new Date().toISOString(),mode,messages:msgs,private:false};
+      setReflect(r=>({...r,sessions:[...(r.sessions||[]).slice(-29),session]}));
+    }
+    setSessionMsgs([]);setSessionCtx([]);setView('home');
+  }
+  function saveToJournal(text){
+    const today=new Date().toISOString().slice(0,10);
+    const body=`REFLECT SESSION — ${today}\n\n${text}`;
+    setData(d=>{
+      const existing=(d.journals||[]).find(j=>j.date===today);
+      if(existing) return{...d,journals:(d.journals||[]).map(j=>j.date===today?{...j,body:j.body+'\n\n---\n'+body,updatedAt:new Date().toISOString()}:j)};
+      return{...d,journals:[...(d.journals||[]),{id:uid(),date:today,body,tags:['reflect'],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}]};
+    });
+    toasts.push('Reflection saved to Journal');
+  }
+  function addMemory(content,type='reflection'){
+    const mem={id:uid('rm'),type,content,sourceType:'explicit',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userApproved:true,active:true,confidence:'high'};
+    setReflect(r=>({...r,memories:[...(r.memories||[]),mem]}));
+    toasts.push('Remembered');
+  }
+  return(
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-1">
+          {[['home','Home'],['talk','Talk'],['insights','Insights'],['context','My Context']].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} className={`px-3 py-1 rounded text-sm ${view===v?'bg-white/10':'hover:bg-white/5'}`} style={view===v?{color:'#a5b4fc'}:{color:'#94a3b8'}}>{l}</button>
+          ))}
+        </div>
+        <div className="text-xs opacity-40">AI companion — not a therapist</div>
+      </div>
+      {view==='home'&&<ReflectHome reflect={reflect} journals={data.journals||[]} onStart={startSession}/>}
+      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} isMobile={isMobile}/>}
+      {view==='insights'&&<ReflectInsights reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts}/>}
+      {view==='context'&&<ReflectContext reflect={reflect} setReflect={setReflect} toasts={toasts}/>}
+    </div>
+  );
+}
+
+function ReflectHome({reflect,journals,onStart}){
+  const prefs=reflect.prefs||{};
+  const recentSession=(reflect.sessions||[]).slice(-1)[0];
+  let starter='What\'s on your mind?';
+  if(prefs.personalizedStarters!==false&&journals?.length){
+    const recent=journals.filter(j=>(Date.now()-new Date(j.date).getTime())/86400000<4).sort((a,b)=>b.date.localeCompare(a.date));
+    if(recent[0]?.tags?.length) starter=`You've been writing about ${recent[0].tags[0]}. Want to talk through it?`;
+    else if(recent[0]) starter='There might be something from your recent writing worth talking through.';
+  }
+  return(
+    <div className="flex flex-col items-center gap-6 mt-4">
+      <div className="text-center">
+        <div className="text-2xl font-light mb-2" style={{color:'#e2e8f0',opacity:0.85}}>{starter}</div>
+      </div>
+      <div className="grid grid-cols-4 gap-2 w-full max-w-xl">
+        {REFLECT_MODES.map(m=>(
+          <button key={m.id} onClick={()=>onStart(m.id)} className="flex flex-col items-center gap-1.5 p-3 rounded-xl transition-all hover:bg-white/8"
+            style={{border:'1px solid rgba(255,255,255,0.07)'}}>
+            <span className="text-xl">{m.emoji}</span>
+            <span className="text-xs text-center leading-tight" style={{color:'#94a3b8'}}>{m.label}</span>
+          </button>
+        ))}
+      </div>
+      {recentSession&&(
+        <div className="glass p-4 rounded-xl w-full max-w-xl" style={{border:'1px solid rgba(255,255,255,0.07)'}}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-medium" style={{color:'#a5b4fc'}}>Recent session</span>
+            <span className="text-xs" style={{color:'#64748b'}}>{recentSession.startedAt?.slice(0,10)}</span>
+          </div>
+          <div className="text-xs mb-2" style={{color:'#64748b'}}>{REFLECT_MODES.find(m=>m.id===recentSession.mode)?.label||'Talk'} · {recentSession.messages?.length||0} messages</div>
+          <button onClick={()=>onStart(recentSession.mode)} className="text-xs px-3 py-1 rounded"
+            style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+            Start new session →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,isMobile}){
+  const [input,setInput]=useState('');
+  const [streaming,setStreaming]=useState(false);
+  const [listening,setListening]=useState(false);
+  const [showCtx,setShowCtx]=useState(false);
+  const [showSummary,setShowSummary]=useState(false);
+  const [summaryText,setSummaryText]=useState('');
+  const [genSummary,setGenSummary]=useState(false);
+  const [rememberText,setRememberText]=useState('');
+  const [rememberType,setRememberType]=useState('reflection');
+  const [showRemember,setShowRemember]=useState(false);
+  const scrollRef=useRef(null);
+  const prefs=reflect.prefs||{};
+  const speaker=useSpeaker();
+  const dict=useDictation(t=>{setListening(false);if(t.trim())sendMsg(t.trim());});
+  useEffect(()=>{scrollRef.current?.scrollIntoView({behavior:'smooth'});},[msgs.length,streaming]);
+
+  async function sendMsg(text){
+    if(!text.trim()||streaming) return;
+    const crisis=checkCrisis(text);
+    if(crisis){setMsgs(m=>[...m,{id:uid(),role:'user',text,at:new Date().toISOString()},{id:uid(),role:'ai',text:crisis,at:new Date().toISOString()}]);setInput('');return;}
+    if(!apiKey){setMsgs(m=>[...m,{id:uid(),role:'user',text,at:new Date().toISOString()},{id:uid(),role:'ai',text:'Add your OpenAI API key in Settings to use Reflect.',at:new Date().toISOString()}]);setInput('');return;}
+    const relevant=retrieveRelevantEntries(journals,text,prefs);
+    const newCtx=[...sessionCtx,...relevant.filter(e=>!sessionCtx.find(c=>c.id===e.id))];
+    setSessionCtx(newCtx);
+    const userMsg={id:uid(),role:'user',text,at:new Date().toISOString()};
+    const allMsgs=[...msgs,userMsg];
+    setMsgs(allMsgs);setInput('');setStreaming(true);
+    const system=buildReflectSystem(mode,prefs.useLifeContext!==false?reflect.lifeContext||'':'',reflect.memories||[],newCtx,prefs.challengeMode||'balanced',userName);
+    const history=allMsgs.slice(-10).map(m=>({role:m.role==='user'?'user':'assistant',content:m.text}));
+    const botId=uid();
+    setMsgs(m=>[...m,{id:botId,role:'ai',text:'…',at:new Date().toISOString()}]);
+    try{
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+        body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:700,messages:[{role:'system',content:system},...history]})
+      });
+      if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
+      const reader=resp.body.getReader(),dec=new TextDecoder();
+      let buf='',full='';
+      while(true){
+        const{done,value}=await reader.read();if(done)break;
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n');buf=lines.pop()||'';
+        for(const line of lines){
+          if(!line.startsWith('data:'))continue;
+          const d=line.slice(5).trim();if(d==='[DONE]')break;
+          try{const ev=JSON.parse(d);if(ev.choices?.[0]?.delta?.content){full+=ev.choices[0].delta.content;setMsgs(m=>m.map(x=>x.id===botId?{...x,text:full||'…'}:x));}}catch{}
+        }
+      }
+      const finalText=full||'(no response)';
+      setMsgs(m=>m.map(x=>x.id===botId?{...x,text:finalText}:x));
+      if(prefs.voiceEnabled!==false) speaker.speak(finalText);
+    }catch(e){
+      setMsgs(m=>m.map(x=>x.id===botId?{...x,text:'Error: '+e.message}:x));
+      toasts.push('Reflect error: '+e.message);
+    }finally{setStreaming(false);}
+  }
+
+  async function generateSummary(){
+    if(!apiKey||msgs.length<2){toasts.push('Nothing to summarize yet');return;}
+    setGenSummary(true);
+    try{
+      const transcript=msgs.map(m=>`${m.role==='user'?userName:'Reflect'}: ${m.text}`).join('\n');
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+        body:JSON.stringify({model:'gpt-4o-mini',max_tokens:400,messages:[
+          {role:'system',content:'Summarize this reflection session concisely. Format:\n\nWhat I came in thinking:\n...\n\nWhat emerged:\n...\n\nStill uncertain about:\n...\n\nOne thing to remember:\n...'},
+          {role:'user',content:transcript}
+        ]})
+      });
+      const j=await resp.json();
+      setSummaryText(j.choices?.[0]?.message?.content||'');
+      setShowSummary(true);
+    }catch(e){toasts.push('Summary error: '+e.message);}
+    setGenSummary(false);
+  }
+
+  const modeInfo=REFLECT_MODES.find(m=>m.id===mode)||REFLECT_MODES[0];
+  return(
+    <div className="flex flex-col gap-3">
+      {/* header bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs px-2 py-0.5 rounded" style={{background:'rgba(99,102,241,0.15)',color:'#a5b4fc'}}>{modeInfo.emoji} {modeInfo.label}</span>
+        <button onClick={()=>setShowCtx(s=>!s)} className="text-xs px-2 py-0.5 rounded hover:bg-white/5" style={{color:'#64748b'}}>
+          Context {sessionCtx.length?`(${sessionCtx.length})`:''}
+        </button>
+        <label className="ml-auto text-xs flex items-center gap-1 cursor-pointer" style={{color:'#64748b'}}>
+          <input type="checkbox" checked={sessionPrivate} onChange={e=>setSessionPrivate(e.target.checked)} className="w-3 h-3"/>
+          Private session
+        </label>
+      </div>
+      {/* context drawer */}
+      {showCtx&&(
+        <div className="glass p-3 rounded-lg text-xs" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
+          <div className="font-medium mb-2" style={{color:'#a5b4fc'}}>Context used this session</div>
+          {!sessionCtx.length&&<div className="opacity-50">No journal context retrieved yet — context is pulled automatically as you talk.</div>}
+          {sessionCtx.map(j=>(
+            <div key={j.id} className="mb-2 pb-2 border-b border-white/5 last:border-0">
+              <div className="font-medium" style={{color:'#e2e8f0'}}>{j.date}{(j.tags||[]).length?` · ${j.tags.join(', ')}`:''}</div>
+              <div className="opacity-60 mt-0.5 line-clamp-2">{(j.body||'').slice(0,120)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* messages */}
+      <div className="flex flex-col gap-3" style={{minHeight:'300px'}}>
+        {msgs.length===0&&(
+          <div className="flex flex-col items-center justify-center text-center mt-10 gap-2" style={{opacity:0.4}}>
+            <div className="text-4xl">{modeInfo.emoji}</div>
+            <div className="text-sm">{modeInfo.label}</div>
+            <div className="text-xs">Speak or type to begin</div>
+          </div>
+        )}
+        {msgs.map(m=>(
+          <div key={m.id} className={`flex ${m.role==='user'?'justify-end':'justify-start'}`}>
+            <div className="max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap"
+              style={m.role==='user'
+                ?{background:'rgba(99,102,241,0.2)',border:'1px solid rgba(99,102,241,0.3)',color:'#e2e8f0'}
+                :{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)',color:'#e2e8f0'}}>
+              {m.text}
+            </div>
+          </div>
+        ))}
+        <div ref={scrollRef}/>
+      </div>
+      {/* input */}
+      <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+        <div className="flex gap-2">
+          <textarea className="flex-1 p-3 rounded-xl text-sm resize-none"
+            style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',minHeight:'52px',maxHeight:'120px'}}
+            placeholder="Type here or use voice…" rows={2} value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg(input);}}}
+            disabled={streaming}/>
+          <button onClick={()=>sendMsg(input)} disabled={streaming||!input.trim()}
+            className="px-4 rounded-xl text-sm font-medium flex-shrink-0"
+            style={{background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white',opacity:streaming||!input.trim()?0.4:1}}>
+            Send
+          </button>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {dict.hasSpeech&&(
+            <button onClick={()=>{if(listening){dict.stop();setListening(false);}else{dict.start();setListening(true);}}}
+              className="px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5"
+              style={listening?{background:'rgba(239,68,68,0.15)',color:'#fca5a5',border:'1px solid rgba(239,68,68,0.4)'}:{background:'rgba(99,102,241,0.1)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>
+              {listening?'● Listening…':'🎤 Voice'}
+            </button>
+          )}
+          {speaker.speaking&&<button onClick={speaker.cancel} className="text-xs px-2 py-1 rounded hover:bg-white/5" style={{color:'#64748b'}}>Stop speaking</button>}
+          <div className="flex gap-1.5 ml-auto">
+            <button onClick={()=>setShowRemember(true)} className="text-xs px-2 py-1 rounded hover:bg-white/5" style={{color:'#64748b'}}>Remember this</button>
+            <button onClick={generateSummary} disabled={genSummary||msgs.length<2} className="text-xs px-2 py-1 rounded hover:bg-white/5" style={{color:'#64748b'}}>
+              {genSummary?'Summarizing…':'End & summarize'}
+            </button>
+          </div>
+        </div>
+      </div>
+      {/* Remember modal */}
+      {showRemember&&(
+        <div className="fixed inset-0 z-40 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={()=>setShowRemember(false)}/>
+          <div className="glass p-5 rounded-xl z-50 flex flex-col gap-3" style={{width:'min(400px,90vw)'}}>
+            <h3 className="font-semibold">Remember this</h3>
+            <textarea className="w-full p-2 bg-transparent border border-white/10 rounded text-sm" rows={3}
+              placeholder="What should Reflect remember?" value={rememberText} onChange={e=>setRememberText(e.target.value)}/>
+            <div>
+              <div className="text-xs opacity-50 mb-1">Type</div>
+              <div className="flex gap-1 flex-wrap">
+                {['value','goal','commitment','decision','reflection','profile'].map(t=>(
+                  <button key={t} onClick={()=>setRememberType(t)} className="px-2 py-0.5 rounded text-xs"
+                    style={rememberType===t?{background:'rgba(99,102,241,0.3)',color:'#a5b4fc'}:{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>{t}</button>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-1 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}} onClick={()=>setShowRemember(false)}>Cancel</button>
+              <button className="px-3 py-1 rounded text-sm bg-indigo-600" onClick={()=>{if(rememberText.trim()){onAddMemory(rememberText.trim(),rememberType);setRememberText('');setShowRemember(false);}}}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Summary modal */}
+      {showSummary&&(
+        <div className="fixed inset-0 z-40 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={()=>setShowSummary(false)}/>
+          <div className="glass p-5 rounded-xl z-50 flex flex-col gap-4 overflow-y-auto" style={{width:'min(500px,92vw)',maxHeight:'80vh'}}>
+            <h3 className="font-semibold">Session Summary</h3>
+            <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{color:'#cbd5e1'}}>{summaryText}</div>
+            <div className="flex gap-2 flex-wrap">
+              <button onClick={()=>{onSaveToJournal(summaryText);setShowSummary(false);onEnd(msgs);}}
+                className="px-3 py-1.5 rounded text-sm"
+                style={{background:'rgba(99,102,241,0.2)',color:'#a5b4fc',border:'1px solid rgba(99,102,241,0.3)'}}>
+                Save to Journal
+              </button>
+              <button onClick={()=>{setShowSummary(false);onEnd(msgs);}} className="px-3 py-1.5 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}}>End without saving</button>
+              <button onClick={()=>setShowSummary(false)} className="px-3 py-1.5 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}}>Keep talking</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReflectInsights({reflect,journals,apiKey,toasts}){
+  const [insightsText,setInsightsText]=useState('');
+  const [generating,setGenerating]=useState(false);
+  async function runAnalysis(){
+    if(!apiKey){toasts.push('API key required for insights');return;}
+    const recent=(journals||[]).filter(j=>(Date.now()-new Date(j.date).getTime())/86400000<=14).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+    if(recent.length<2){toasts.push('Write at least 2 recent journal entries first');return;}
+    setGenerating(true);
+    try{
+      const entries=recent.map(j=>`${j.date}${(j.tags||[]).length?' ['+j.tags.join(', ')+']':''}: ${j.body.slice(0,400)}`).join('\n\n---\n\n');
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+        body:JSON.stringify({model:'gpt-4o',max_tokens:600,messages:[
+          {role:'system',content:'Analyze these recent journal entries. Be specific and evidence-based. Do not invent patterns. For each section note confidence: HIGH (3+ entries) or TENTATIVE (1-2 mentions). Format:\n\nWHAT\'S BEEN ON YOUR MIND\n...\n\nWHAT SEEMS TO ENERGIZE YOU\n...\n\nWHAT SEEMS TO DRAIN YOU\n...\n\nSOMETHING YOU MAY BE AVOIDING\n...\n\nOPEN QUESTION WORTH CARRYING\n...\n\nOnly include a section if genuinely supported by the entries.'},
+          {role:'user',content:entries}
+        ]})
+      });
+      const j=await resp.json();setInsightsText(j.choices?.[0]?.message?.content||'');
+    }catch(e){toasts.push('Insights error: '+e.message);}
+    setGenerating(false);
+  }
+  const activeMems=(reflect.memories||[]).filter(m=>m.active&&m.userApproved);
+  const sessions=(reflect.sessions||[]).slice().reverse().slice(0,10);
+  return(
+    <div className="flex flex-col gap-6">
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-medium text-sm" style={{color:'#a5b4fc'}}>Recent Patterns</div>
+          <button onClick={runAnalysis} disabled={generating} className="text-xs px-3 py-1 rounded"
+            style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>
+            {generating?'Analyzing…':'Analyze last 2 weeks'}
+          </button>
+        </div>
+        {!insightsText&&<div className="text-sm opacity-50">Click "Analyze last 2 weeks" to surface patterns from your recent journal entries.</div>}
+        {insightsText&&<div className="text-sm leading-relaxed whitespace-pre-wrap glass p-4 rounded-xl" style={{color:'#cbd5e1',border:'1px solid rgba(255,255,255,0.06)'}}>{insightsText}</div>}
+      </div>
+      {activeMems.length>0&&(
+        <div>
+          <div className="font-medium text-sm mb-3" style={{color:'#a5b4fc'}}>What Reflect Knows About You</div>
+          <div className="flex flex-col gap-2">
+            {activeMems.map(m=>(
+              <div key={m.id} className="glass px-3 py-2 rounded-lg flex items-start gap-2" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+                <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{m.type}</span>
+                <span className="text-sm" style={{color:'#cbd5e1'}}>{m.content}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {sessions.length>0&&(
+        <div>
+          <div className="font-medium text-sm mb-3" style={{color:'#a5b4fc'}}>Past Sessions</div>
+          <div className="flex flex-col gap-1.5">
+            {sessions.map(s=>(
+              <div key={s.id} className="glass px-3 py-2 rounded-lg text-xs flex items-center gap-2" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+                <span style={{color:'#94a3b8'}}>{s.startedAt?.slice(0,10)}</span>
+                <span style={{color:'#64748b'}}>·</span>
+                <span style={{color:'#cbd5e1'}}>{REFLECT_MODES.find(m=>m.id===s.mode)?.label||'Talk'}</span>
+                <span className="ml-auto" style={{color:'#64748b'}}>{s.messages?.length||0} messages</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReflectContext({reflect,setReflect,toasts}){
+  const prefs=reflect.prefs||{};
+  const memories=reflect.memories||[];
+  const [lifeCtx,setLifeCtx]=useState(reflect.lifeContext||'');
+  const [savedFlag,setSavedFlag]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [editText,setEditText]=useState('');
+  function saveCtx(){setReflect(r=>({...r,lifeContext:lifeCtx}));setSavedFlag(true);setTimeout(()=>setSavedFlag(false),2000);toasts.push('Context saved');}
+  function updatePref(k,v){setReflect(r=>({...r,prefs:{...(r.prefs||{}),[k]:v}}));}
+  function forgetMem(id){setReflect(r=>({...r,memories:(r.memories||[]).map(m=>m.id===id?{...m,active:false}:m)}));toasts.push('Forgotten');}
+  function saveMem(id){
+    setReflect(r=>({...r,memories:(r.memories||[]).map(m=>m.id===id?{...m,content:editText,updatedAt:new Date().toISOString()}:m)}));
+    setEditId(null);toasts.push('Memory updated');
+  }
+  function clearAll(){if(!confirm('Clear all Reflect data? Sessions, memories, and context will be deleted.')) return; setReflect(getDefaultReflect());toasts.push('Reflect data cleared');}
+  const activeMems=memories.filter(m=>m.active);
+  return(
+    <div className="flex flex-col gap-6 max-w-2xl">
+      <div>
+        <div className="font-medium text-sm mb-2" style={{color:'#a5b4fc'}}>My Context</div>
+        <div className="text-xs opacity-50 mb-2">Tell Reflect about your life — goals, values, relationships, stressors. The more context you give, the more grounded the conversations will be.</div>
+        <textarea className="w-full p-3 rounded-xl text-sm resize-none"
+          style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0',outline:'none',minHeight:'140px'}}
+          placeholder={"E.g.\nMy biggest goal right now is...\nI tend to...\nThe people closest to me are...\nI want you to challenge me when..."}
+          value={lifeCtx} onChange={e=>setLifeCtx(e.target.value)}/>
+        <button onClick={saveCtx} className="mt-2 px-4 py-1.5 rounded text-sm font-medium"
+          style={{background:'linear-gradient(135deg,#6366f1,#8b5cf6)',color:'white'}}>
+          {savedFlag?'Saved ✓':'Save Context'}
+        </button>
+      </div>
+      <div>
+        <div className="font-medium text-sm mb-3" style={{color:'#a5b4fc'}}>Reflect Settings</div>
+        <div className="flex flex-col">
+          {[['useJournalEntries','Use journal entries as context'],['useLifeContext','Include my context notes'],['useReflectHistory','Use past Reflect sessions'],['personalizedStarters','Personalized conversation starters'],['voiceEnabled','Read responses aloud']].map(([k,label])=>(
+            <label key={k} className="flex items-center justify-between py-2 border-b border-white/5 cursor-pointer">
+              <span className="text-sm" style={{color:'#cbd5e1'}}>{label}</span>
+              <input type="checkbox" checked={!!(prefs[k]??true)} onChange={e=>updatePref(k,e.target.checked)} className="w-4 h-4"/>
+            </label>
+          ))}
+          <div className="flex items-center justify-between py-2">
+            <span className="text-sm" style={{color:'#cbd5e1'}}>Reflect style</span>
+            <select value={prefs.challengeMode||'balanced'} onChange={e=>updatePref('challengeMode',e.target.value)}
+              className="text-sm rounded px-2 py-1" style={{background:'rgba(255,255,255,0.05)',color:'#e2e8f0',border:'1px solid rgba(255,255,255,0.1)'}}>
+              <option value="gentle">Gentle</option>
+              <option value="balanced">Balanced</option>
+              <option value="challenge">Challenge Me</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      {activeMems.length>0&&(
+        <div>
+          <div className="font-medium text-sm mb-3" style={{color:'#a5b4fc'}}>What Reflect Remembers</div>
+          <div className="flex flex-col gap-2">
+            {activeMems.map(m=>(
+              <div key={m.id} className="glass px-3 py-2 rounded-lg" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+                {editId===m.id?(
+                  <div className="flex flex-col gap-2">
+                    <textarea className="w-full p-2 text-sm bg-transparent border border-white/10 rounded resize-none" rows={2} value={editText} onChange={e=>setEditText(e.target.value)}/>
+                    <div className="flex gap-2">
+                      <button onClick={()=>saveMem(m.id)} className="text-xs px-2 py-1 rounded bg-indigo-600">Save</button>
+                      <button onClick={()=>setEditId(null)} className="text-xs px-2 py-1 rounded hover:bg-white/5" style={{color:'#64748b'}}>Cancel</button>
+                    </div>
+                  </div>
+                ):(
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0 mt-0.5" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{m.type}</span>
+                    <span className="text-sm flex-1" style={{color:'#cbd5e1'}}>{m.content}</span>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={()=>{setEditId(m.id);setEditText(m.content);}} className="text-xs px-1.5 py-0.5 rounded hover:bg-white/5" style={{color:'#64748b'}}>Edit</button>
+                      <button onClick={()=>forgetMem(m.id)} className="text-xs px-1.5 py-0.5 rounded hover:bg-red-900/30" style={{color:'#f87171'}}>Forget</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="glass p-4 rounded-xl" style={{border:'1px solid rgba(255,255,255,0.05)'}}>
+        <div className="text-xs font-medium mb-1" style={{color:'#94a3b8'}}>Privacy</div>
+        <div className="text-xs opacity-50 leading-relaxed mb-3">Reflect stores conversations and context in this browser's local storage. Nothing is sent to any server except to OpenAI to generate responses. Use Private Session in the Talk tab to skip saving a conversation.</div>
+        <button onClick={clearAll} className="text-xs px-3 py-1.5 rounded"
+          style={{background:'rgba(239,68,68,0.1)',color:'#f87171',border:'1px solid rgba(239,68,68,0.2)'}}>
+          Clear all Reflect data
+        </button>
+      </div>
     </div>
   );
 }
