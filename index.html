@@ -114,7 +114,7 @@
     <script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-    <script type="text/babel" data-presets="react" src="./App.jsx?v=79"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=80"></script>
     <script>
       // Catch and display JS errors visually so we can diagnose blank-screen issues
       function showErr(msg) {
@@ -135,10 +135,16 @@
           showErr('App failed to mount after 8 seconds. React did not render. Check console for Babel/JS errors.\nTip: open DevTools (F12) → Console to see the full error.');
         }
       }, 8000);
-      // Register service worker after page loads
+      // Register service worker after page loads; auto-reload when a new SW takes control
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(() => {});
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            reg.update(); // force check for a newer SW on every load
+          }).catch(() => {});
+          // When a new SW activates and claims the page, reload to get fresh assets
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            window.location.reload();
+          });
         });
       }
       // Generate placeholder PWA icons via canvas (no external PNG needed)

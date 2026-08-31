@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v79 executing');
+console.log('[Magverse] App.jsx v80 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -577,7 +577,7 @@ function App(){
 
 /* -------------------- Main Assistant (global planning chat) -------------------- */
 function MainAssistant({data, setData, toasts, isMobile}){
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [listening, setListening] = useState(false);
   const dict = useDictation(async (t)=>{ setText(prev=> prev ? prev + ' ' + t : t); setListening(false); await handleSend(t); });
