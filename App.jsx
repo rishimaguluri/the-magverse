@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v80 executing');
+console.log('[Magverse] App.jsx v81 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -2657,6 +2657,8 @@ ACTIONS: When performing actions, you MUST include them at the END of your respo
 Rules: dueDate = YYYY-MM-DD or null. category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
 Use the POLISHED title in both your response text and in the action tag — they must match.
 Be concise. Plain text only, no markdown.
+
+CRITICAL: NEVER ask for confirmation. When intent is clear, execute IMMEDIATELY on the first response. Always include <magverse-actions> in the same response where you describe the action — do not wait for a follow-up.
 
 Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
