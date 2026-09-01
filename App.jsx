@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v82 executing');
+console.log('[Magverse] App.jsx v83 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -4986,10 +4986,14 @@ function ReflectPanel({data,setData,toasts,isMobile,initialEntryId}){
     });
     toasts.push('Reflection saved to Journal');
   }
-  function addMemory(content,type='reflection'){
-    const mem={id:uid('rm'),type,content,sourceType:'explicit',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userApproved:true,active:true,confidence:'high'};
+  function addMemory(content,type='reflection',opts={}){
+    const memId=opts.id||uid('rm');
+    const mem={id:memId,type,content,sourceType:opts.auto?'auto':'explicit',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userApproved:true,active:true,confidence:'high'};
     setReflect(r=>({...r,memories:[...(r.memories||[]),mem]}));
-    toasts.push('Remembered');
+    if(!opts.silent) toasts.push('Remembered');
+  }
+  function removeMemory(id){
+    setReflect(r=>({...r,memories:(r.memories||[]).filter(m=>m.id!==id)}));
   }
   return(
     <div className="flex flex-col gap-4">
@@ -5002,7 +5006,7 @@ function ReflectPanel({data,setData,toasts,isMobile,initialEntryId}){
         <div className="text-xs opacity-40">AI companion — not a therapist</div>
       </div>
       {view==='home'&&<ReflectHome reflect={reflect} journals={data.journals||[]} onStart={startSession}/>}
-      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} isMobile={isMobile}/>}
+      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} onRemoveMemory={removeMemory} isMobile={isMobile}/>}
       {view==='insights'&&<ReflectInsights reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts}/>}
       {view==='context'&&<ReflectContext reflect={reflect} setReflect={setReflect} toasts={toasts}/>}
     </div>
@@ -5049,7 +5053,7 @@ function ReflectHome({reflect,journals,onStart}){
   );
 }
 
-function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,isMobile}){
+function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,onRemoveMemory,isMobile}){
   const [input,setInput]=useState('');
   const [streaming,setStreaming]=useState(false);
   const [listening,setListening]=useState(false);
@@ -5060,6 +5064,7 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
   const [rememberText,setRememberText]=useState('');
   const [rememberType,setRememberType]=useState('reflection');
   const [showRemember,setShowRemember]=useState(false);
+  const [lastAutoMemId,setLastAutoMemId]=useState(null);
   const scrollRef=useRef(null);
   const prefs=reflect.prefs||{};
   const speaker=useSpeaker();
@@ -5121,8 +5126,16 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
         ]})
       });
       const j=await resp.json();
-      setSummaryText(j.choices?.[0]?.message?.content||'');
+      const summaryContent=j.choices?.[0]?.message?.content||'';
+      setSummaryText(summaryContent);
       setShowSummary(true);
+      // Auto-save the "One thing to remember" as a memory
+      const remMatch=summaryContent.match(/One thing to remember:\s*([^\n]+)/i);
+      if(remMatch&&remMatch[1].trim()){
+        const memId=uid('rm');
+        setLastAutoMemId(memId);
+        onAddMemory(remMatch[1].trim(),'reflection',{id:memId,silent:true,auto:true});
+      }
     }catch(e){toasts.push('Summary error: '+e.message);}
     setGenSummary(false);
   }
@@ -5238,13 +5251,19 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
           <div className="glass p-5 rounded-xl z-50 flex flex-col gap-4 overflow-y-auto" style={{width:'min(500px,92vw)',maxHeight:'80vh'}}>
             <h3 className="font-semibold">Session Summary</h3>
             <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{color:'#cbd5e1'}}>{summaryText}</div>
+            {lastAutoMemId&&(
+              <div className="flex items-center gap-2 text-xs py-2 px-3 rounded-lg" style={{background:'rgba(110,231,183,0.08)',border:'1px solid rgba(110,231,183,0.2)'}}>
+                <span style={{color:'#6ee7b7'}}>✓ Memory auto-saved</span>
+                <button onClick={()=>{onRemoveMemory(lastAutoMemId);setLastAutoMemId(null);}} className="ml-auto hover:opacity-80" style={{color:'#64748b'}}>Don't save</button>
+              </div>
+            )}
             <div className="flex gap-2 flex-wrap">
               <button onClick={()=>{onSaveToJournal(summaryText);setShowSummary(false);onEnd(msgs);}}
                 className="px-3 py-1.5 rounded text-sm"
                 style={{background:'rgba(99,102,241,0.2)',color:'#a5b4fc',border:'1px solid rgba(99,102,241,0.3)'}}>
                 Save to Journal
               </button>
-              <button onClick={()=>{setShowSummary(false);onEnd(msgs);}} className="px-3 py-1.5 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}}>End without saving</button>
+              <button onClick={()=>{setShowSummary(false);onEnd(msgs);}} className="px-3 py-1.5 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}}>End session</button>
               <button onClick={()=>setShowSummary(false)} className="px-3 py-1.5 rounded text-sm hover:bg-white/5" style={{color:'#64748b'}}>Keep talking</button>
             </div>
           </div>
