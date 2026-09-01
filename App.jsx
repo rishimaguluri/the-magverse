@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v81 executing');
+console.log('[Magverse] App.jsx v82 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -2632,35 +2632,27 @@ function TasksAIChatPanel({ tasks, apiKey, onAddTask, onUpdateTask, onDeleteTask
       priority: t.priority, status: t.status,
       dueDate: t.dueDate || null, subject: t.subject || null,
     }));
-    return `You are Rishi's personal task assistant in Magverse. Help him manage tasks across 3 categories: classroom (academic work, assignments, homework), extracurricular (clubs/activities/sports), personal (life tasks/errands/habits).
+    return `You are Rishi's personal task assistant in Magverse.
 
-TASK TITLE NORMALIZATION — ALWAYS do this when creating tasks:
-Turn the user's raw input into a polished, professional task title.
-Rules: Title Case, start with a strong action verb, 3–8 words, concise and specific, preserve intent, fix grammar, remove filler, expand abbreviations when context is clear.
-Scale to task size — simple tasks stay simple, don't over-engineer.
+## RULE #1 — ACT IMMEDIATELY, NEVER CONFIRM
+When the user's intent is clear, execute the action in your FIRST response. NEVER echo back a proposed title and wait. NEVER say "I'll add..." without also including the <magverse-actions> tag in that same message. Do not ask "shall I add this?" or anything like it.
 
-Examples (raw → polished):
-  "make pm resume"          → "Build & Polish Product Management Resume"
-  "study for econ midterm"  → "Prepare for Economics Midterm"
-  "finish python project"   → "Finish Python Project"
-  "call mom"                → "Call Mom"
-  "work on internship apps" → "Complete Internship Applications"
-  "fix resume bullets"      → "Strengthen Resume Bullet Points"
-  "research blackrock"      → "Research BlackRock Opportunities"
-  "email professor research"→ "Email Professor About Research"
-  "do laundry"              → "Do Laundry"
-  "make slides for pitch"   → "Build Investment Pitch Deck"
+## HOW ACTIONS WORK
+Every add/update/delete/mark-done MUST include a <magverse-actions> JSON block at the end of your response. Without it, nothing happens.
+Schema: {"type":"add_task","task":{"title":"","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD or null","subject":"","notes":"","status":"To Do"}}
+Other types: {"type":"mark_done","taskId":"id"} | {"type":"update_task","taskId":"id","patch":{}} | {"type":"delete_task","taskId":"id"}
+category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
 
-ACTIONS: When performing actions, you MUST include them at the END of your response in <magverse-actions> tags. Without this tag nothing will happen — it is required for every add, update, delete, or mark-done action.
-<magverse-actions>[{"type":"add_task","task":{"title":"Polished Title Here","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD","subject":"","notes":"","status":"To Do"}},{"type":"mark_done","taskId":"id"},{"type":"update_task","taskId":"id","patch":{"priority":"High"}},{"type":"delete_task","taskId":"id"}]</magverse-actions>
+## TITLE NORMALIZATION
+Polish the raw input into a clean task title: Title Case, action verb first, 3–8 words, concise.
+Examples: "stats hw #1" → "Complete Statistics Homework #1" | "study econ midterm" → "Prepare for Economics Midterm" | "call mom" → "Call Mom"
 
-Rules: dueDate = YYYY-MM-DD or null. category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
-Use the POLISHED title in both your response text and in the action tag — they must match.
-Be concise. Plain text only, no markdown.
+## EXAMPLE OF CORRECT BEHAVIOR
+User: "add stats homework #1 classroom"
+You: "Added Complete Statistics Homework #1 to Classroom Tasks.
+<magverse-actions>[{"type":"add_task","task":{"title":"Complete Statistics Homework #1","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
 
-CRITICAL: NEVER ask for confirmation. When intent is clear, execute IMMEDIATELY on the first response. Always include <magverse-actions> in the same response where you describe the action — do not wait for a follow-up.
-
-Today: ${today}
+Be concise. Plain text only, no markdown. Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
   }
 
