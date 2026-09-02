@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v85 executing');
+console.log('[Magverse] App.jsx v86 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -4880,6 +4880,7 @@ const REFLECT_MODES=[
   {id:'goals',   label:'Goals',             emoji:'🎯', hint:'Connect daily behavior to longer-term intentions. Ask whether goals still feel alive. Surface discrepancies without shaming.'},
   {id:'patterns',label:'Pattern Finder',    emoji:'🔍', hint:'Look across journal history for recurring themes. Report with confidence levels. Show evidence, not invented narratives.'},
   {id:'weekly',  label:'Weekly Reflection', emoji:'📅', hint:'Review recent journal entries and produce a structured weekly reflection: what occupied their mind, what went well, what drained them, what they may be avoiding.'},
+  {id:'socratic',label:'Examine a Belief',  emoji:'🔬', hint:'SOCRATIC_MODE'},
 ];
 
 const REFLECT_CRISIS=['suicide','kill myself','end my life','want to die','self-harm','cutting myself','hurt myself','don\'t want to be here','no reason to live','thinking about suicide'];
@@ -4919,6 +4920,31 @@ function buildReflectSystem(mode,lifeCtx,memories,relevantEntries,challengeMode,
     :challengeMode==='gentle'
     ?'Be warm and gentle. Still ask clarifying questions — just avoid hard pushback.'
     :'Balance empathy with honest challenge. Acknowledge feelings without treating every interpretation as fact.';
+
+  const socraticProtocol=mode==='socratic'?`
+
+SOCRATIC QUESTIONING MODE
+The user will state a belief they hold — strongly or loosely. Your job is NOT to argue against it or validate it. Your job is to interrogate it rigorously until they understand exactly WHY they believe it, under WHAT CONDITIONS it holds, and what evidence would change their mind.
+
+INTERROGATION SEQUENCE — work through these one at a time, not all at once:
+1. DEFINE — "What specifically do you mean by [key term]?" Force precision. Vague words ("harder", "better", "success", "toxic") hide confused thinking.
+2. EVIDENCE — "What makes you believe this is actually true?" Distinguish direct observation from inherited assumption.
+3. COUNTEREXAMPLE — "When has this belief been wrong, or made things worse?" One real counterexample is more powerful than ten objections.
+4. HIDDEN ASSUMPTION — "What are you taking for granted that might not be true?" Surface the upstream premise the belief depends on.
+5. FALSIFICATION — "What would have to be true for you to conclude this belief is wrong?" If nothing could change their mind, that's a red flag.
+6. REFINED STATEMENT — At the end, help them arrive at a more precise version: not "X" but "X because Y, under conditions Z, except when W."
+
+RULES:
+- Ask ONE question at a time. Never list all five at once.
+- Follow the thread. If their answer reveals something worth pressing on, press on it before moving to the next step.
+- Do not solve the belief. The user should do the thinking. You only dig.
+- Do not validate the belief prematurely. "Good point" or "That makes sense" shuts down inquiry.
+- Do not argue against the belief either. You are not the opposition — you are the process.
+- When they reach a refined, precise version of their belief, name what changed: "You started with X. What you actually believe is closer to Y."
+- This is not endless skepticism. The goal is a STRONGER, more accurate belief — not demolishing it.
+
+OPENING: Ask them to state the belief plainly in one sentence, then start with DEFINE.`:'';
+
   let sys=`You are Reflect — a thoughtful personal reflection companion for ${userName||'this user'}.
 
 Your job: help the user understand themselves, think clearly, recognize patterns, examine assumptions, make decisions, and connect present experiences with relevant context from their life.
@@ -4936,7 +4962,7 @@ BEHAVIORAL PRINCIPLES:
 - Response length: 1–3 paragraphs for conversation. One strong observation + one specific question is often enough.
 - ${challenge}
 
-CURRENT MODE: ${modeHint}
+CURRENT MODE: ${mode==='socratic'?'Examine a Belief — Socratic Questioning':modeHint}${socraticProtocol}
 
 SAFETY: If the user mentions self-harm, suicidal ideation, or immediate danger — stop the normal conversation and provide crisis resources (988 in the US).`;
   if(lifeCtx?.trim()) sys+=`\n\nUSER'S LIFE CONTEXT (explicitly provided by them):\n${lifeCtx.trim().slice(0,600)}`;
@@ -5027,7 +5053,7 @@ function ReflectHome({reflect,journals,onStart}){
       <div className="text-center">
         <div className="text-2xl font-light mb-2" style={{color:'#e2e8f0',opacity:0.85}}>{starter}</div>
       </div>
-      <div className="grid grid-cols-4 gap-2 w-full max-w-xl">
+      <div className="grid gap-2 w-full max-w-xl" style={{gridTemplateColumns:'repeat(auto-fill,minmax(90px,1fr))' }}>
         {REFLECT_MODES.map(m=>(
           <button key={m.id} onClick={()=>onStart(m.id)} className="flex flex-col items-center gap-1.5 p-3 rounded-xl transition-all hover:bg-white/8"
             style={{border:'1px solid rgba(255,255,255,0.07)'}}>
@@ -5173,7 +5199,7 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
           <div className="flex flex-col items-center justify-center text-center mt-10 gap-2" style={{opacity:0.4}}>
             <div className="text-4xl">{modeInfo.emoji}</div>
             <div className="text-sm">{modeInfo.label}</div>
-            <div className="text-xs">Speak or type to begin</div>
+            <div className="text-xs">{mode==='socratic'?'State a belief you hold. It will be interrogated — not destroyed.':'Speak or type to begin'}</div>
           </div>
         )}
         {msgs.map(m=>(
