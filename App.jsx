@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v83 executing');
+console.log('[Magverse] App.jsx v84 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -11439,8 +11439,8 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
 }
 
 /* ----------- Cases ----------- */
-const CASE_STATES=['opening','clarify','structure','exploration','synthesis','recommendation','debrief','done'];
-const CASE_STATE_LABELS={opening:'Opening',clarify:'Clarification',structure:'Structure',exploration:'Analysis',synthesis:'Synthesis',recommendation:'Recommendation',debrief:'Debrief',done:'Complete'};
+const CASE_STATES=['opening','clarify','objective','structure','exploration','synthesis','recommendation','debrief','done'];
+const CASE_STATE_LABELS={opening:'Opening',clarify:'Clarification',objective:'Objective',structure:'Structure',exploration:'Analysis',synthesis:'Synthesis',recommendation:'Recommendation',debrief:'Debrief',done:'Complete'};
 
 const CASES_CATALOG=[
   {id:'profitability',label:'Profitability',difficulty:'Intermediate',estimatedMin:20,
@@ -11448,50 +11448,67 @@ const CASES_CATALOG=[
     description:'A specialty retailer\'s margin fell from 8% to 3%. Revenue held flat at $800M. Find the root cause and a fix.',
     setup:'Our client is a mid-size specialty retail chain with 200 stores across the US. Their net profit margin has declined from 8% to 3% over the past two years, despite revenue holding flat at approximately $800M. The CEO wants to understand why margins fell and what they should do about it.',
     explorationData:'COGS margin expanded 6pp due to raw material cost increases and supplier pricing changes. Labor costs rose 2pp from wage inflation and increased overtime. Rent and D&A are flat. Revenue is flat in aggregate, but transaction volume fell 12% — offset by an 8% price increase. The online channel grew 40% but carries a 3pp lower gross margin than stores.',
+    objectiveComponents:['diagnose the root causes of the margin decline','recommend actions to restore profitability'],
+    constraints:['US market','200-store retail chain','revenue has held flat at $800M'],
+    successCriteria:'restore net profit margin toward historical 8% level',
   },
   {id:'market-entry',label:'Market Entry',difficulty:'Intermediate',estimatedMin:25,
     title:'EV Charging Market Entry',industry:'Energy & Transportation',
     description:'A major oil company with 4,000 gas stations considers entering EV charging. Should they, and how?',
     setup:'Our client is one of the largest petroleum companies in the US with $12B in annual revenue and a network of approximately 4,000 owned and operated gas stations. They are evaluating whether to enter the electric vehicle (EV) charging market. They want to know: should they enter, and if so, how and where?',
     explorationData:'US EV charging market: $5B today, projected $40B by 2030 (35% CAGR). The leading network holds 35% share. DC fast chargers cost $50K–$200K per station; Level 2 chargers $5K–$20K. Average public fast-charger utilization is currently 28%. The client\'s highway and high-traffic suburban locations are ideal for fast charging. Competitors (BP Pulse, EVgo) are already spending aggressively. The client has no EV charging technology or brand today.',
+    objectiveComponents:['determine whether to enter the EV charging market','if entering, recommend how and where to enter'],
+    constraints:['US market','existing 4,000-station network as a potential asset'],
+    successCriteria:'a clear go/no-go decision with a viable entry approach if yes',
   },
   {id:'growth',label:'Growth Strategy',difficulty:'Advanced',estimatedMin:30,
     title:'Regional Bank Revenue Growth',industry:'Financial Services',
     description:'A regional bank growing at 2% needs a path to 7% revenue growth in 3 years.',
     setup:'Our client is a regional bank headquartered in Atlanta with $20B in assets and operations across six states in the Southeast US. They have grown revenue at approximately 2% per year, well below the regional banking industry average of 5% and their own target of 7%. The new CEO has engaged us to identify the best path to 7% revenue growth within three years.',
     explorationData:'Revenue mix: retail banking 60% ($480M), growing 1% YoY; commercial banking 30% ($240M), declining 3% YoY; wealth management 10% ($80M), growing 15% YoY. Digital banking adoption is 40% vs. industry average of 68% — the gap drives higher branch servicing costs. Net interest margin compressed 30bps from deposit repricing. The client has not entered the mortgage market (a gap vs. peers). Geographic footprint is concentrated in metro areas while peer banks expanded into fast-growing secondary cities.',
+    objectiveComponents:['identify the best path to 7% annual revenue growth','deliver growth within three years'],
+    constraints:['Southeast US six-state footprint','three-year timeframe','7% revenue growth target'],
+    successCriteria:'achieve 7% annual revenue growth within three years',
   },
   {id:'ma',label:'M&A',difficulty:'Advanced',estimatedMin:30,
     title:'Software Acquisition Decision',industry:'Technology',
     description:'An enterprise software firm considers acquiring a B2B SaaS startup at $800M. Worth it?',
     setup:'Our client is a large enterprise software company with $5B in revenue serving Fortune 1000 firms. They are considering acquiring a B2B SaaS startup called Flowdesk, which provides project management and workflow automation tools. Flowdesk is privately held and asking $800M. The client needs to decide: should they acquire Flowdesk at this valuation, and if so, how should they integrate it?',
     explorationData:'Flowdesk: $50M ARR, growing 60% YoY, 120% net revenue retention (excellent), -15% EBITDA margin. Average contract $62K; 800 customers. Our client\'s current PM module generates $120M in revenue growing only 5% and has been losing deals to Flowdesk. Our client has 3,000 enterprise customers with no Flowdesk overlap — significant cross-sell potential, estimated $30–50M ARR within 2 years. At $800M, the acquisition is priced at 16x ARR. Integration risk: Flowdesk\'s team is 120 people, engineering-heavy, and culture is startup-oriented.',
+    objectiveComponents:['determine whether to acquire Flowdesk at $800M','if acquiring, recommend an integration approach'],
+    constraints:['$800M asking price','Flowdesk is privately held'],
+    successCriteria:'a clear acquire/pass decision with strategic and financial justification',
   },
   {id:'operations',label:'Operations',difficulty:'Intermediate',estimatedMin:25,
     title:'Manufacturing Plant Efficiency',industry:'Consumer Goods',
     description:'A production plant at 68% utilization with 4.2% defects needs to hit 90% / 1.5% in 18 months.',
     setup:'Our client is a consumer goods manufacturer with $1.2B in annual revenue. Their flagship plant, responsible for 40% of total output, is running at 68% capacity utilization with a 4.2% defect rate. The industry best-in-class benchmark is 90% utilization and 1.5% defects. The COO has given the plant manager 18 months to reach those benchmarks or the plant faces downsizing.',
     explorationData:'Three production lines: Line A (85% utilization, 1.8% defects — best performer), Line B (65% utilization, 4.5% defects — HVAC failure causing temperature variance on heat-sensitive components), Line C (55% utilization, 6.5% defects — 2005-vintage equipment, unplanned downtime averaging 18 hours/month). Changeover time averages 4.2 hours across all lines vs. the benchmark of 1.8 hours — root cause is manual calibration procedures not yet digitized. No predictive maintenance system in place.',
+    objectiveComponents:['identify the root causes of low utilization and high defect rates','recommend specific actions to reach 90% utilization and 1.5% defects within 18 months'],
+    constraints:['18-month deadline','flagship plant cannot be shut down','benchmark targets: 90% utilization, 1.5% defect rate'],
+    successCriteria:'reach 90% utilization and 1.5% defect rate within 18 months',
   },
 ];
 
 function getCaseConfig(type){return CASES_CATALOG.find(c=>c.id===type)||CASES_CATALOG[0];}
 
-function buildCaseSystemPrompt(caseConfig,caseState){
+function buildCaseSystemPrompt(caseConfig,caseState,userObjective=''){
+  const objCtx=userObjective?`\n\nCandidate's stated case objective: "${userObjective}"`:''
   const stateGuide={
     opening:'Introduce the case naturally as a real McKinsey interviewer would — name the client, industry, and central question. Do not volunteer any data yet.',
     clarify:'Answer clarifying questions with concise specific answers. Reveal only what is directly asked. Typical questions: timeframe, client description, geography, competitive context.',
-    structure:'The candidate will present their structure. Give honest brief feedback on whether it is MECE and complete, then move into exploration.',
-    exploration:'Provide data from the exploration dataset only when directly asked. Guide toward the key insight without giving it away. If they pursue an unproductive branch, let them spend 1-2 turns before redirecting.',
-    synthesis:'Ask the candidate to summarize findings in 2-3 sentences. Push back if they are vague or missing a key driver.',
-    recommendation:'Ask for a clear actionable recommendation with quantitative rationale. Push back if it is too generic or ignores risk.',
+    objective:'The candidate is about to state their understanding of the case objective. Do not prompt them yet — this is handled separately in the UI.',
+    structure:`The candidate will present their structure. Give honest brief feedback on whether it is MECE and complete.${userObjective?' Explicitly assess whether the structure would actually answer the stated objective: "'+userObjective+'". If the structure drifts from the objective, name the gap.':''} Then move into exploration.`,
+    exploration:`Provide data from the exploration dataset only when directly asked. Guide toward the key insight without giving it away. If they pursue an unproductive branch, let them spend 1-2 turns before redirecting.${userObjective?' Occasionally check that analysis stays relevant to the stated objective.':''}`,
+    synthesis:`Ask the candidate to summarize findings in 2-3 sentences. Push back if they are vague or missing a key driver.${userObjective?' Verify that the synthesis addresses the original objective: "'+userObjective+'"':''}`,
+    recommendation:`Ask for a clear actionable recommendation with quantitative rationale. Push back if it is too generic or ignores risk.${userObjective?' Critically: ensure the recommendation directly answers the stated objective ("'+userObjective+'"). If it does not, flag the gap explicitly.':''}`,
     debrief:'Give specific coaching: what they did well, where they lost time or missed key issues, and one concrete thing to practice next.',
   };
   return `You are a professional case interview coach playing the role of a McKinsey senior interviewer. You are conducting a ${caseConfig.label} case interview. Be realistic but instructive. Stay in character throughout. Give information only when directly asked — never volunteer data. When the candidate makes a sound move, acknowledge briefly and continue. When they struggle, ask a guiding question. Keep responses concise (2–4 sentences typically).
 
 Case: "${caseConfig.setup}"
 
-Exploration data (reveal only when asked): ${caseConfig.explorationData}
+Exploration data (reveal only when asked): ${caseConfig.explorationData}${objCtx}
 
 Current phase: ${CASE_STATE_LABELS[caseState]||caseState}. Your role now: ${stateGuide[caseState]||'Continue the interview naturally.'}`;
 }
@@ -11502,19 +11519,57 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
   const [input,setInput]=useState('');
   const [streaming,setStreaming]=useState(false);
   const [streamText,setStreamText]=useState('');
+  const [objInput,setObjInput]=useState('');
+  const [objFeedback,setObjFeedback]=useState(null);
+  const [objSubmitting,setObjSubmitting]=useState(false);
+  const [showObjTips,setShowObjTips]=useState(false);
+  const [objBannerOpen,setObjBannerOpen]=useState(true);
   const scrollRef=useRef(null);
   const dict=useDictation(t=>{setInput(p=>p?p+' '+t:t);});
 
   useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[activeCase?.sessionLog,streamText]);
 
   const startCase=(cfg)=>{
-    const nc={id:uid('cs'),title:cfg.title,industry:cfg.industry,type:cfg.id,state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],startedAt:Date.now(),finishedAt:null};
+    const nc={id:uid('cs'),title:cfg.title,industry:cfg.industry,type:cfg.id,state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],userObjective:'',objectiveFeedback:null,objectiveScore:null,startedAt:Date.now(),finishedAt:null};
     setConsulting(c=>({...c,cases:[...(c.cases||[]),nc]}));
-    setActiveCase(nc);setView('active');setStreamText('');
+    setActiveCase(nc);setView('active');setStreamText('');setObjInput('');setObjFeedback(null);
     sendInterviewerOpener(nc,cfg);
   };
 
-  const resumeCase=(c)=>{setActiveCase(c);setView('active');};
+  const resumeCase=(c)=>{
+    setActiveCase(c);setView('active');
+    if(c.state==='objective'){setObjInput(c.userObjective||'');setObjFeedback(c.objectiveFeedback||null);}
+    else{setObjInput('');setObjFeedback(null);}
+  };
+
+  const evaluateObjective=async()=>{
+    const text=objInput.trim();
+    if(!text||objSubmitting||!apiKey)return;
+    setObjSubmitting(true);
+    try{
+      const cfg=getCaseConfig(activeCase.type);
+      const comps=(cfg.objectiveComponents||[]).join('; ');
+      const cons=(cfg.constraints||[]).join('; ')||'none stated';
+      const sc=cfg.successCriteria||'not specified';
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:500,messages:[
+        {role:'system',content:`You are a case interview coach evaluating a candidate's case objective statement.\n\nCase prompt: "${cfg.setup}"\nRequired components a strong objective must cover: ${comps}\nKey constraints (if any): ${cons}\nSuccess criteria: ${sc}\n\nEvaluate the candidate's statement on these dimensions:\n- clientCentered: reflects what the client actually cares about\n- decisionOriented: identifies a clear decision or outcome\n- specific: captures the actual problem, not a generic restatement\n- complete: covers ALL required components\n- notOverSpecified: does not assume or prescribe the solution prematurely\n- concise: 1-2 sentences, not a paragraph\n\nReturn JSON only: {"rating":"STRONG|SOLID|DEVELOPING|WEAK","assessment":"2-3 sentence assessment, be specific","whatsMissing":null or "what is missing","strongVersion":"one strong version in 1-2 sentences","dimensions":{"clientCentered":true,"decisionOriented":true,"specific":true,"complete":true,"notOverSpecified":true,"concise":true}}\n\nScore MEANING not wording. Many phrasings can be STRONG. STRONG=captures decision and all components concisely. SOLID=good but slightly incomplete or imprecise. DEVELOPING=shows understanding but misses something important. WEAK=misses the core decision or too generic.`},
+        {role:'user',content:`My case objective: "${text}"`}
+      ]})});
+      const j=await resp.json();
+      const parsed=JSON.parse(j.choices[0].message.content);
+      setObjFeedback(parsed);
+      const uc={...activeCase,userObjective:text,objectiveFeedback:parsed,objectiveScore:parsed.rating};
+      setActiveCase(uc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===uc.id?uc:x)}));
+    }catch(e){toasts.push('Error: '+e.message);}
+    setObjSubmitting(false);
+  };
+
+  const confirmObjective=()=>{
+    const next='structure';
+    const nc={...activeCase,state:next};
+    setActiveCase(nc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===nc.id?nc:x)}));
+    setObjFeedback(null);setObjInput('');setObjBannerOpen(true);
+  };
 
   const sendInterviewerOpener=async(nc,cfg)=>{
     const caseConfig=cfg||getCaseConfig(nc.type);
@@ -11540,7 +11595,7 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     setInput('');setStreaming(true);setStreamText('');
     try{
       const history=updatedLog.slice(-14).map(m=>({role:m.role==='interviewer'?'assistant':'user',content:m.content}));
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(caseConfig,uc.state)},...history]})});
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(caseConfig,uc.state,uc.userObjective||'')},...history]})});
       if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
       const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
       while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;setStreamText(out);}}catch{}}}
@@ -11566,11 +11621,15 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     setStreaming(true);
     try{
       const transcript=nc.sessionLog.map(m=>`${m.role==='interviewer'?'Interviewer':'Candidate'}: ${m.content}`).join('\n\n');
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:600,messages:[{role:'system',content:'You are a case coach. Score the candidate 1-10 on each dimension based on the transcript. Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0,"CaseManagement":0},"weaknesses":["specific weakness 1","specific weakness 2"],"strengths":["strength 1"],"insight":"1 sentence overall summary"}'},{role:'user',content:`Case type: ${nc.type}\n\nTranscript:\n${transcript}`}]})});
+      const objLine=nc.userObjective?`\nCandidate's stated case objective: "${nc.userObjective}"`:'\nCandidate did not state a case objective.';
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:800,messages:[
+        {role:'system',content:'You are a case coach. Score the candidate 1-10 on each dimension based on the transcript. For ObjectiveDiscipline: did they understand the objective, did their structure address it, did their analysis stay relevant to it, did their recommendation resolve it? Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0,"CaseManagement":0,"ObjectiveDiscipline":0},"objectiveDisciplineAssessment":"1-2 sentences on objective discipline","weaknesses":["specific weakness 1","specific weakness 2"],"strengths":["strength 1"],"insight":"1 sentence overall summary"}'},
+        {role:'user',content:`Case type: ${nc.type}${objLine}\n\nTranscript:\n${transcript}`}
+      ]})});
       const j=await resp.json();
       const parsed=JSON.parse(j.choices[0].message.content);
       const weak=Object.entries(parsed.competencyScores||{}).filter(([,v])=>v<6).map(([k])=>k);
-      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},weaknesses:parsed.weaknesses||weak,strengths:parsed.strengths||[],debriefInsight:parsed.insight||'',finishedAt:Date.now()};
+      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},objectiveDisciplineAssessment:parsed.objectiveDisciplineAssessment||'',weaknesses:parsed.weaknesses||weak,strengths:parsed.strengths||[],debriefInsight:parsed.insight||'',finishedAt:Date.now()};
       setActiveCase(finished);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===finished.id?finished:x)}));
       for(const dim of weak){
         const errEntry={id:uid('er'),dimension:dim,drillId:null,caseId:nc.id,description:(parsed.weaknesses||[]).find(w=>w.toLowerCase().includes(dim.toLowerCase()))||'Below threshold in '+dim,feedback:parsed.insight||'',createdAt:Date.now(),resolved:false};
@@ -11640,30 +11699,166 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
     );
   }
 
-  if(view==='debrief'&&activeCase) return (
-    <div className="max-w-2xl">
-      <div className="glass rounded-xl p-6 border-subtle mb-4">
-        <div className="text-sm font-semibold mb-1">Debrief — {activeCase.title}</div>
-        {activeCase.debriefInsight&&<div className="text-xs mb-4 p-3 rounded-lg" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{activeCase.debriefInsight}</div>}
-        {activeCase.competencyScores&&(
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            {Object.entries(activeCase.competencyScores).map(([k,v])=>(
-              <div key={k} className="flex items-center justify-between p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
-                <span className="text-xs" style={{color:'#94a3b8'}}>{C_DIM_LABELS[k]||k}</span>
-                <span className="text-sm font-bold" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{v}/10</span>
-              </div>
-            ))}
+  if(view==='debrief'&&activeCase){
+    const {ObjectiveDiscipline:objScore,...otherScores}=activeCase.competencyScores||{};
+    const RATING_LABEL={STRONG:'STRONG',SOLID:'SOLID',DEVELOPING:'DEVELOPING',WEAK:'WEAK'};
+    const objRating=activeCase.objectiveScore;
+    return (
+      <div className="max-w-2xl">
+        <div className="glass rounded-xl p-6 border-subtle mb-4">
+          <div className="text-sm font-semibold mb-1">Debrief — {activeCase.title}</div>
+          {activeCase.debriefInsight&&<div className="text-xs mb-4 p-3 rounded-lg" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{activeCase.debriefInsight}</div>}
+          {/* Objective Discipline block */}
+          <div className="mb-4 p-4 rounded-xl" style={{background:'rgba(99,102,241,0.06)',border:'1px solid rgba(99,102,241,0.15)'}}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-bold tracking-widest" style={{color:'#818cf8'}}>OBJECTIVE DISCIPLINE</div>
+              {objScore!=null&&<span className="text-sm font-bold" style={{color:objScore>=7?'#34d399':objScore>=5?'#f59e0b':'#f87171'}}>{objScore}/10</span>}
+            </div>
+            {activeCase.userObjective&&<div className="text-xs mb-2 italic" style={{color:'#64748b'}}>Stated objective: "{activeCase.userObjective}"</div>}
+            {objRating&&<div className="text-xs font-semibold mb-1" style={{color:objRating==='STRONG'?'#34d399':objRating==='SOLID'?'#a5b4fc':objRating==='DEVELOPING'?'#f59e0b':'#f87171'}}>{RATING_LABEL[objRating]||objRating}</div>}
+            {activeCase.objectiveDisciplineAssessment&&<div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{activeCase.objectiveDisciplineAssessment}</div>}
           </div>
-        )}
-        {activeCase.strengths?.length>0&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#34d399'}}>STRENGTHS</div><ul className="space-y-1">{activeCase.strengths.map((s,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>+ {s}</li>)}</ul></div>}
-        {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-1" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
+          {/* Core competency scores */}
+          {Object.keys(otherScores).length>0&&(
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {Object.entries(otherScores).map(([k,v])=>(
+                <div key={k} className="flex items-center justify-between p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
+                  <span className="text-xs" style={{color:'#94a3b8'}}>{C_DIM_LABELS[k]||k}</span>
+                  <span className="text-sm font-bold" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{v}/10</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {activeCase.strengths?.length>0&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#34d399'}}>STRENGTHS</div><ul className="space-y-1">{activeCase.strengths.map((s,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>+ {s}</li>)}</ul></div>}
+          {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-1" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
+        </div>
+        <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← All Cases</button>
       </div>
-      <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← All Cases</button>
-    </div>
-  );
+    );
+  }
 
   // active case view
   const caseStateIdx=CASE_STATES.indexOf(activeCase?.state||'opening');
+  const isObjPhase=activeCase?.state==='objective';
+  const showObjBanner=['structure','exploration','synthesis','recommendation'].includes(activeCase?.state)&&activeCase?.userObjective;
+  const RATING_COLOR_MAP={STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
+
+  // ── Objective step — dedicated UI ──────────────────────────────────────
+  if(isObjPhase&&activeCase) return (
+    <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
+      {/* header */}
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium">{activeCase.title}</span>
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>Objective</span>
+          <div className="flex gap-0.5">{CASE_STATES.slice(0,-1).map((s,i)=><div key={s} className="w-2 h-2 rounded-full" style={{background:i<=caseStateIdx?'#6366f1':'rgba(255,255,255,0.1)'}}/>)}</div>
+        </div>
+        <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
+      </div>
+      <div className="flex-1 overflow-y-auto pr-1">
+        {/* heading */}
+        <div className="mb-5">
+          <div className="text-lg font-bold mb-1" style={{color:'#e2e8f0',letterSpacing:'0.02em'}}>WHAT IS THE GOAL OF THIS CASE?</div>
+          <div className="text-sm" style={{color:'#64748b'}}>Before you structure the problem, state the decision the client needs you to resolve.</div>
+        </div>
+        {/* prompt reminder */}
+        <div className="glass rounded-xl p-4 mb-4 text-sm leading-relaxed" style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.06)'}}>
+          <div className="text-xs font-semibold mb-2" style={{color:'#475569'}}>CASE PROMPT</div>
+          {getCaseConfig(activeCase.type).setup}
+        </div>
+        {/* input or feedback */}
+        {!objFeedback?(
+          <div className="flex flex-col gap-3 mb-4">
+            <textarea value={objInput} onChange={e=>setObjInput(e.target.value)} rows={3}
+              placeholder="e.g. Determine the root causes of the margin decline and recommend actions to restore profitability."
+              className="w-full px-4 py-3 rounded-xl text-sm resize-none outline-none"
+              style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+            <button onClick={evaluateObjective} disabled={objSubmitting||!objInput.trim()||!apiKey}
+              className="self-start px-5 py-2 rounded-lg text-sm font-semibold"
+              style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:objSubmitting||!objInput.trim()||!apiKey?0.4:1}}>
+              {objSubmitting?'Evaluating…':'Submit Objective'}
+            </button>
+          </div>
+        ):(
+          <div className="flex flex-col gap-3 mb-4">
+            {/* submitted objective */}
+            <div className="rounded-xl p-4" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div className="text-xs font-bold tracking-widest mb-2" style={{color:'#475569'}}>YOUR OBJECTIVE</div>
+              <div className="text-sm italic" style={{color:'#cbd5e1'}}>"{activeCase.userObjective}"</div>
+            </div>
+            {/* rating badge */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-base font-bold" style={{color:RATING_COLOR_MAP[objFeedback.rating]||'#e2e8f0'}}>{objFeedback.rating}</span>
+              <div className="flex gap-2 flex-wrap">
+                {Object.entries(objFeedback.dimensions||{}).map(([k,v])=>(
+                  <span key={k} className="text-xs px-2 py-0.5 rounded-full" style={{background:v?'rgba(52,211,153,0.1)':'rgba(248,113,113,0.1)',color:v?'#34d399':'#f87171',border:`1px solid ${v?'rgba(52,211,153,0.25)':'rgba(248,113,113,0.25)'}`}}>
+                    {v?'✓':''} {k.replace(/([A-Z])/g,' $1').trim()}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {/* assessment */}
+            <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{objFeedback.assessment}</div>
+            {/* what's missing */}
+            {objFeedback.whatsMissing&&<div className="text-xs p-3 rounded-lg" style={{background:'rgba(245,158,11,0.07)',border:'1px solid rgba(245,158,11,0.2)',color:'#fbbf24'}}><span className="font-semibold">Missing: </span>{objFeedback.whatsMissing}</div>}
+            {/* strong version */}
+            {objFeedback.strongVersion&&(
+              <div className="p-4 rounded-xl" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)'}}>
+                <div className="text-xs font-bold tracking-widest mb-2" style={{color:'#818cf8'}}>ONE STRONG VERSION</div>
+                <div className="text-sm italic" style={{color:'#e2e8f0'}}>"{objFeedback.strongVersion}"</div>
+              </div>
+            )}
+            {/* actions */}
+            <div className="flex gap-2 flex-wrap mt-1">
+              <button onClick={confirmObjective} className="px-5 py-2 rounded-lg text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Continue to Structure →</button>
+              <button onClick={()=>{setObjFeedback(null);setObjInput('');}} className="px-4 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>Try Again</button>
+            </div>
+          </div>
+        )}
+        {/* tips section */}
+        <div className="mt-2">
+          <button onClick={()=>setShowObjTips(s=>!s)} className="text-xs flex items-center gap-1" style={{color:'#475569'}}>
+            {showObjTips?'▼':'▶'} How to craft a strong case objective
+          </button>
+          {showObjTips&&(
+            <div className="mt-3 glass rounded-xl p-5 text-xs leading-relaxed flex flex-col gap-3" style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div>
+                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>1. Find the decision</div>
+                <div>Ask: "What does the client actually need to decide?" — enter, acquire, fix, grow, launch, reduce costs?</div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>2. Identify the success metric</div>
+                <div>If the prompt gives one (profit, revenue growth, ROI), preserve it. Do not invent one the case does not provide.</div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>3. Capture key constraints</div>
+                <div>Time, geography, budget, profitability requirements — include them when they materially shape the answer.</div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>4. Don't solve the case yet</div>
+                <div>The objective defines WHAT must be solved. Your framework determines HOW you will solve it. Do not assume the answer.</div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>5. Keep it short</div>
+                <div>A strong case objective can usually be stated in one sentence.</div>
+              </div>
+              <div className="pt-2 border-t border-white/5">
+                <div className="font-semibold mb-2" style={{color:'#818cf8'}}>Mental template (optional)</div>
+                <div className="italic mb-3" style={{color:'#64748b'}}>"Determine [WHAT] so the client can [DECISION / OUTCOME], while considering [CONSTRAINT if relevant]."</div>
+                <div className="grid gap-1.5">
+                  {[['Profitability','Identify the primary causes of the decline and recommend how management can restore sustainable margins.'],['Market entry','Determine whether the client should enter the market and, if so, how.'],['Growth','Determine how the client can achieve its growth target while maintaining acceptable profitability.'],['M&A','Determine whether the acquisition would create sufficient strategic and financial value, and if so, how to integrate.']].map(([t,ex])=>(
+                    <div key={t}><span className="font-medium" style={{color:'#475569'}}>{t}: </span><span className="italic">{ex}</span></div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Normal chat view ────────────────────────────────────────────────────
   return (
     <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
       <div className="flex items-center justify-between mb-3 flex-shrink-0">
@@ -11683,6 +11878,16 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
           <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
         </div>
       </div>
+      {/* sticky objective banner for structure+ phases */}
+      {showObjBanner&&(
+        <div className="flex-shrink-0 mb-3 rounded-xl px-4 py-2.5 flex items-start gap-3" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.18)'}}>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold tracking-widest mb-0.5" style={{color:'#818cf8'}}>CASE OBJECTIVE</div>
+            {objBannerOpen&&<div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{activeCase.userObjective}</div>}
+          </div>
+          <button onClick={()=>setObjBannerOpen(o=>!o)} className="text-xs flex-shrink-0 mt-0.5" style={{color:'#475569'}}>{objBannerOpen?'▲ hide':'▼ show'}</button>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 mb-3 pr-1">
         {(activeCase?.sessionLog||[]).map((m,i)=>(
           <div key={i} className={`flex ${m.role==='candidate'?'justify-end':''}`}>
