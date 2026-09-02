@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v84 executing');
+console.log('[Magverse] App.jsx v85 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -10666,38 +10666,98 @@ function DeepWorkRampPanel({data, setData, toasts}){
   const [sessionDraft, setSessionDraft] = useState({deliverable:'',residue:'',intention:'',challengeRating:'edge',envChecks:[false,false,false,false],cueConfirmed:false,timerLengthMin:ritual.timerMin||75});
   const [timerSecs, setTimerSecs] = useState(0);
   const [timerActive, setTimerActive] = useState(false);
+  const [cueInput, setCueInput] = useState(ritual.cue||'');
   const timerRef = useRef(null);
   const sessionStartRef = useRef(null);
 
-  // Timer tick — 1s interval
+  const DW_END_KEY   = 'magverse:deepwork:timerEndMs';
+  const DW_DRAFT_KEY = 'magverse:deepwork:timerDraft';
+  const DW_START_KEY = 'magverse:deepwork:timerStartedAt';
+
+  // On mount: restore timer if it was running while user navigated away
+  useEffect(()=>{
+    try{
+      const endMs = parseInt(localStorage.getItem(DW_END_KEY)||'0');
+      if(!endMs) return;
+      const remaining = Math.ceil((endMs - Date.now())/1000);
+      const draftJson = localStorage.getItem(DW_DRAFT_KEY);
+      const startedAt = localStorage.getItem(DW_START_KEY);
+      if(draftJson) try{ setSessionDraft(JSON.parse(draftJson)); }catch{}
+      if(startedAt) sessionStartRef.current = startedAt;
+      if(remaining > 0){
+        setTimerSecs(remaining);
+        setTimerActive(true);
+        setPhase('running');
+      } else {
+        // expired while away — go straight to closeout
+        localStorage.removeItem(DW_END_KEY);
+        localStorage.removeItem(DW_DRAFT_KEY);
+        localStorage.removeItem(DW_START_KEY);
+        setPhase('closeout');
+      }
+    }catch{}
+  },[]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Timer tick — recalculate from stored end timestamp to stay accurate across navigation
   useEffect(()=>{
     if(timerActive){
-      timerRef.current = setInterval(()=>setTimerSecs(s=>s-1), 1000);
+      timerRef.current = setInterval(()=>{
+        try{
+          const endMs = parseInt(localStorage.getItem(DW_END_KEY)||'0');
+          const remaining = endMs ? Math.ceil((endMs - Date.now())/1000) : 0;
+          if(remaining <= 0){
+            clearInterval(timerRef.current);
+            localStorage.removeItem(DW_END_KEY);
+            localStorage.removeItem(DW_DRAFT_KEY);
+            localStorage.removeItem(DW_START_KEY);
+            setTimerSecs(0);
+            setTimerActive(false);
+            setPhase('closeout');
+          } else {
+            setTimerSecs(remaining);
+          }
+        }catch{}
+      }, 1000);
     } else {
       clearInterval(timerRef.current);
     }
     return ()=>clearInterval(timerRef.current);
   },[timerActive]);
 
-  // Timer expired → closeout
-  useEffect(()=>{
-    if(timerSecs <= 0 && timerActive){ setTimerActive(false); setPhase('closeout'); }
-  },[timerSecs, timerActive]);
-
   function startTimer(){
     const secs = (sessionDraft.timerLengthMin||75)*60;
+    const endMs = Date.now() + secs*1000;
+    const startedAt = new Date().toISOString();
+    sessionStartRef.current = startedAt;
+    try{
+      localStorage.setItem(DW_END_KEY, String(endMs));
+      localStorage.setItem(DW_DRAFT_KEY, JSON.stringify(sessionDraft));
+      localStorage.setItem(DW_START_KEY, startedAt);
+    }catch{}
     setTimerSecs(secs);
     setTimerActive(true);
-    sessionStartRef.current = new Date().toISOString();
     setPhase('running');
   }
 
-  function stopEarly(){ setTimerActive(false); setPhase('closeout'); }
+  function stopEarly(){
+    try{
+      localStorage.removeItem(DW_END_KEY);
+      localStorage.removeItem(DW_DRAFT_KEY);
+      localStorage.removeItem(DW_START_KEY);
+    }catch{}
+    setTimerActive(false);
+    setPhase('closeout');
+  }
 
   const [closeoutNote, setCloseoutNote] = useState('');
   const [nextMicro, setNextMicro] = useState('');
 
   function finishSession(){
+    try{
+      localStorage.removeItem(DW_END_KEY);
+      localStorage.removeItem(DW_DRAFT_KEY);
+      localStorage.removeItem(DW_START_KEY);
+    }catch{}
     const session = {
       id:uid(), startedAt:sessionStartRef.current||new Date().toISOString(),
       deliverable:sessionDraft.deliverable, implementationIntention:sessionDraft.intention,
@@ -10875,18 +10935,16 @@ function DeepWorkRampPanel({data, setData, toasts}){
         {/* Step 5: Entry cue */}
         {stepIdx===5 && (
           <div className="space-y-3">
-            {!ritual.cue ? (
-              <div className="space-y-2">
-                <div className="text-sm" style={{color:'#94a3b8'}}>Define your fixed entry ritual (set once, run every session):</div>
-                <textarea rows={2} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-                  placeholder={`E.g. "Start lo-fi playlist, type 'focus mode activated', take 3 deep breaths"`}
-                  onChange={e=>setData(d=>({...d,rampRitual:{...(d.rampRitual||{}),cue:e.target.value}}))}/>
-              </div>
-            ) : (
-              <div className="p-4 rounded-xl" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)'}}>
-                <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#6366f1'}}>Your ritual:</div>
-                <div className="text-sm" style={{color:'#c7d2fe'}}>{ritual.cue}</div>
-              </div>
+            <div className="text-sm" style={{color:'#94a3b8'}}>Your fixed entry ritual — write the full sequence you run every session:</div>
+            <textarea rows={4} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
+              placeholder={`E.g. "Start lo-fi playlist, open only one tab, type 'focus mode activated', take 3 deep breaths, read my deliverable"`}
+              value={cueInput} onChange={e=>setCueInput(e.target.value)}/>
+            {cueInput.trim()!==ritual.cue&&(
+              <button onClick={()=>setData(d=>({...d,rampRitual:{...(d.rampRitual||{}),cue:cueInput.trim()}}))}
+                className="text-xs px-3 py-1.5 rounded-lg font-semibold"
+                style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>
+                Save ritual
+              </button>
             )}
             <div className="flex items-center gap-3">
               <span className="text-sm" style={{color:'#94a3b8'}}>Session length:</span>
