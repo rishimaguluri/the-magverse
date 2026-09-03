@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v86 executing');
+console.log('[Magverse] App.jsx v87 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -7065,7 +7065,7 @@ function followUpStatus(lastContacted, followUpDays=14){
 
 // ---- Consulting ----
 function getDefaultConsulting(){
-  return {drills:[],cases:[],errorLog:[],practiceplan:null};
+  return {drills:[],cases:[],errorLog:[],practiceplan:null,consultingVoiceEnabled:false};
 }
 
 // ---- Resume Editor ----
@@ -11257,10 +11257,185 @@ async function streamFeedback(apiKey,system,userMsg,onChunk){
   return out;
 }
 
-async function getScoreJson(apiKey,prompt,response,feedbackText){
-  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:200,messages:[{role:'system',content:'Return JSON only: {"score":0-10,"improvements":["specific fix 1","specific fix 2"]}'},{role:'user',content:`Prompt: ${prompt}\nResponse: ${response}\nFeedback: ${feedbackText}`}]})});
+// Per-question-type focus skill options shown before drill
+const FOCUS_OPTIONS={
+  brainstorm:[
+    {id:'deeper',   label:'Go one level deeper',  desc:'Decompose categories before generating ideas'},
+    {id:'mechanism',label:'State mechanisms',      desc:'Trace idea → driver → outcome for key ideas'},
+    {id:'breadth',  label:'Cover more ground',     desc:'Explore at least 3 distinct category dimensions'},
+    {id:'secondLens',label:'Second lens',          desc:'Use an alternative mental structure as a completeness check'},
+  ],
+  'framework-gen':[
+    {id:'tailored',  label:'Make it tailored',   desc:'Customize to this specific industry and problem'},
+    {id:'mece',      label:'MECE check',         desc:'Verify no overlap, no major gap across buckets'},
+    {id:'hypothesis',label:'Lead with a hypothesis', desc:'State your leading idea before building structure'},
+    {id:'deeper',    label:'Go one level deeper',desc:'Ensure each bucket is specific enough to investigate'},
+  ],
+  'framework-critique':[
+    {id:'specific',  label:'Be specific',         desc:'Name exactly what is missing, not just "incomplete"'},
+    {id:'better-alt',label:'Propose a better alternative', desc:'Replace the flawed structure with your own'},
+    {id:'reasoning', label:'Ground it in client need',desc:'Explain why the gap matters to the client outcome'},
+  ],
+  estimation:[
+    {id:'triangulate',label:'Triangulate',        desc:'Validate your estimate through a second approach'},
+    {id:'efficient', label:'Efficient structure', desc:'Find the most direct path to a defensible number'},
+    {id:'assumptions',label:'Defend assumptions',desc:'State and justify each key assumption explicitly'},
+  ],
+  'mental-math':[
+    {id:'explain',label:'Narrate your steps',desc:'Talk through the calculation before computing'},
+    {id:'sanity', label:'Sanity check',     desc:'Verify the answer against an intuitive benchmark'},
+  ],
+  conclusion:[
+    {id:'answer-first',label:'Answer-first',    desc:'Lead with the "so what", not a data summary'},
+    {id:'specific',    label:'Name the driver', desc:'Identify the specific cause, not just the category'},
+  ],
+  'verbal-answer':[
+    {id:'answer-first',label:'Answer-first',  desc:'State your position in the first sentence'},
+    {id:'structure',   label:'Signpost buckets',desc:'Say "I see three factors..." before listing them'},
+    {id:'concise',     label:'Stay tight',    desc:'Cut any idea that does not directly answer the question'},
+  ],
+  default:[
+    {id:'structure', label:'Add structure',  desc:'Organize your answer into clear named categories'},
+    {id:'specific',  label:'Be specific',    desc:'Replace generic statements with concrete actions'},
+    {id:'mechanism', label:'State mechanisms',desc:'Explain the chain from action to outcome'},
+  ],
+};
+
+function getFocusOptions(drillType){return FOCUS_OPTIONS[drillType]||FOCUS_OPTIONS.default;}
+
+function buildDrillEvalSystem(drill,answerSource,recentDimDrills=[]){
+  const isVoice=answerSource==='voice';
+  const voiceNote=isVoice?`
+INPUT MEDIUM: VOICE (speech-to-text transcript)
+CRITICAL RULES — mandatory:
+1. NEVER mention bullet points, formatting, punctuation, paragraph layout, or line breaks. The candidate SPOKE this answer.
+2. FIRST reconstruct the structure the candidate actually used — identify the categories/buckets, even if the transcript is one paragraph.
+3. Evaluate VERBAL structure: did they use "first", "second", "within that", "another area is", "turning to X"?
+4. Distinguish ASR artifacts (missing punctuation, run-on sentences) from genuine communication problems.
+5. Only say "lacked structure" if you genuinely cannot find any logical grouping. If you can, name it.\n`:'';
+
+  const historyNote=recentDimDrills.length>0?`
+PERFORMANCE HISTORY — last ${recentDimDrills.length} ${drill.dimension} attempts:
+${recentDimDrills.map((d,i)=>`  #${i+1} score ${d.score}/10 — ${d.improvements?.[0]||d.errorPattern||'no notes'}`).join('\n')}
+If a weakness repeats across multiple attempts, explicitly call it a RECURRING PATTERN.\n`:'';
+
+  const rubrics={
+    brainstorm:`QUESTION TYPE: BRAINSTORMING / IDEA GENERATION
+Evaluate in order:
+1. TOP-LEVEL STRUCTURE — name the actual structure used; did they create logical categories or an unorganized list?
+2. DEPTH — did they decompose categories? (Revenue → customer count → new/existing vs. just "revenue")
+3. BREADTH — how many distinct dimensions covered? Did they exhaust the obvious and reach a second wave?
+4. SPECIFICITY — are ideas concrete enough to test? "Do marketing" = weak. "Partner with nearby offices for lunch promos" = strong.
+5. MECHANISM — trace IDEA → ECONOMIC DRIVER → CLIENT OUTCOME for 1-2 key ideas.
+6. BUSINESS LOGIC — does each idea actually affect the stated objective?
+7. CREATIVITY / WAVE ANALYSIS — note first-wave vs. second-wave ideas; credit anything non-obvious.
+${isVoice?'8. VERBAL SIGNPOSTING — did they say "two areas", "first", "within that", "another dimension is"?':'8. COMMUNICATION — was the answer organized and easy to follow?'}
+
+SCORE ANCHORS:
+1-2 MAJOR GAP — no meaningful structure; cannot address the question
+3-4 WEAK — some ideas but unstructured, shallow, or poorly connected
+5-6 DEVELOPING/SOLID — valid structure + several ideas; gaps in depth/breadth/specificity
+7-8 STRONG — structured, broad, specific, with good business logic and non-obvious ideas
+9 EXCELLENT — consultant-quality; structured, prioritized, insightful, creative
+10 EXCEPTIONAL — reserve`,
+    'framework-gen':`QUESTION TYPE: STRUCTURING / FRAMEWORK GENERATION
+Evaluate:
+1. TAILORING — customized to this specific problem, or could it apply to any case?
+2. MECE QUALITY — name specific overlaps or gaps (not just "not MECE")
+3. DEPTH — are buckets specific enough to generate hypotheses from?
+4. HYPOTHESIS — does the structure reflect a point of view, or just labels?
+5. PRIORITIZATION — did they indicate which branches deserve most attention?
+6. ISSUE TREE — does it branch logically from the central question?
+
+SCORE ANCHORS:
+3-4 — generic framework applied mechanically
+5-6 — mostly complete, reasonable logic, some tailoring gaps
+7-8 — clearly customized, mostly MECE, could serve as a real workplan
+9+ — hypothesis-driven, reflects strong business judgment`,
+    'framework-critique':`QUESTION TYPE: FRAMEWORK CRITIQUE
+Evaluate:
+1. DIAGNOSIS — correctly identifies what is wrong?
+2. SPECIFICITY — names exactly what is missing, not just "incomplete"?
+3. IMPROVEMENT — proposes a specific, better alternative?
+4. BUSINESS REASONING — grounded in what the client actually needs?
+5. DELIVERY — constructive and confident?`,
+    estimation:`QUESTION TYPE: MARKET SIZING / ESTIMATION
+Evaluate:
+1. STRUCTURE CHOICE — logical decomposition? Is there a more efficient path?
+2. ASSUMPTIONS — stated explicitly and defensible?
+3. TRIANGULATION — any secondary check on the estimate?
+4. MATH — flag arithmetic errors
+5. REALITY CHECK — did they sanity-check against intuition?`,
+    'mental-math':`QUESTION TYPE: MENTAL MATH
+Evaluate: accuracy, approach soundness, explanation clarity, reasonable approximation.`,
+    conclusion:`QUESTION TYPE: SYNTHESIS / CONCLUSION
+Evaluate:
+1. ANSWER-FIRST — leads with "so what" not a data summary?
+2. SPECIFICITY — names the specific driver, not a category?
+3. COMPLETENESS — addresses the central question?
+4. DATA ACCURACY — correctly reflects the data provided?`,
+    'verbal-answer':`QUESTION TYPE: STRUCTURED VERBAL RESPONSE
+Evaluate:
+1. ANSWER-FIRST — leads with a position, then supports it?
+2. STRUCTURE — supporting points organized logically?
+3. PRIORITIZATION — focuses on the 2-3 most important factors?
+4. BUSINESS JUDGMENT — shows sound judgment about what matters?`,
+    'hyp-gen':`QUESTION TYPE: HYPOTHESIS GENERATION
+Evaluate:
+1. SPECIFICITY — is the hypothesis testable and precise, or vague?
+2. LEADING HYPOTHESIS — did they commit to one, or hedge excessively?
+3. LOGIC — does the hypothesis follow from available information?
+4. FALSIFIABILITY — can it be disproven? Did they say how to test it?`,
+    'issue-rank':`QUESTION TYPE: ISSUE PRIORITIZATION
+Evaluate:
+1. RANKING LOGIC — is the priority order justified with reasoning?
+2. IMPACT VS. EASE — did they consider both impact and feasibility?
+3. BUSINESS CONTEXT — does ranking reflect the specific client situation?
+4. CONVICTION — did they commit to a view or hedge everything?`,
+    'client-question':`QUESTION TYPE: CLIENT QUESTION HANDLING / CASE MANAGEMENT
+Evaluate:
+1. COMPOSURE — stayed professional and in control?
+2. ACKNOWLEDGMENT — recognized the client's concern without capitulating?
+3. REDIRECT — moved the case forward constructively?
+4. COMMUNICATION — clear, concise, and client-appropriate?`,
+    default:`Evaluate: relevance, structure, specificity, business judgment, communication.`,
+  };
+
+  const rubric=rubrics[drill.type]||rubrics.default;
+
+  return `You are a demanding but fair case interview coach at the level of a McKinsey/BCG senior interviewer. Your feedback must be specific enough that a strong candidate learns something new about their own answer — not generic praise or generic criticism.
+
+${voiceNote}${rubric}${historyNote}
+COACHING PHILOSOPHY:
+- Frameworks are tools, not scripts. Reward tailored thinking over textbook recitation.
+- Structure exists when logical groupings exist — even without formal headers or labels.
+- Look actively for good thinking BEFORE deciding it is absent.
+- Never reduce MECE critique to just "not MECE" — name the specific overlap or gap.
+- Distinguish STRUCTURE (how ideas are organized) from DETAIL (how specific the ideas are) — score them separately.
+
+Return ONLY a JSON object with this exact schema:
+{
+  "score": <integer 1-10>,
+  "overallLabel": <"EXCELLENT"|"STRONG"|"SOLID"|"DEVELOPING"|"WEAK">,
+  "headline": <"one-sentence diagnostic of the main issue, max 15 words">,
+  "subScores": {"Structure":<"STRONG"|"SOLID"|"DEVELOPING"|"WEAK">,"Depth":<same>,"Breadth":<same>,"Specificity":<same>,"BusinessLogic":<same>,"Communication":<same>},
+  "whatIHeard": {"structureName":<string or null>,"branches":[{"name":<string>,"ideas":[<string>]}]},
+  "whatWorked": <"2-3 specific sentences. Quote or reference the actual answer.">,
+  "whatHeldItBack": [<"issue 1 — specific and diagnostic">,<"issue 2 if significant">],
+  "depthTest": <"Show exactly where they stopped and one level deeper they could go. null if depth was fine.">,
+  "upgradeAnswer": <"Take THEIR structure/approach and show how to improve it. Keep their core idea.">,
+  "retryMission": <"ONE specific thing to do differently on retry. 1-2 sentences.">,
+  "errorLogEntry": {"skill":<string>,"pattern":<string>,"fix":<string>}
+}`;
+}
+
+async function getStructuredFeedback(apiKey,drill,prompt,response,answerSource,recentDimDrills=[]){
+  const system=buildDrillEvalSystem(drill,answerSource,recentDimDrills);
+  const userMsg=`Drill: ${drill.label}\nDimension: ${drill.dimension}\nPrompt: ${prompt}\n\nCandidate response (${answerSource==='voice'?'SPOKEN — speech-to-text transcript':'typed'}):\n${response}`;
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',response_format:{type:'json_object'},max_tokens:1200,messages:[{role:'system',content:system},{role:'user',content:userMsg}]})});
   const j=await resp.json();
-  try{return JSON.parse(j.choices[0].message.content);}catch{return {score:6,improvements:['Review your structure for completeness','Add specificity to your analysis']};}
+  if(!resp.ok)throw new Error(j.error?.message||'API error '+resp.status);
+  try{return JSON.parse(j.choices[0].message.content);}catch{return {score:5,overallLabel:'DEVELOPING',headline:'Could not parse feedback — retry',subScores:{},whatWorked:'',whatHeldItBack:['Evaluation failed — please retry'],retryMission:'Retry the drill',errorLogEntry:{skill:drill.dimension,pattern:'Unknown',fix:'Retry'}};}
 }
 
 /* ----------- Consulting Home ----------- */
@@ -11369,19 +11544,26 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDril
 }
 
 /* ----------- Drills ----------- */
-function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initType=''}){
-  const [phase,setPhase]=useState('pick'); // pick | drill | grading | result
+const SUBSCORE_LABEL_COLOR={STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
+const OVERALL_SCORE_COLOR={EXCELLENT:'#34d399',STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
+
+function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initType='',voiceEnabled,setVoiceEnabled}){
+  const [phase,setPhase]=useState('pick'); // pick | focus | drill | grading | result
   const [selDim,setSelDim]=useState(initDim);
   const [selType,setSelType]=useState(initType);
   const [activeDrill,setActiveDrill]=useState(null);
   const [prompt,setPrompt]=useState('');
   const [response,setResponse]=useState('');
+  const [answerSource,setAnswerSource]=useState('text'); // 'text' | 'voice'
+  const [isRecording,setIsRecording]=useState(false);
+  const [selectedFocus,setSelectedFocus]=useState([]);
   const [timeLeft,setTimeLeft]=useState(0);
   const [timerActive,setTimerActive]=useState(false);
-  const [feedback,setFeedback]=useState('');
   const [scoreData,setScoreData]=useState(null);
   const [grading,setGrading]=useState(false);
-  const dict=useDictation(t=>{setResponse(p=>p?p+' '+t:t);});
+  const [expandSection,setExpandSection]=useState({heard:false,worked:true,held:true,depth:false,upgrade:false});
+
+  const recogRef=useRef(null);
 
   useEffect(()=>{
     if(!timerActive)return;
@@ -11390,47 +11572,84 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
     return()=>clearTimeout(id);
   },[timerActive,timeLeft]);
 
+  // Clean up any open mic on unmount
+  useEffect(()=>()=>{recogRef.current&&recogRef.current.abort();},[]);
+
+  function startVoiceRecord(){
+    const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!R){toasts.push('Speech recognition not supported in this browser');return;}
+    if(isRecording&&recogRef.current){recogRef.current.stop();return;}
+    const r=new R();r.lang='en-US';r.interimResults=false;r.maxAlternatives=1;
+    r.onresult=e=>{const t=e.results[0][0].transcript;setResponse(p=>p?p+' '+t:t);setAnswerSource('voice');};
+    r.onend=()=>{setIsRecording(false);recogRef.current=null;};
+    r.onerror=()=>{setIsRecording(false);recogRef.current=null;};
+    r.start();recogRef.current=r;setIsRecording(true);
+  }
+
   const startDrill=()=>{
     const drill=getActiveDrill(selDim,selType)||DRILL_CATALOG[0];
     const p=getDrillPrompt(drill);
-    setActiveDrill(drill);setPrompt(p);setResponse('');setFeedback('');setScoreData(null);
+    setActiveDrill(drill);setPrompt(p);setResponse('');setScoreData(null);setAnswerSource('text');setIsRecording(false);
     setTimeLeft(drill.timeLimit);setTimerActive(true);
+    setExpandSection({heard:false,worked:true,held:true,depth:false,upgrade:false});
     setPhase('drill');
+  };
+
+  const goToFocus=()=>{
+    const drill=getActiveDrill(selDim,selType)||DRILL_CATALOG[0];
+    setActiveDrill(drill);setSelectedFocus([]);setPhase('focus');
   };
 
   const submitDrill=async()=>{
     if(!response.trim()){toasts.push('Enter a response first');return;}
     if(!apiKey){toasts.push('Add API key in Settings');return;}
-    setTimerActive(false);setGrading(true);setPhase('grading');
-    const dimLabel=activeDrill.dimension;
-    const system=`You are an expert McKinsey/BCG case coach. Grade the candidate's response to this ${dimLabel} drill with specific, actionable feedback. Be honest — most responses have real gaps. Lead with what was done well, then name the 1-2 most important improvements. Be specific: quote the response if needed. 3-4 sentences max.`;
+    setTimerActive(false);if(recogRef.current)recogRef.current.abort();setIsRecording(false);
+    setGrading(true);setPhase('grading');
     try{
-      const fbText=await streamFeedback(apiKey,system,`Drill: ${activeDrill.label}\nPrompt: ${prompt}\nCandidate response: ${response}`,setFeedback);
-      const sd=await getScoreJson(apiKey,prompt,response,fbText);
+      const recentSameDim=(consulting.drills||[]).filter(d=>d.dimension===activeDrill.dimension).slice(-3);
+      const sd=await getStructuredFeedback(apiKey,activeDrill,prompt,response,answerSource,recentSameDim);
       setScoreData(sd);
-      const attempt={id:uid('dr'),dimension:activeDrill.dimension,drillType:activeDrill.type,prompt,response,score:sd.score,feedback:fbText,improvements:sd.improvements||[],at:Date.now()};
+      const attempt={id:uid('dr'),dimension:activeDrill.dimension,drillType:activeDrill.type,prompt,response,answerSource,selectedFocus,score:sd.score,overallLabel:sd.overallLabel,subScores:sd.subScores||{},headline:sd.headline||'',improvements:sd.whatHeldItBack||[],errorPattern:sd.errorLogEntry?.pattern||'',at:Date.now()};
       setConsulting(c=>({...c,drills:[...(c.drills||[]),attempt]}));
-      if(sd.score<7){
-        const errEntry={id:uid('er'),dimension:activeDrill.dimension,drillId:attempt.id,caseId:null,description:sd.improvements?.[0]||'Score below threshold',feedback:fbText,createdAt:Date.now(),resolved:false};
+      if(sd.score<7&&sd.errorLogEntry){
+        const errEntry={id:uid('er'),dimension:activeDrill.dimension,drillId:attempt.id,caseId:null,description:sd.errorLogEntry.pattern,feedback:sd.errorLogEntry.fix,createdAt:Date.now(),resolved:false};
         setConsulting(c=>({...c,errorLog:[...(c.errorLog||[]),errEntry]}));
       }
-    }catch(e){toasts.push('Grading failed: '+e.message);}
-    setGrading(false);setPhase('result');
+    }catch(e){toasts.push('Grading failed: '+e.message);setPhase('drill');}
+    setGrading(false);if(phase==='grading')setPhase('result');
   };
 
-  const nextDrill=()=>{setPhase('drill');startDrill();};
-  const backToPick=()=>{setPhase('pick');setActiveDrill(null);setPrompt('');setResponse('');setFeedback('');setScoreData(null);};
+  const retrySame=()=>{
+    setResponse('');setScoreData(null);setAnswerSource('text');setIsRecording(false);
+    setTimeLeft(activeDrill.timeLimit);setTimerActive(true);
+    setExpandSection({heard:false,worked:true,held:true,depth:false,upgrade:false});
+    setPhase('drill');
+  };
+  const nextDrill=()=>{startDrill();};
+  const backToPick=()=>{setPhase('pick');setActiveDrill(null);setPrompt('');setResponse('');setScoreData(null);if(recogRef.current)recogRef.current.abort();setIsRecording(false);};
 
   const dimOptions=[{value:'',label:'Any dimension'},...C_DIMS.map(d=>({value:d,label:C_DIM_LABELS[d]}))];
   const typeOptions=selDim?[{value:'',label:'Any type'},...DRILL_CATALOG.filter(d=>d.dimension===selDim).map(d=>({value:d.type,label:d.label}))]:[{value:'',label:'Pick a dimension first'}];
-
   const timerColor=timeLeft>30?'#34d399':timeLeft>10?'#f59e0b':'#f87171';
   const mm=Math.floor(timeLeft/60),ss=timeLeft%60;
 
+  // ── Voice toggle chip (reusable) ───────────────────────────────────────
+  const VoiceToggle=()=>(
+    <button onClick={()=>setVoiceEnabled(!voiceEnabled)}
+      className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all"
+      style={{background:voiceEnabled?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.05)',border:`1px solid ${voiceEnabled?'rgba(99,102,241,0.5)':'rgba(255,255,255,0.08)'}`,color:voiceEnabled?'#818cf8':'#64748b'}}>
+      🎙 Voice {voiceEnabled?'ON':'OFF'}
+    </button>
+  );
+
+  // ── Pick phase ─────────────────────────────────────────────────────────
   if(phase==='pick') return (
     <div className="max-w-xl">
       <div className="glass rounded-xl p-6 border-subtle mb-4">
-        <div className="text-sm font-semibold mb-4">Configure drill</div>
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-sm font-semibold">Configure drill</div>
+          <VoiceToggle/>
+        </div>
         <div className="space-y-3">
           <div>
             <label className="text-xs mb-1 block" style={{color:'#64748b'}}>Dimension</label>
@@ -11445,15 +11664,20 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
             </select>
           </div>
         </div>
-        <button onClick={startDrill} className="mt-5 w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Drill</button>
+        <div className="flex gap-2 mt-5">
+          <button onClick={()=>goToFocus()} className="flex-1 py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Drill</button>
+        </div>
       </div>
       {(consulting.drills||[]).length>0&&(
         <div className="glass rounded-xl p-4 border-subtle">
           <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>RECENT</div>
           {(consulting.drills||[]).slice(-5).reverse().map(d=>(
             <div key={d.id} className="flex justify-between items-center text-sm py-1.5 border-b border-white/3 last:border-0">
-              <span style={{color:'#94a3b8'}}>{C_DIM_LABELS[d.dimension]} · {d.drillType}</span>
-              <span style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171',fontWeight:600}}>{d.score}/10</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span style={{color:'#94a3b8'}} className="truncate">{C_DIM_LABELS[d.dimension]} · {d.drillType}</span>
+                {d.answerSource==='voice'&&<span className="text-xs" style={{color:'#6366f1'}}>🎙</span>}
+              </div>
+              <span style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171',fontWeight:600,flexShrink:0}}>{d.score}/10</span>
             </div>
           ))}
         </div>
@@ -11461,65 +11685,256 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
     </div>
   );
 
-  if(phase==='drill') return (
+  // ── Focus phase ────────────────────────────────────────────────────────
+  if(phase==='focus'&&activeDrill){
+    const opts=getFocusOptions(activeDrill.type);
+    const toggleFocus=id=>setSelectedFocus(prev=>prev.includes(id)?prev.filter(x=>x!==id):(prev.length<2?[...prev,id]:prev));
+    return (
+      <div className="max-w-xl">
+        <div className="glass rounded-xl p-6 border-subtle">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-sm font-semibold">Set your focus (optional)</div>
+            <VoiceToggle/>
+          </div>
+          <div className="text-xs mb-4" style={{color:'#64748b'}}>Pick 1–2 skills to practice deliberately. Feedback will specifically evaluate these.</div>
+          <div className="space-y-2 mb-5">
+            {opts.map(o=>{
+              const sel=selectedFocus.includes(o.id);
+              return (
+                <button key={o.id} onClick={()=>toggleFocus(o.id)}
+                  className="w-full text-left p-3 rounded-xl transition-all"
+                  style={{background:sel?'rgba(99,102,241,0.15)':'rgba(255,255,255,0.03)',border:`1px solid ${sel?'rgba(99,102,241,0.4)':'rgba(255,255,255,0.06)'}`,color:'#e2e8f0'}}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0" style={{background:sel?'rgba(99,102,241,0.4)':'rgba(255,255,255,0.06)',border:`1px solid ${sel?'#6366f1':'rgba(255,255,255,0.1)'}`}}>
+                      {sel&&<span style={{fontSize:'10px',color:'#a5b4fc'}}>✓</span>}
+                    </div>
+                    <span className="text-sm font-medium">{o.label}</span>
+                  </div>
+                  <div className="text-xs mt-1 ml-6" style={{color:'#64748b'}}>{o.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={startDrill} className="flex-1 py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>
+              {selectedFocus.length>0?'Start with focus':'Start (no focus)'}
+            </button>
+            <button onClick={backToPick} className="px-4 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← Back</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Drill phase ────────────────────────────────────────────────────────
+  if(phase==='drill'&&activeDrill) return (
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
-        <div>
-          <span className="text-xs px-2 py-0.5 rounded-full mr-2" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{C_DIM_LABELS[activeDrill.dimension]}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{C_DIM_LABELS[activeDrill.dimension]}</span>
           <span className="text-sm font-medium">{activeDrill.label}</span>
+          {selectedFocus.length>0&&selectedFocus.map(f=>{
+            const opt=getFocusOptions(activeDrill.type).find(o=>o.id===f);
+            return opt?<span key={f} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(245,158,11,0.12)',color:'#f59e0b',border:'1px solid rgba(245,158,11,0.25)'}}>{opt.label}</span>:null;
+          })}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <span className="text-lg font-mono font-bold" style={{color:timerColor}}>{mm}:{ss.toString().padStart(2,'0')}</span>
+          <VoiceToggle/>
           <button onClick={backToPick} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>✕ Exit</button>
         </div>
       </div>
       <div className="glass rounded-xl p-5 border-subtle mb-4">
-        <div className="text-sm font-medium mb-1" style={{color:'#64748b'}}>Prompt</div>
+        <div className="text-xs font-semibold mb-2" style={{color:'#475569'}}>PROMPT</div>
         <div className="text-sm leading-relaxed">{prompt}</div>
       </div>
       <div className="glass rounded-xl p-4 border-subtle mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <label className="text-xs" style={{color:'#64748b'}}>Your response</label>
-          <button onClick={()=>dict.start()} title="Dictate" className="text-xs px-2 py-1 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>🎙 Voice</button>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold" style={{color:'#64748b'}}>YOUR RESPONSE</label>
+            {answerSource==='voice'&&<span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>🎙 Voice</span>}
+          </div>
+          {voiceEnabled?(
+            <button onClick={startVoiceRecord}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+              style={{background:isRecording?'rgba(248,113,113,0.2)':'rgba(99,102,241,0.2)',border:`1px solid ${isRecording?'rgba(248,113,113,0.5)':'rgba(99,102,241,0.4)'}`,color:isRecording?'#f87171':'#818cf8'}}>
+              {isRecording?'⏹ Stop recording':'🎙 Record answer'}
+            </button>
+          ):(
+            <button onClick={()=>{const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R){toasts.push('Speech not supported');return;}const r=new R();r.lang='en-US';r.interimResults=false;r.onresult=e=>{const t=e.results[0][0].transcript;setResponse(p=>p?p+' '+t:t);setAnswerSource('voice');};r.start();}}
+              className="text-xs px-2 py-1 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>🎙 Dictate</button>
+          )}
         </div>
-        <textarea value={response} onChange={e=>setResponse(e.target.value)} rows={6} placeholder="Type or dictate your response..." className="w-full bg-transparent text-sm resize-none outline-none" style={{color:'#e2e8f0'}} />
-      </div>
-      <button onClick={submitDrill} disabled={!response.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:response.trim()?1:0.4}}>Submit for Feedback</button>
-    </div>
-  );
-
-  if(phase==='grading') return (
-    <div className="max-w-2xl">
-      <div className="glass rounded-xl p-6 border-subtle">
-        <div className="text-sm font-semibold mb-4">Grading your response…</div>
-        <div className="text-sm leading-relaxed" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback||'Analyzing…'}</div>
-        {!grading&&scoreData&&<div className="mt-4 text-2xl font-bold" style={{color:scoreData.score>=7?'#34d399':scoreData.score>=5?'#f59e0b':'#f87171'}}>{scoreData.score}/10</div>}
-      </div>
-    </div>
-  );
-
-  // result
-  return (
-    <div className="max-w-2xl">
-      <div className="glass rounded-xl p-6 border-subtle mb-4">
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-sm font-semibold">Result</div>
-          <div className="text-3xl font-bold" style={{color:scoreData?.score>=7?'#34d399':scoreData?.score>=5?'#f59e0b':'#f87171'}}>{scoreData?.score??'—'}<span className="text-base" style={{color:'#64748b'}}>/10</span></div>
-        </div>
-        <div className="text-sm leading-relaxed mb-4" style={{color:'#94a3b8',whiteSpace:'pre-wrap'}}>{feedback}</div>
-        {scoreData?.improvements?.length>0&&(
-          <div>
-            <div className="text-xs font-semibold mb-2" style={{color:'#f59e0b'}}>KEY IMPROVEMENTS</div>
-            <ul className="space-y-1">{scoreData.improvements.map((imp,i)=><li key={i} className="text-sm" style={{color:'#e2e8f0'}}>• {imp}</li>)}</ul>
+        {voiceEnabled&&!response&&(
+          <div className="flex flex-col items-center py-6 gap-3">
+            <button onClick={startVoiceRecord}
+              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all"
+              style={{background:isRecording?'rgba(248,113,113,0.25)':'rgba(99,102,241,0.15)',border:`2px solid ${isRecording?'#f87171':'rgba(99,102,241,0.5)'}`,color:isRecording?'#f87171':'#a5b4fc'}}>
+              {isRecording?'⏹':'🎙'}
+            </button>
+            <div className="text-xs text-center" style={{color:'#64748b'}}>
+              {isRecording?'Recording… tap to stop':'Tap to record your answer — aim for 30–90 seconds'}
+            </div>
+            <div className="text-xs" style={{color:'#475569'}}>— or type below —</div>
           </div>
         )}
+        {isRecording&&response&&(
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <span className="animate-pulse text-xs" style={{color:'#f87171'}}>⏺ Recording…</span>
+            <span className="text-xs" style={{color:'#64748b'}}>speech is appending to transcript</span>
+          </div>
+        )}
+        <textarea value={response} onChange={e=>{setResponse(e.target.value);if(answerSource==='voice'&&e.target.value!==response)setAnswerSource('text');}}
+          rows={voiceEnabled&&!response?2:6} placeholder="Type your answer, or use the record button above…"
+          className="w-full bg-transparent text-sm resize-none outline-none" style={{color:'#e2e8f0'}} />
       </div>
-      <div className="flex gap-3">
-        <button onClick={nextDrill} className="flex-1 py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Next Drill</button>
-        <button onClick={backToPick} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>Pick Different Drill</button>
+      <button onClick={submitDrill} disabled={!response.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:response.trim()?1:0.4}}>
+        Submit for Feedback
+      </button>
+    </div>
+  );
+
+  // ── Grading phase ──────────────────────────────────────────────────────
+  if(phase==='grading') return (
+    <div className="max-w-2xl">
+      <div className="glass rounded-xl p-8 border-subtle flex flex-col items-center gap-4">
+        <div className="text-2xl">🧠</div>
+        <div className="text-sm font-semibold">Analyzing your response…</div>
+        <div className="text-xs" style={{color:'#64748b'}}>Building a detailed coaching report</div>
+        <div className="w-full h-1 rounded-full overflow-hidden" style={{background:'rgba(255,255,255,0.06)'}}>
+          <div className="h-full rounded-full animate-pulse" style={{width:'60%',background:'linear-gradient(90deg,#6366f1,#8b5cf6)'}}/>
+        </div>
       </div>
     </div>
   );
+
+  // ── Result phase ───────────────────────────────────────────────────────
+  if(phase==='result'&&scoreData){
+    const sd=scoreData;
+    const scoreColor=sd.score>=7?'#34d399':sd.score>=5?'#f59e0b':'#f87171';
+    const overallColor=OVERALL_SCORE_COLOR[sd.overallLabel]||'#94a3b8';
+    const Section=({id,title,accent,children})=>(
+      <div className="border-t border-white/5 pt-3 mt-3">
+        <button onClick={()=>setExpandSection(s=>({...s,[id]:!s[id]}))} className="w-full flex items-center justify-between text-left">
+          <div className="text-xs font-bold tracking-widest" style={{color:accent||'#64748b'}}>{title}</div>
+          <span className="text-xs" style={{color:'#475569'}}>{expandSection[id]?'▲':'▼'}</span>
+        </button>
+        {expandSection[id]&&<div className="mt-2">{children}</div>}
+      </div>
+    );
+    return (
+      <div className="max-w-2xl">
+        {/* Header card */}
+        <div className="glass rounded-xl p-5 border-subtle mb-3">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{C_DIM_LABELS[activeDrill.dimension]}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{background:overallColor+'20',color:overallColor}}>{sd.overallLabel}</span>
+                {answerSource==='voice'&&<span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>🎙 Voice</span>}
+              </div>
+              {sd.headline&&<div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{sd.headline}</div>}
+            </div>
+            <div className="text-4xl font-bold flex-shrink-0" style={{color:scoreColor}}>{sd.score}<span className="text-base font-normal" style={{color:'#475569'}}>/10</span></div>
+          </div>
+          {/* Sub-score grid */}
+          {sd.subScores&&Object.keys(sd.subScores).length>0&&(
+            <div className="grid grid-cols-3 gap-2">
+              {Object.entries(sd.subScores).map(([k,v])=>(
+                <div key={k} className="flex flex-col gap-0.5 p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
+                  <div className="text-xs" style={{color:'#475569'}}>{k}</div>
+                  <div className="text-xs font-bold" style={{color:SUBSCORE_LABEL_COLOR[v]||'#64748b'}}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Coaching detail card */}
+        <div className="glass rounded-xl p-5 border-subtle mb-3">
+          {/* What I Heard */}
+          {sd.whatIHeard&&(sd.whatIHeard.structureName||sd.whatIHeard.branches?.length>0)&&(
+            <Section id="heard" title="WHAT I HEARD" accent="#64748b">
+              {sd.whatIHeard.structureName&&<div className="text-xs font-semibold mb-2" style={{color:'#94a3b8'}}>{sd.whatIHeard.structureName}</div>}
+              {(sd.whatIHeard.branches||[]).map((b,i)=>(
+                <div key={i} className="mb-2">
+                  <div className="text-xs font-semibold" style={{color:'#e2e8f0'}}>{b.name}</div>
+                  {(b.ideas||[]).map((idea,j)=><div key={j} className="text-xs ml-3" style={{color:'#64748b'}}>• {idea}</div>)}
+                </div>
+              ))}
+              <div className="text-xs mt-2 italic" style={{color:'#475569'}}>↑ The evaluator's reconstruction of your spoken structure — used as the basis for coaching below.</div>
+            </Section>
+          )}
+
+          {/* What Worked */}
+          {sd.whatWorked&&(
+            <Section id="worked" title="WHAT WORKED" accent="#34d399">
+              <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{sd.whatWorked}</div>
+            </Section>
+          )}
+
+          {/* What Held It Back */}
+          {sd.whatHeldItBack?.length>0&&(
+            <Section id="held" title="WHAT HELD IT BACK" accent="#f87171">
+              <div className="space-y-3">
+                {sd.whatHeldItBack.map((item,i)=>(
+                  <div key={i} className="text-sm" style={{color:'#94a3b8'}}>
+                    <span className="font-semibold" style={{color:'#f87171'}}>{String.fromCharCode(65+i)}.</span> {item}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {/* Depth test */}
+          {sd.depthTest&&(
+            <Section id="depth" title="DEPTH TEST" accent="#f59e0b">
+              <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{sd.depthTest}</div>
+            </Section>
+          )}
+
+          {/* Upgrade answer */}
+          {sd.upgradeAnswer&&(
+            <Section id="upgrade" title="UPGRADE YOUR ANSWER" accent="#818cf8">
+              <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{sd.upgradeAnswer}</div>
+            </Section>
+          )}
+        </div>
+
+        {/* Retry mission */}
+        {sd.retryMission&&(
+          <div className="glass rounded-xl p-4 border-subtle mb-3" style={{borderLeft:'3px solid #6366f1'}}>
+            <div className="text-xs font-bold tracking-widest mb-1" style={{color:'#818cf8'}}>RETRY MISSION</div>
+            <div className="text-sm" style={{color:'#e2e8f0'}}>{sd.retryMission}</div>
+          </div>
+        )}
+
+        {/* Focus review */}
+        {selectedFocus.length>0&&(
+          <div className="glass rounded-xl p-4 border-subtle mb-3">
+            <div className="text-xs font-bold tracking-widest mb-2" style={{color:'#f59e0b'}}>FOCUS REVIEW</div>
+            {selectedFocus.map(f=>{
+              const opt=getFocusOptions(activeDrill.type).find(o=>o.id===f);
+              return opt?(
+                <div key={f} className="text-xs mb-1" style={{color:'#64748b'}}>
+                  <span className="font-semibold" style={{color:'#f59e0b'}}>{opt.label}: </span>
+                  <span>Review the "WHAT HELD IT BACK" section to see how this focus was applied.</span>
+                </div>
+              ):null;
+            })}
+          </div>
+        )}
+
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={retrySame} className="flex-1 py-2.5 rounded-lg font-semibold text-sm min-w-32" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>↺ Retry Same</button>
+          <button onClick={nextDrill} className="px-5 py-2.5 rounded-lg text-sm font-semibold" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>Next Drill →</button>
+          <button onClick={backToPick} className="px-5 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#64748b'}}>← Change Drill</button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 /* ----------- Cases ----------- */
@@ -11597,7 +12012,7 @@ Exploration data (reveal only when asked): ${caseConfig.explorationData}${objCtx
 Current phase: ${CASE_STATE_LABELS[caseState]||caseState}. Your role now: ${stateGuide[caseState]||'Continue the interview naturally.'}`;
 }
 
-function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
+function CasesSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoiceEnabled}){
   const [view,setView]=useState('lobby'); // lobby | active | debrief
   const [activeCase,setActiveCase]=useState(null);
   const [input,setInput]=useState('');
@@ -11608,8 +12023,21 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
   const [objSubmitting,setObjSubmitting]=useState(false);
   const [showObjTips,setShowObjTips]=useState(false);
   const [objBannerOpen,setObjBannerOpen]=useState(true);
+  const [caseRecording,setCaseRecording]=useState(false);
+  const caseRecogRef=useRef(null);
   const scrollRef=useRef(null);
   const dict=useDictation(t=>{setInput(p=>p?p+' '+t:t);});
+
+  function startCaseVoice(){
+    const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!R){toasts.push('Speech recognition not supported');return;}
+    if(caseRecording&&caseRecogRef.current){caseRecogRef.current.stop();return;}
+    const r=new R();r.lang='en-US';r.interimResults=false;r.maxAlternatives=1;
+    r.onresult=e=>{setInput(p=>p?p+' '+e.results[0][0].transcript:e.results[0][0].transcript);};
+    r.onend=()=>{setCaseRecording(false);caseRecogRef.current=null;};
+    r.onerror=()=>{setCaseRecording(false);caseRecogRef.current=null;};
+    r.start();caseRecogRef.current=r;setCaseRecording(true);
+  }
 
   useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[activeCase?.sessionLog,streamText]);
 
@@ -11990,11 +12418,25 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
           </div>
         )}
       </div>
-      <div className="flex-shrink-0 flex gap-2">
-        <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}} rows={2} placeholder="Your response… (Enter to send, Shift+Enter for newline)" className="flex-1 px-3 py-2 rounded-xl text-sm bg-transparent resize-none outline-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}} />
-        <div className="flex flex-col gap-1">
-          <button onClick={()=>dict.start()} title="Dictate" className="px-3 rounded-lg text-xs" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',height:'50%'}}>🎙</button>
-          <button onClick={sendMessage} disabled={streaming||!input.trim()} className="px-3 rounded-lg text-xs font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',height:'50%',opacity:streaming||!input.trim()?0.4:1}}>Send</button>
+      <div className="flex-shrink-0">
+        <div className="flex gap-2 mb-1.5 items-center">
+          <button onClick={()=>setVoiceEnabled&&setVoiceEnabled(!voiceEnabled)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
+            style={{background:voiceEnabled?'rgba(99,102,241,0.2)':'rgba(255,255,255,0.04)',border:`1px solid ${voiceEnabled?'rgba(99,102,241,0.4)':'rgba(255,255,255,0.08)'}`,color:voiceEnabled?'#818cf8':'#64748b'}}>
+            🎙 Voice {voiceEnabled?'ON':'OFF'}
+          </button>
+          {voiceEnabled&&<span className="text-xs" style={{color:'#475569'}}>Tap mic to record your response</span>}
+        </div>
+        <div className="flex gap-2">
+          <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}} rows={2} placeholder="Your response… (Enter to send, Shift+Enter for newline)" className="flex-1 px-3 py-2 rounded-xl text-sm bg-transparent resize-none outline-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}} />
+          <div className="flex flex-col gap-1">
+            <button onClick={voiceEnabled?startCaseVoice:()=>dict.start()} title="Record"
+              className="px-3 rounded-lg text-xs transition-all"
+              style={{background:caseRecording?'rgba(248,113,113,0.2)':'rgba(99,102,241,0.15)',color:caseRecording?'#f87171':'#818cf8',border:caseRecording?'1px solid rgba(248,113,113,0.4)':'none',height:'50%'}}>
+              {caseRecording?'⏹':'🎙'}
+            </button>
+            <button onClick={sendMessage} disabled={streaming||!input.trim()} className="px-3 rounded-lg text-xs font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',height:'50%',opacity:streaming||!input.trim()?0.4:1}}>Send</button>
+          </div>
         </div>
       </div>
     </div>
@@ -12002,7 +12444,7 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts}){
 }
 
 /* ----------- Unprompted ----------- */
-function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts}){
+function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoiceEnabled}){
   const [mode,setMode]=useState('structured'); // structured | rapid-brief
   const [phase,setPhase]=useState('setup'); // setup | reading | responding | grading | result
   const [situation,setSituation]=useState('');
@@ -12309,6 +12751,10 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
   const setConsulting=patch=>setData(d=>({...d,consulting:{...(d.consulting||getDefaultConsulting()),...(typeof patch==='function'?patch(d.consulting||getDefaultConsulting()):patch)}}));
   const apiKey=data.settings?.apiKey||'';
 
+  // Voice preference is session-level and persisted in consulting state
+  const voiceEnabled=!!consulting.consultingVoiceEnabled;
+  const setVoiceEnabled=val=>setConsulting(c=>({...c,consultingVoiceEnabled:!!val}));
+
   const goToDrill=(dim,type='')=>{setDrillInit({dim,type});setSubtab('drills');};
 
   const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
@@ -12320,6 +12766,8 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
           <h2 className="text-xl font-semibold">Consulting Practice</h2>
           <div className="text-xs mt-0.5" style={{color:'#64748b'}}>Case interview and consulting skill builder</div>
         </div>
+        {/* Global voice indicator */}
+        {voiceEnabled&&<div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.3)'}}>🎙 Voice ON</div>}
       </div>
       <div className="flex gap-1 p-1 rounded-xl mb-6" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',overflowX:'auto',width:'fit-content',maxWidth:'100%'}}>
         {SUBTABS.map(t=>(
@@ -12331,9 +12779,9 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
         ))}
       </div>
       {subtab==='home'       &&<ConsultingHome consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} setSubtab={setSubtab} onDrillFromError={goToDrill}/>}
-      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} initDim={drillInit.dim} initType={drillInit.type}/>}
-      {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
-      {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts}/>}
+      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} initDim={drillInit.dim} initType={drillInit.type} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
+      {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
+      {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
       {subtab==='learn'      &&<LearnSubtab/>}
       {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onDrillFromError={goToDrill}/>}
     </div>
