@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v87 executing');
+console.log('[Magverse] App.jsx v88 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -11455,7 +11455,8 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDril
   const openErrors=errorLog.filter(e=>!e.resolved).slice(0,10);
   const recommended=[...new Set(openErrors.map(e=>e.dimension))].slice(0,3);
   const recentDrills=drills.slice(-5).reverse();
-  const streak=(()=>{let s=0;const today=new Date().toISOString().slice(0,10);const dates=[...new Set([...drills,...cases.filter(c=>c.finishedAt)].map(x=>(x.at||x.finishedAt||'').slice(0,10)).filter(Boolean).sort().reverse())];for(let i=0;i<dates.length;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(dates[i]===d.toISOString().slice(0,10))s++;else break;}return s;})();
+  const toDateStr=v=>{if(!v)return'';if(typeof v==='string')return v.slice(0,10);return new Date(v).toISOString().slice(0,10);};
+  const streak=(()=>{let s=0;const today=new Date().toISOString().slice(0,10);const dates=[...new Set([...drills,...cases.filter(c=>c.finishedAt)].map(x=>toDateStr(x.at||x.finishedAt)).filter(Boolean).sort().reverse())];for(let i=0;i<dates.length;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(dates[i]===d.toISOString().slice(0,10))s++;else break;}return s;})();
 
   return (
     <div className="space-y-6">
