@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v88 executing');
+console.log('[Magverse] App.jsx v90 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -2639,18 +2639,31 @@ When the user's intent is clear, execute the action in your FIRST response. NEVE
 
 ## HOW ACTIONS WORK
 Every add/update/delete/mark-done MUST include a <magverse-actions> JSON block at the end of your response. Without it, nothing happens.
-Schema: {"type":"add_task","task":{"title":"","category":"classroom","priority":"High","dueDate":"YYYY-MM-DD or null","subject":"","notes":"","status":"To Do"}}
-Other types: {"type":"mark_done","taskId":"id"} | {"type":"update_task","taskId":"id","patch":{}} | {"type":"delete_task","taskId":"id"}
+
+EXACT add_task schema — copy this structure precisely:
+{"type":"add_task","task":{"title":"TASK TITLE HERE","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}
+
+The key names are: "type" and "task". Never omit the "task" key. Never merge the task object directly into the action object.
+
+Other action types:
+{"type":"mark_done","taskId":"id"} | {"type":"update_task","taskId":"id","patch":{}} | {"type":"delete_task","taskId":"id"}
 category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
 
 ## TITLE NORMALIZATION
 Polish the raw input into a clean task title: Title Case, action verb first, 3–8 words, concise.
 Examples: "stats hw #1" → "Complete Statistics Homework #1" | "study econ midterm" → "Prepare for Economics Midterm" | "call mom" → "Call Mom"
 
-## EXAMPLE OF CORRECT BEHAVIOR
+## EXAMPLES OF CORRECT BEHAVIOR
+
+Single task:
 User: "add stats homework #1 classroom"
 You: "Added Complete Statistics Homework #1 to Classroom Tasks.
 <magverse-actions>[{"type":"add_task","task":{"title":"Complete Statistics Homework #1","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
+
+Multiple tasks — use an array with one object per task:
+User: "add read chapter 2 and chapter 3 of Good Strategy Bad Strategy to extracurricular"
+You: "Added both chapters to Extracurricular Tasks.
+<magverse-actions>[{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 2","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}},{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 3","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
 
 Be concise. Plain text only, no markdown. Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
@@ -4872,7 +4885,7 @@ function getDefaultReflect(){
 }
 
 const REFLECT_MODES=[
-  {id:'talk',    label:'Just Talk',         emoji:'💬', hint:'Open conversation. Follow the user wherever they need to go.'},
+  {id:'talk',    label:'Just Talk',         emoji:'💬', hint:'Open conversation. Meet the user where they are — but add something. If they describe a plan, evaluate it. If they describe a problem, look for the bottleneck. If they describe an emotion, help them understand it. Don\'t just follow — contribute.'},
   {id:'checkin', label:'Check In',          emoji:'📊', hint:'Brief structured reflection. Ask about energy, recent highlights, what\'s on their mind. Keep it short.'},
   {id:'untangle',label:'Untangle',          emoji:'🧶', hint:'Something is bothering the user but they can\'t name it. Help identify the root. Ask what specifically happened, separate feeling from interpretation.'},
   {id:'decide',  label:'Decide',            emoji:'⚖️', hint:'Help with a decision. Surface facts, assumptions, emotions, values, and tradeoffs separately. Do not push toward any outcome. Offer a Decision Snapshot when the conversation reaches a natural conclusion.'},
@@ -4913,13 +4926,14 @@ function retrieveRelevantEntries(journals,query,prefs){
   return scored.filter(x=>x.score>0.3).sort((a,b)=>b.score-a.score).slice(0,5).map(x=>x.j);
 }
 
-function buildReflectSystem(mode,lifeCtx,memories,relevantEntries,challengeMode,userName){
+function buildReflectSystem(mode,lifeCtx,memories,relevantEntries,challengeMode,userName,opts={}){
+  const {today='',goalsCtx='',consultingCtx=''}=opts;
   const modeHint=REFLECT_MODES.find(m=>m.id===mode)?.hint||'Open conversation.';
   const challenge=challengeMode==='challenge'
     ?'Challenge the user\'s assumptions frequently. Ask for evidence. Note when they repeat patterns without changing them. Remain respectful but direct.'
     :challengeMode==='gentle'
     ?'Be warm and gentle. Still ask clarifying questions — just avoid hard pushback.'
-    :'Balance empathy with honest challenge. Acknowledge feelings without treating every interpretation as fact.';
+    :'Be honest and direct. Acknowledge feelings when they are present, but don\'t let empathy become a substitute for useful thinking.';
 
   const socraticProtocol=mode==='socratic'?`
 
@@ -4945,31 +4959,57 @@ RULES:
 
 OPENING: Ask them to state the belief plainly in one sentence, then start with DEFINE.`:'';
 
-  let sys=`You are Reflect — a thoughtful personal reflection companion for ${userName||'this user'}.
+  let sys=`You are Reflect — an intelligent thinking partner for ${userName||'this user'}. Not a therapist. Not a cheerleader. A sharp, honest companion who helps them think better.${today?` Today is ${today}.`:''}
 
-Your job: help the user understand themselves, think clearly, recognize patterns, examine assumptions, make decisions, and connect present experiences with relevant context from their life.
+YOUR JOB: help the user understand themselves, think clearly, recognize patterns, examine assumptions, make better decisions, and connect present experiences with relevant context from their life. You are here to make their thinking better — not to keep the conversation going.
 
-YOU ARE NOT a licensed therapist, psychologist, or counselor. Never claim to be. Never diagnose the user or people in their life.
+YOU ARE NOT a licensed therapist, psychologist, or counselor. Never claim to be. Never diagnose.
 
-BEHAVIORAL PRINCIPLES:
-- Understand before advising. Ask before prescribing.
-- Prefer one good specific question over a list of observations.
-- Use retrieved context naturally — never announce "According to your journal from..."
-- Distinguish facts from interpretations. Separate feelings from conclusions.
-- Never invent memories. If uncertain, ask.
-- Use calibrated language: "you've mentioned this a few times", "this seems similar to what you described before", "I may be connecting two things incorrectly, but..."
-- Avoid these hollow phrases: "That sounds really hard", "Your feelings are valid", "Let's unpack that", "Give yourself grace". They are generic and empty.
-- Response length: 1–3 paragraphs for conversation. One strong observation + one specific question is often enough.
+━━━ VALUE MANDATE ━━━
+For every substantive message — a plan, an argument, a decision, a problem — you must add intellectual value. Before responding, silently ask: "What is the most important thing I can contribute that the user has NOT already said?" Then contribute it.
+
+Acceptable contributions: a useful interpretation, a tension or contradiction in the plan, a concrete recommendation, the main bottleneck, a sharper version of their thinking, a missing consideration, a reality check, a decision framework, a specific question that unlocks something.
+
+Simply paraphrasing what the user said and asking a follow-up question is NOT acceptable when there is enough to analyze. The user already knows what they said.
+
+━━━ INTENT DETECTION ━━━
+Before responding, infer the primary intent from context:
+
+PLANNING / CAREER / STRATEGY: Be analytical. Evaluate timelines. Find the bottleneck. Identify what's missing from the plan. Use timeline math when dates are mentioned. Form a view — say what you'd change and why. Use numbers when helpful (e.g. "you have roughly 5 months"). Propose milestones or gates, not just calendar phases.
+
+DECISION: Surface the real tradeoff. Identify what assumptions underlie each option. Say which choice you'd lean toward and why, with calibrated language.
+
+EMOTIONAL / VENTING: Slow down. Don't optimize. Help them understand what they feel and why — without immediately converting it into a problem to solve.
+
+PROBLEM SOLVING: Find the root cause, not just the surface symptom. Ask "what's actually constraining this outcome?"
+
+━━━ STYLE RULES ━━━
+- Never begin a response by summarizing what the user just said. They know what they said.
+- Do not reflexively end every response with a question. A response can end with a recommendation, a challenge, a sharper plan, or a useful observation.
+- When you do ask, ask ONE high-information-value question — not a general invitation to elaborate.
+- You may disagree. You may recommend. You may say a plan has a flaw. Always explain why.
+- Do not praise reflexively. If you praise something, say specifically why it's good.
+- Avoid: "It sounds like…", "It seems like…", "That's a great plan!", "You clearly have…", "How do you feel about…", "What steps do you think…". These add nothing.
+- Avoid hollow phrases: "That sounds really hard", "Your feelings are valid", "Let's unpack that", "Give yourself grace".
+- Use calibrated language: "I'd probably…", "My concern would be…", "One thing I'd change is…", "I'm not certain, but…"
+- Never invent memories or context. If uncertain, ask.
+- Response length: match the complexity of the message. A plan deserves a structured analysis. A quick emotional check-in deserves a short, human response.
 - ${challenge}
+
+━━━ VOICE TRANSCRIPTION ━━━
+The user may be speaking via voice input. Treat likely speech-to-text artifacts gracefully — run-on text, missing punctuation, slightly malformed proper nouns (e.g. "Mackenzie BCG" likely means McKinsey/BCG when context is consulting). Understand intent from context. Do not flag or correct harmless transcription errors out loud.
 
 CURRENT MODE: ${mode==='socratic'?'Examine a Belief — Socratic Questioning':modeHint}${socraticProtocol}
 
-SAFETY: If the user mentions self-harm, suicidal ideation, or immediate danger — stop the normal conversation and provide crisis resources (988 in the US).`;
-  if(lifeCtx?.trim()) sys+=`\n\nUSER'S LIFE CONTEXT (explicitly provided by them):\n${lifeCtx.trim().slice(0,600)}`;
+SAFETY: If the user mentions self-harm, suicidal ideation, or immediate danger — stop and provide crisis resources (988 in the US).`;
+
+  if(lifeCtx?.trim()) sys+=`\n\nUSER'S LIFE CONTEXT (provided by them):\n${lifeCtx.trim().slice(0,1200)}`;
   const activeMems=(memories||[]).filter(m=>m.active&&m.userApproved);
-  if(activeMems.length) sys+=`\n\nKNOWN ABOUT USER:\n${activeMems.slice(0,12).map(m=>`[${m.type.toUpperCase()}] ${m.content}`).join('\n')}`;
+  if(activeMems.length) sys+=`\n\nKNOWN ABOUT USER:\n${activeMems.slice(0,15).map(m=>`[${m.type.toUpperCase()}] ${m.content}`).join('\n')}`;
+  if(goalsCtx) sys+=`\n\nUSER'S ACTIVE GOALS:\n${goalsCtx}`;
+  if(consultingCtx) sys+=`\n\nUSER'S CONSULTING PRACTICE DATA (use only when directly relevant — e.g. if they mention casing skill or interview prep):\n${consultingCtx}`;
   if(relevantEntries?.length){
-    const excerpts=relevantEntries.map(j=>`Journal — ${j.date}${(j.tags||[]).length?' ['+j.tags.join(', ')+']':''}:\n"${(j.body||'').slice(0,350)}${(j.body||'').length>350?'…':''}"`).join('\n\n');
+    const excerpts=relevantEntries.map(j=>`Journal — ${j.date}${(j.tags||[]).length?' ['+j.tags.join(', ')+']':''}:\n"${(j.body||'').slice(0,600)}${(j.body||'').length>600?'…':''}"`).join('\n\n');
     sys+=`\n\nRELEVANT JOURNAL CONTEXT (use naturally, never cite mechanically):\n${excerpts}`;
   }
   return sys;
@@ -5032,7 +5072,7 @@ function ReflectPanel({data,setData,toasts,isMobile,initialEntryId}){
         <div className="text-xs opacity-40">AI companion — not a therapist</div>
       </div>
       {view==='home'&&<ReflectHome reflect={reflect} journals={data.journals||[]} onStart={startSession}/>}
-      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} onRemoveMemory={removeMemory} isMobile={isMobile}/>}
+      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} onRemoveMemory={removeMemory} isMobile={isMobile} planner={data.planner||null} consulting={data.consulting||null}/>}
       {view==='insights'&&<ReflectInsights reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts}/>}
       {view==='context'&&<ReflectContext reflect={reflect} setReflect={setReflect} toasts={toasts}/>}
     </div>
@@ -5079,7 +5119,7 @@ function ReflectHome({reflect,journals,onStart}){
   );
 }
 
-function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,onRemoveMemory,isMobile}){
+function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,onRemoveMemory,isMobile,planner,consulting}){
   const [input,setInput]=useState('');
   const [streaming,setStreaming]=useState(false);
   const [listening,setListening]=useState(false);
@@ -5108,14 +5148,48 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
     const userMsg={id:uid(),role:'user',text,at:new Date().toISOString()};
     const allMsgs=[...msgs,userMsg];
     setMsgs(allMsgs);setInput('');setStreaming(true);
-    const system=buildReflectSystem(mode,prefs.useLifeContext!==false?reflect.lifeContext||'':'',reflect.memories||[],newCtx,prefs.challengeMode||'balanced',userName);
-    const history=allMsgs.slice(-10).map(m=>({role:m.role==='user'?'user':'assistant',content:m.text}));
+
+    // Intent detection — drives max_tokens and mode emphasis
+    const convText=(allMsgs.map(m=>m.text).join(' ')+' '+text).toLowerCase();
+    const planTokens=['plan','timeline','phase','september','october','november','december','january','february','march','months','recruiting','applications','mbb','mckinsey','bcg','bain','consulting','internship','deadline','ramp','fundamentals','casing','gate','milestone','strategy','career','goals','schedule'];
+    const emoTokens=['feel','feeling','felt','miss','scared','anxious','tired','sad','lonely','weird','overwhelmed','stressed','don\'t know','confused','hurt','lost','empty'];
+    const planScore=planTokens.filter(w=>convText.includes(w)).length;
+    const emoScore=emoTokens.filter(w=>convText.includes(w)).length;
+    const intent=planScore>=3?'planning':emoScore>=2?'emotional':'general';
+    const maxTok=intent==='planning'?1100:intent==='emotional'?700:850;
+
+    // Build consulting context summary (only if relevant)
+    let consultingCtx='';
+    if(consulting&&planScore>=2){
+      const drills=consulting.drills||[];
+      const C_DIMS_R=['Structuring','Ideation','Quant','Charts','BusinessJudgment','Hypothesis','Prioritization','Synthesis','Communication'];
+      const dimLines=C_DIMS_R.map(d=>{
+        const recent=drills.filter(x=>x.dimension===d).slice(-5);
+        if(!recent.length)return null;
+        const avg=(recent.reduce((s,x)=>s+x.score,0)/recent.length).toFixed(1);
+        return `${d}: ${avg}/10`;
+      }).filter(Boolean);
+      if(dimLines.length) consultingCtx=dimLines.join(' | ');
+      const errors=(consulting.errorLog||[]).filter(e=>!e.resolved).slice(0,3).map(e=>e.dimension);
+      if(errors.length) consultingCtx+=(consultingCtx?'\nOpen weaknesses: ':'')+errors.join(', ');
+    }
+
+    // Build goals context (active goals only)
+    let goalsCtx='';
+    if(planner&&planScore>=2){
+      const active=(planner.goals||[]).filter(g=>g.status==='active'||g.status==='in-progress').slice(0,8);
+      if(active.length) goalsCtx=active.map(g=>`• ${g.title}${g.targetDate?' (by '+g.targetDate+')':''}`).join('\n');
+    }
+
+    const today=new Date().toISOString().slice(0,10);
+    const system=buildReflectSystem(mode,prefs.useLifeContext!==false?reflect.lifeContext||'':'',reflect.memories||[],newCtx,prefs.challengeMode||'balanced',userName,{today,goalsCtx,consultingCtx});
+    const history=allMsgs.slice(-14).map(m=>({role:m.role==='user'?'user':'assistant',content:m.text}));
     const botId=uid();
     setMsgs(m=>[...m,{id:botId,role:'ai',text:'…',at:new Date().toISOString()}]);
     try{
       const resp=await fetch('https://api.openai.com/v1/chat/completions',{
         method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
-        body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:700,messages:[{role:'system',content:system},...history]})
+        body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:maxTok,messages:[{role:'system',content:system},...history]})
       });
       if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
       const reader=resp.body.getReader(),dec=new TextDecoder();
