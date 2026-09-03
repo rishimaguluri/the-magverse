@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v90 executing');
+console.log('[Magverse] App.jsx v91 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -2674,7 +2674,9 @@ TASKS: ${JSON.stringify(taskList)}`;
     if (!m) return { added: [], hasActions: false };
     const added = [];
     try {
-      JSON.parse(m[1]).forEach(a => {
+      let parsed = JSON.parse(m[1]);
+      if (!Array.isArray(parsed)) parsed = [parsed];
+      parsed.forEach(a => {
         if (a.type === 'add_task') {
           const t = a.task || {};
           // Dedup: skip if same title+category already exists (prevents retry duplicates)
