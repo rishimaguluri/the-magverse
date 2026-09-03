@@ -126,7 +126,10 @@
         showErr('JS Error: ' + (e.message || 'unknown') + '\nFile: ' + (e.filename||'') + ':' + (e.lineno||'') + (e.error && e.error.stack ? '\n\nStack:\n' + e.error.stack : ''));
       });
       window.addEventListener('unhandledrejection', function(e) {
-        showErr('Unhandled promise rejection: ' + (e.reason && (e.reason.stack || e.reason.message || e.reason) || 'unknown'));
+        var msg = e.reason && (e.reason.stack || e.reason.message || String(e.reason)) || 'unknown';
+        // SW update fetch failures are harmless browser-internal events — never show in overlay
+        if (msg.indexOf('ServiceWorker') !== -1 || msg.indexOf('sw.js') !== -1) return;
+        showErr('Unhandled promise rejection: ' + msg);
       });
       // If root is still empty after 8s, React failed to mount — show message
       setTimeout(function() {
