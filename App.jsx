@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v91 executing');
+console.log('[Magverse] App.jsx v92 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -264,7 +264,7 @@ const defaultState = () => ({
   goldenEgg: {
     strategyStatement:"We will specialize in small/mid-cap companies where deep sector knowledge, filing analysis, and qualitative judgment can identify durable businesses or improving situations before they are fully appreciated by the market.",
     currentPhase:0,
-    roles:{researchLead:"Rishi",systemsLead:"Rohan"},
+    roles:{rishiName:"Rishi",rishiTitle:"Technical Research & AI Systems",rishiDesc:"",rohanName:"Rohan",rohanTitle:"Traditional / Non-AI Investing",rohanDesc:""},
     curriculum:[
       {id:"ge-t1",name:"Accounting & Financial Statements",owner:"both",topics:[
         {id:"ge-t1-1",title:"Income statement anatomy",done:false},{id:"ge-t1-2",title:"Balance sheet reading",done:false},
@@ -311,7 +311,7 @@ const defaultState = () => ({
         {id:"ge-t7-3",title:"Build bull/base/bear case",done:false},{id:"ge-t7-4",title:"Identify disconfirming evidence",done:false},
         {id:"ge-t7-5",title:"Track thesis evolution",done:false},{id:"ge-t7-6",title:"Write postmortems",done:false},
       ]},
-      {id:"ge-t8",name:"AI & Data Systems",owner:"rohan",topics:[
+      {id:"ge-t8",name:"AI & Data Systems",owner:"rishi",topics:[
         {id:"ge-t8-1",title:"EDGAR API + SEC data pipelines",done:false},{id:"ge-t8-2",title:"Basic Python for financial data",done:false},
         {id:"ge-t8-3",title:"Watchlist database design",done:false},{id:"ge-t8-4",title:"Prompt design for filing analysis",done:false},
         {id:"ge-t8-5",title:"News filtering automation",done:false},{id:"ge-t8-6",title:"Paper-trading logs and audit trails",done:false},
@@ -2665,6 +2665,9 @@ User: "add read chapter 2 and chapter 3 of Good Strategy Bad Strategy to extracu
 You: "Added both chapters to Extracurricular Tasks.
 <magverse-actions>[{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 2","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}},{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 3","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
 
+## GOLDEN EGG CAPITAL — ROLE CONTEXT
+If the user mentions Golden Egg Capital tasks: Rishi's role is Technical Research & AI Systems (data pipelines, filing intelligence, research automation, AI analyst agents, retrieval systems, monitoring). Rohan handles traditional/non-AI investment work. When suggesting GE tasks for Rishi, bias toward technical work — filing pipelines, retrieval systems, AI agent evaluation, signal testing, monitoring — not management calls, manual valuation models, or fund-wide administration.
+
 Be concise. Plain text only, no markdown. Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
   }
@@ -4929,7 +4932,7 @@ function retrieveRelevantEntries(journals,query,prefs){
 }
 
 function buildReflectSystem(mode,lifeCtx,memories,relevantEntries,challengeMode,userName,opts={}){
-  const {today='',goalsCtx='',consultingCtx=''}=opts;
+  const {today='',goalsCtx='',consultingCtx='',goldenEggCtx=''}=opts;
   const modeHint=REFLECT_MODES.find(m=>m.id===mode)?.hint||'Open conversation.';
   const challenge=challengeMode==='challenge'
     ?'Challenge the user\'s assumptions frequently. Ask for evidence. Note when they repeat patterns without changing them. Remain respectful but direct.'
@@ -5010,6 +5013,7 @@ SAFETY: If the user mentions self-harm, suicidal ideation, or immediate danger �
   if(activeMems.length) sys+=`\n\nKNOWN ABOUT USER:\n${activeMems.slice(0,15).map(m=>`[${m.type.toUpperCase()}] ${m.content}`).join('\n')}`;
   if(goalsCtx) sys+=`\n\nUSER'S ACTIVE GOALS:\n${goalsCtx}`;
   if(consultingCtx) sys+=`\n\nUSER'S CONSULTING PRACTICE DATA (use only when directly relevant — e.g. if they mention casing skill or interview prep):\n${consultingCtx}`;
+  if(goldenEggCtx) sys+=`\n\nGOLDEN EGG CAPITAL — ROLE CONTEXT (use when the user mentions Golden Egg, Rohan, filing systems, or career tradeoffs involving the fund):\n${goldenEggCtx}`;
   if(relevantEntries?.length){
     const excerpts=relevantEntries.map(j=>`Journal — ${j.date}${(j.tags||[]).length?' ['+j.tags.join(', ')+']':''}:\n"${(j.body||'').slice(0,600)}${(j.body||'').length>600?'…':''}"`).join('\n\n');
     sys+=`\n\nRELEVANT JOURNAL CONTEXT (use naturally, never cite mechanically):\n${excerpts}`;
@@ -5074,7 +5078,7 @@ function ReflectPanel({data,setData,toasts,isMobile,initialEntryId}){
         <div className="text-xs opacity-40">AI companion — not a therapist</div>
       </div>
       {view==='home'&&<ReflectHome reflect={reflect} journals={data.journals||[]} onStart={startSession}/>}
-      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} onRemoveMemory={removeMemory} isMobile={isMobile} planner={data.planner||null} consulting={data.consulting||null}/>}
+      {view==='talk'&&<ReflectTalk msgs={sessionMsgs} setMsgs={setSessionMsgs} mode={mode} reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts} userName={userName} sessionCtx={sessionCtx} setSessionCtx={setSessionCtx} sessionPrivate={sessionPrivate} setSessionPrivate={setSessionPrivate} onEnd={endSession} onSaveToJournal={saveToJournal} onAddMemory={addMemory} onRemoveMemory={removeMemory} isMobile={isMobile} planner={data.planner||null} consulting={data.consulting||null} goldenEgg={data.goldenEgg||null}/>}
       {view==='insights'&&<ReflectInsights reflect={reflect} journals={data.journals||[]} apiKey={apiKey} toasts={toasts}/>}
       {view==='context'&&<ReflectContext reflect={reflect} setReflect={setReflect} toasts={toasts}/>}
     </div>
@@ -5121,7 +5125,7 @@ function ReflectHome({reflect,journals,onStart}){
   );
 }
 
-function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,onRemoveMemory,isMobile,planner,consulting}){
+function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,sessionCtx,setSessionCtx,sessionPrivate,setSessionPrivate,onEnd,onSaveToJournal,onAddMemory,onRemoveMemory,isMobile,planner,consulting,goldenEgg}){
   const [input,setInput]=useState('');
   const [streaming,setStreaming]=useState(false);
   const [listening,setListening]=useState(false);
@@ -5183,8 +5187,20 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
       if(active.length) goalsCtx=active.map(g=>`• ${g.title}${g.targetDate?' (by '+g.targetDate+')':''}`).join('\n');
     }
 
+    // Build Golden Egg Capital role context (when GE is mentioned)
+    let goldenEggCtx='';
+    const geKeywords=['golden egg','rohan','gec','edgar','filing','pipeline','research system','technical research','investment fund','research infrastructure','research automation','ai research'];
+    const geScore=geKeywords.filter(w=>convText.includes(w)).length;
+    if(goldenEgg&&geScore>=1){
+      goldenEggCtx=`Rishi's role at Golden Egg Capital: Technical Research & AI Systems — building the AI/data-driven research infrastructure (data pipelines, filing intelligence, research automation, AI agents, evidence-grounded analysis, retrieval systems). Goal: scalable, reproducible technical research system.
+Rohan's role: Traditional / Non-AI investing — the non-technical investment work. Do not invent specific responsibilities beyond this.
+Relationship: Rishi's systems produce research outputs; humans interpret and decide. AI surfaces/monitors/retrieves/analyzes — it does not choose stocks.
+Progress principle: measure Rishi's GE progress by system capability and research usefulness, not hours spent or features added. Key question: "What can the system do now that it couldn't before — and does that improve real investment decisions?"
+When Rishi mentions "doing more Golden Egg work," interpret this as building/improving the technical research system, not generic investing activity. When he mentions a tradeoff between casing and GE, the GE side is specifically building the technical system — ask what milestone it needs to reach.`;
+    }
+
     const today=new Date().toISOString().slice(0,10);
-    const system=buildReflectSystem(mode,prefs.useLifeContext!==false?reflect.lifeContext||'':'',reflect.memories||[],newCtx,prefs.challengeMode||'balanced',userName,{today,goalsCtx,consultingCtx});
+    const system=buildReflectSystem(mode,prefs.useLifeContext!==false?reflect.lifeContext||'':'',reflect.memories||[],newCtx,prefs.challengeMode||'balanced',userName,{today,goalsCtx,consultingCtx,goldenEggCtx});
     const history=allMsgs.slice(-14).map(m=>({role:m.role==='user'?'user':'assistant',content:m.text}));
     const botId=uid();
     setMsgs(m=>[...m,{id:botId,role:'ai',text:'…',at:new Date().toISOString()}]);
@@ -9596,8 +9612,16 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
   const [activeWeek, setActiveWeek] = useState(null);
   const [show14, setShow14] = useState(true);
   const [courseSection, setCourseSection] = useState('missions');
+  const [editRoles, setEditRoles] = useState(false);
+  const [rishiDescDraft, setRishiDescDraft] = useState(ge.roles?.rishiDesc||'');
+  const [rohanDescDraft, setRohanDescDraft] = useState(ge.roles?.rohanDesc||'');
 
   const upGE = (patch) => setData(d=>({...d, goldenEgg:{...(d.goldenEgg||{}), ...patch}}));
+  const saveRoles = () => {
+    upGE({roles:{...(ge.roles||{}),rishiDesc:rishiDescDraft,rohanDesc:rohanDescDraft}});
+    setEditRoles(false);
+    toasts.push('Roles updated');
+  };
   const upWeekProgress = (wkId, patch) => {
     const curr = (course.weekProgress||{})[wkId] || {};
     upGE({aiCourse:{...course, weekProgress:{...(course.weekProgress||{}), [wkId]:{...curr,...patch}}}});
@@ -9654,7 +9678,7 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
             <span style={{fontSize:'22px'}}>🥚</span>
             <h2 className="text-xl font-bold" style={{background:'linear-gradient(90deg,#f59e0b,#f97316)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>Golden Egg Capital</h2>
           </div>
-          <div className="text-xs" style={{color:'#64748b'}}>Small/mid-cap research fund · Rishi (Research) + Rohan (Systems)</div>
+          <div className="text-xs" style={{color:'#64748b'}}>Small/mid-cap research fund · Rishi (Technical Research & AI) + Rohan (Traditional Investing)</div>
         </div>
         <div className="text-right">
           <div className="text-xs font-semibold" style={{color:'#f59e0b'}}>{pct}% curriculum</div>
@@ -9698,19 +9722,30 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
 
           {/* Roles */}
           <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
-            <div className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:'#475569'}}>Roles</div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs font-semibold uppercase tracking-widest" style={{color:'#475569'}}>Team & Roles</div>
+              <button onClick={()=>{setEditRoles(!editRoles);setRishiDescDraft(ge.roles?.rishiDesc||'');setRohanDescDraft(ge.roles?.rohanDesc||'');}} className="text-xs px-2 py-0.5 rounded" style={{color:'#64748b',background:'rgba(255,255,255,0.05)'}}>
+                {editRoles?'Cancel':'Edit notes'}
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="p-3 rounded-lg" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.15)'}}>
-                <div className="text-xs" style={{color:'#818cf8'}}>Research Lead</div>
-                <div className="font-semibold mt-1">{ge.roles?.researchLead||'—'}</div>
-                <div className="text-xs mt-1" style={{color:'#475569'}}>Thesis writing · business quality analysis · investment memos · sector frameworks</div>
+                <div className="text-xs font-semibold" style={{color:'#818cf8'}}>Technical Research & AI Systems</div>
+                <div className="font-semibold mt-1" style={{color:'#e2e8f0'}}>{ge.roles?.rishiName||ge.roles?.researchLead||'Rishi'}</div>
+                <div className="text-xs mt-1.5 leading-relaxed" style={{color:'#475569'}}>AI/data systems · research infrastructure · filing intelligence · automation · technical investment research</div>
+                {!editRoles && ge.roles?.rishiDesc && <div className="text-xs mt-1.5 italic" style={{color:'#64748b'}}>{ge.roles.rishiDesc}</div>}
+                {editRoles && <textarea rows={2} value={rishiDescDraft} onChange={e=>setRishiDescDraft(e.target.value)} placeholder="Add notes about Rishi's current focus…" className="w-full mt-2 text-xs p-1.5 rounded bg-transparent resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#94a3b8',outline:'none',fontFamily:'inherit'}}/>}
               </div>
               <div className="p-3 rounded-lg" style={{background:'rgba(16,185,129,0.08)',border:'1px solid rgba(16,185,129,0.15)'}}>
-                <div className="text-xs" style={{color:'#10b981'}}>Systems Lead</div>
-                <div className="font-semibold mt-1">{ge.roles?.systemsLead||'—'}</div>
-                <div className="text-xs mt-1" style={{color:'#475569'}}>AI/data infra · EDGAR pipeline · automation · monitoring · paper-trading logs</div>
+                <div className="text-xs font-semibold" style={{color:'#10b981'}}>Traditional / Non-AI Investing</div>
+                <div className="font-semibold mt-1" style={{color:'#e2e8f0'}}>{ge.roles?.rohanName||ge.roles?.systemsLead||'Rohan'}</div>
+                <div className="text-xs mt-1.5 leading-relaxed" style={{color:'#475569'}}>Traditional / non-AI investment work</div>
+                {!editRoles && ge.roles?.rohanDesc && <div className="text-xs mt-1.5 italic" style={{color:'#64748b'}}>{ge.roles.rohanDesc}</div>}
+                {editRoles && <textarea rows={2} value={rohanDescDraft} onChange={e=>setRohanDescDraft(e.target.value)} placeholder="Add notes about Rohan's current focus…" className="w-full mt-2 text-xs p-1.5 rounded bg-transparent resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#94a3b8',outline:'none',fontFamily:'inherit'}}/>}
               </div>
             </div>
+            {editRoles && <button onClick={saveRoles} className="mt-3 px-3 py-1 rounded text-xs font-semibold" style={{background:'linear-gradient(90deg,#f59e0b,#f97316)',color:'#000'}}>Save</button>}
+            <div className="text-xs mt-3 leading-relaxed" style={{color:'#334155'}}>Rishi's systems surface, retrieve and analyze — both interpret and decide. AI does not choose stocks.</div>
           </div>
 
           {/* First 30 Days */}
@@ -9821,9 +9856,10 @@ function GoldenEggPanel({data, setData, toasts, isMobile}){
           <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(245,158,11,0.3)',background:'linear-gradient(135deg,rgba(245,158,11,0.06),rgba(249,115,22,0.04))'}}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#f59e0b'}}>$0 · Free · 12-Week Build</div>
-                <div className="text-base font-bold leading-snug" style={{color:'#fbbf24'}}>AI Portfolio Investing Course</div>
-                <div className="text-xs mt-1 italic" style={{color:'#78716c'}}>"Build a research OS where ML ranks, LLMs read and challenge, deterministic code controls, and humans decide."</div>
+                <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#f59e0b'}}>$0 · Free · 12-Week Build · Rishi's Curriculum</div>
+                <div className="text-base font-bold leading-snug" style={{color:'#fbbf24'}}>Technical Investment Research Curriculum</div>
+                <div className="text-xs mt-0.5 font-medium" style={{color:'#d97706'}}>Technical Research & AI Systems — Golden Egg Capital</div>
+                <div className="text-xs mt-1 italic" style={{color:'#78716c'}}>"Ingest correctly, retrieve reliably, analyze rigorously, hand useful research outputs to human judgment."</div>
               </div>
               <div className="text-3xl flex-shrink-0">📈</div>
             </div>
