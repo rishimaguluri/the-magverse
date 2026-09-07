@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v92 executing');
+console.log('[Magverse] App.jsx v93 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -3536,62 +3536,344 @@ function NotesPanel({data, setData, toasts, isMobile}){
   );
 }
 
-function NotesSubtab({data, setData, toasts}){
-  const notes = data.notes || [];
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState(null); // note id
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [tag, setTag] = useState('');
+// ---- Notes Block Editor ----
+const NOTE_BLOCK_TYPES = [
+  {type:'text',   icon:'T',   label:'Text',        desc:'Plain paragraph'},
+  {type:'h1',     icon:'H1',  label:'Heading 1',   desc:'Large header'},
+  {type:'h2',     icon:'H2',  label:'Heading 2',   desc:'Medium header'},
+  {type:'h3',     icon:'H3',  label:'Heading 3',   desc:'Small header'},
+  {type:'bullet', icon:'*',   label:'Bullet list', desc:'Unordered list'},
+  {type:'numbered',icon:'1.', label:'Numbered',    desc:'Ordered list'},
+  {type:'todo',   icon:'[ ]', label:'To-do',       desc:'Checkbox item'},
+  {type:'quote',  icon:'>',   label:'Quote',       desc:'Blockquote'},
+  {type:'divider',icon:'---', label:'Divider',     desc:'Horizontal line'},
+  {type:'code',   icon:'{}',  label:'Code',        desc:'Code block'},
+];
 
-  function openAdd(){ setTitle(''); setBody(''); setTag(''); setEditing(null); setShowAdd(true); }
-  function openEdit(n){ setTitle(n.title); setBody(n.body); setTag(n.tag||''); setEditing(n.id); setShowAdd(true); }
-  function save(){
-    if(!title.trim()) return;
-    if(editing){
-      setData(d=>({...d, notes:(d.notes||[]).map(n=>n.id===editing?{...n,title,body,tag,updatedAt:new Date().toISOString()}:n)}));
-      toasts.push('Note updated');
-    } else {
-      setData(d=>({...d, notes:[...(d.notes||[]), {id:uid(),title,body,tag,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}]}));
-      toasts.push('Note saved');
-    }
-    setShowAdd(false);
+function migrateNote(note){
+  if(note.blocks) return note;
+  return {...note, blocks: note.body
+    ? [{id:uid('bl'), type:'text', content:note.body, checked:false}]
+    : [{id:uid('bl'), type:'text', content:'', checked:false}]
+  };
+}
+
+function NoteEditor({note, onChange}){
+  const [title, setTitle] = useState(note.title||'');
+  const [blocks, setBlocks] = useState(()=>{
+    const m = migrateNote(note);
+    return (m.blocks && m.blocks.length > 0)
+      ? m.blocks
+      : [{id:uid('bl'), type:'text', content:'', checked:false}];
+  });
+  const [slashMenu, setSlashMenu] = useState(null); // {blockId, filter}
+  const [slashIdx, setSlashIdx] = useState(0);
+  const taRefs = useRef({});
+  const saveTimer = useRef(null);
+  const titleRef = useRef(null);
+
+  // Reset when note id changes
+  useEffect(()=>{
+    const m = migrateNote(note);
+    setTitle(note.title||'');
+    setBlocks((m.blocks && m.blocks.length > 0) ? m.blocks : [{id:uid('bl'),type:'text',content:'',checked:false}]);
+    setSlashMenu(null);
+    setSlashIdx(0);
+  }, [note.id]); // eslint-disable-line
+
+  // Auto-resize all textareas after blocks change
+  useEffect(()=>{
+    Object.values(taRefs.current).forEach(el=>{
+      if(el){el.style.height='auto';el.style.height=el.scrollHeight+'px';}
+    });
+    if(titleRef.current){titleRef.current.style.height='auto';titleRef.current.style.height=titleRef.current.scrollHeight+'px';}
+  });
+
+  function scheduleSave(t, bl){
+    if(saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(()=>{
+      const autoTitle = t.trim() || (bl.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,60)) || 'Untitled';
+      onChange({...note, title: t || autoTitle, blocks: bl, updatedAt: new Date().toISOString()});
+    }, 400);
   }
-  function remove(id){ setData(d=>({...d, notes:(d.notes||[]).filter(n=>n.id!==id)})); toasts.push('Note deleted'); }
+
+  function updateBlock(id, patch){
+    const nb = blocks.map(b=>b.id===id?{...b,...patch}:b);
+    setBlocks(nb);
+    scheduleSave(title, nb);
+  }
+
+  function addBlockAfter(afterId, type){
+    const t = type || 'text';
+    const newId = uid('bl');
+    const idx = blocks.findIndex(b=>b.id===afterId);
+    const newBlock = {id:newId, type:t, content:'', checked:false};
+    const next = [...blocks.slice(0,idx+1), newBlock, ...blocks.slice(idx+1)];
+    setBlocks(next);
+    scheduleSave(title, next);
+    setTimeout(()=>{ const el=taRefs.current[newId]; if(el) el.focus(); }, 0);
+  }
+
+  function deleteBlock(id){
+    if(blocks.length <= 1){ updateBlock(id,{content:'',type:'text'}); return; }
+    const idx = blocks.findIndex(b=>b.id===id);
+    const prev = blocks[idx-1];
+    const next = blocks.filter(b=>b.id!==id);
+    setBlocks(next);
+    scheduleSave(title, next);
+    if(prev) setTimeout(()=>{ const el=taRefs.current[prev.id]; if(el){el.focus();el.selectionStart=el.selectionEnd=el.value.length;} },0);
+  }
+
+  const slashFilter = slashMenu ? slashMenu.filter.toLowerCase() : '';
+  const filteredCmds = NOTE_BLOCK_TYPES.filter(c=>
+    !slashFilter || c.label.toLowerCase().startsWith(slashFilter) || c.type.startsWith(slashFilter)
+  );
+  const effectiveSlashIdx = Math.min(slashIdx, Math.max(0, filteredCmds.length-1));
+
+  function applySlashCmd(type, blockId){
+    const nb = blocks.map(b=>b.id===blockId?{...b,type,content:''}:b);
+    setBlocks(nb);
+    setSlashMenu(null);
+    scheduleSave(title, nb);
+    setTimeout(()=>{ const el=taRefs.current[blockId]; if(el) el.focus(); },0);
+  }
+
+  function handleBlockKeyDown(e, block){
+    if(slashMenu && slashMenu.blockId===block.id){
+      if(e.key==='ArrowDown'){e.preventDefault();setSlashIdx(i=>Math.min(i+1,filteredCmds.length-1));return;}
+      if(e.key==='ArrowUp'){e.preventDefault();setSlashIdx(i=>Math.max(i-1,0));return;}
+      if(e.key==='Enter'){e.preventDefault();if(filteredCmds[effectiveSlashIdx]) applySlashCmd(filteredCmds[effectiveSlashIdx].type,block.id);return;}
+      if(e.key==='Escape'){setSlashMenu(null);return;}
+    }
+    if(e.key==='Enter' && !e.shiftKey && block.type!=='code'){
+      e.preventDefault();
+      const isListType = ['bullet','numbered','todo'].includes(block.type);
+      const nextType = (isListType && block.content.trim()) ? block.type : 'text';
+      if(isListType && !block.content.trim()){
+        updateBlock(block.id,{type:'text'});
+      } else {
+        addBlockAfter(block.id, nextType);
+      }
+      return;
+    }
+    if(e.key==='Backspace' && block.content==='' && blocks.length>1){
+      e.preventDefault(); deleteBlock(block.id); return;
+    }
+    if(e.key==='ArrowUp'){
+      const el=taRefs.current[block.id];
+      if(el && el.selectionStart===0){
+        e.preventDefault();
+        const idx=blocks.findIndex(b=>b.id===block.id);
+        if(idx>0){ const pEl=taRefs.current[blocks[idx-1].id]; if(pEl){pEl.focus();pEl.selectionStart=pEl.selectionEnd=pEl.value.length;} }
+      }
+    }
+    if(e.key==='ArrowDown'){
+      const el=taRefs.current[block.id];
+      if(el && el.selectionStart===el.value.length){
+        e.preventDefault();
+        const idx=blocks.findIndex(b=>b.id===block.id);
+        if(idx<blocks.length-1){ const nEl=taRefs.current[blocks[idx+1].id]; if(nEl){nEl.focus();nEl.selectionStart=0;} }
+      }
+    }
+  }
+
+  function handleBlockChange(e, block){
+    const val = e.target.value;
+    // Slash command
+    if(val.startsWith('/') && !val.includes(' ')){
+      setSlashMenu({blockId:block.id, filter:val.slice(1)});
+      setSlashIdx(0);
+    } else if(slashMenu && slashMenu.blockId===block.id){
+      setSlashMenu(null);
+    }
+    // Markdown shortcuts (trailing space on text block)
+    if(!val.startsWith('/') && val.endsWith(' ') && block.type==='text'){
+      const trimmed = val.trimEnd();
+      const MAP = {'#':'h1','##':'h2','###':'h3','-':'bullet','1.':'numbered','>':'quote','[]':'todo','[ ]':'todo'};
+      const newType = MAP[trimmed];
+      if(newType){
+        const nb = blocks.map(b=>b.id===block.id?{...b,type:newType,content:''}:b);
+        setBlocks(nb); scheduleSave(title,nb); return;
+      }
+    }
+    updateBlock(block.id,{content:val});
+  }
+
+  function blockStyle(type){
+    if(type==='h1') return {fontSize:'1.75rem',fontWeight:700,lineHeight:1.2,color:'#e2e8f0'};
+    if(type==='h2') return {fontSize:'1.35rem',fontWeight:600,lineHeight:1.3,color:'#e2e8f0'};
+    if(type==='h3') return {fontSize:'1.1rem',fontWeight:600,lineHeight:1.4,color:'#cbd5e1'};
+    if(type==='quote') return {fontSize:'0.9rem',lineHeight:1.7,color:'#94a3b8',fontStyle:'italic'};
+    if(type==='code') return {fontSize:'0.82rem',lineHeight:1.6,color:'#a5b4fc',fontFamily:'monospace'};
+    return {fontSize:'0.9rem',lineHeight:1.7,color:'#e2e8f0'};
+  }
 
   return (
-    <div>
-      <div className="flex justify-end mb-3">
-        <button className="px-3 py-1 rounded bg-indigo-600" onClick={openAdd}>+ New Note</button>
-      </div>
-      {notes.length===0 && <div className="text-center opacity-50 mt-12">No notes yet  -  create one above.</div>}
-      <div className="grid grid-cols-3 gap-4">
-        {notes.slice().reverse().map(n=> (
-          <div key={n.id} className="glass p-4 rounded border-subtle group relative">
-            {n.tag && <div className="text-xs px-2 py-0.5 rounded-full bg-indigo-700/50 w-fit mb-2">{n.tag}</div>}
-            <div className="font-medium mb-1">{n.title}</div>
-            <div className="text-sm opacity-70 whitespace-pre-wrap line-clamp-5">{n.body}</div>
-            <div className="text-xs opacity-40 mt-2">{new Date(n.updatedAt).toLocaleDateString()}</div>
-            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100">
-              <button className="px-2 py-0.5 rounded text-xs hover:bg-white/10" onClick={()=>openEdit(n)}>Edit</button>
-              <button className="px-2 py-0.5 rounded text-xs hover:bg-red-700/40" onClick={()=>remove(n.id)}>×</button>
-            </div>
+    <div style={{flex:1,overflowY:'auto',padding:'36px 48px 80px',maxWidth:'740px'}}>
+      <textarea ref={titleRef} value={title}
+        onChange={e=>{setTitle(e.target.value);scheduleSave(e.target.value,blocks);}}
+        placeholder="Untitled"
+        className="w-full bg-transparent outline-none resize-none font-bold"
+        style={{fontSize:'2rem',color:'#e2e8f0',border:'none',marginBottom:'28px',lineHeight:1.15,minHeight:'48px',display:'block'}}
+        rows={1}/>
+      <div style={{display:'flex',flexDirection:'column',gap:'2px'}}>
+        {blocks.map((block, bIdx)=>(
+          <div key={block.id} style={{position:'relative'}}>
+            {block.type==='divider' ? (
+              <div style={{padding:'8px 0',cursor:'default'}} onClick={()=>{ if(blocks.length>1) deleteBlock(block.id); }}>
+                <div style={{borderTop:'1px solid rgba(255,255,255,0.1)'}}/>
+              </div>
+            ) : (
+              <div style={{display:'flex',alignItems:'flex-start',paddingLeft: block.type==='quote'?'14px':0,
+                borderLeft: block.type==='quote'?'3px solid #6366f1':'none'}}>
+                {block.type==='bullet' && <span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',userSelect:'none'}}>&#x2022;</span>}
+                {block.type==='numbered' && <span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',minWidth:'20px',userSelect:'none'}}>{blocks.slice(0,bIdx+1).filter(b=>b.type==='numbered').length}.</span>}
+                {block.type==='todo' && <input type="checkbox" checked={!!block.checked} onChange={e=>updateBlock(block.id,{checked:e.target.checked})} style={{marginRight:'8px',flexShrink:0,marginTop:'5px',cursor:'pointer',accentColor:'#6366f1'}}/>}
+                {block.type==='code' ? (
+                  <textarea
+                    ref={el=>{taRefs.current[block.id]=el;}}
+                    value={block.content}
+                    onChange={e=>handleBlockChange(e,block)}
+                    onKeyDown={e=>handleBlockKeyDown(e,block)}
+                    placeholder={bIdx===0&&!block.content?"Start writing or type '/' for commands…":""}
+                    className="w-full outline-none resize-none"
+                    style={{...blockStyle(block.type),background:'rgba(255,255,255,0.04)',padding:'10px 14px',borderRadius:'8px',border:'1px solid rgba(255,255,255,0.07)',minHeight:'60px'}}
+                    rows={1}/>
+                ) : (
+                  <textarea
+                    ref={el=>{taRefs.current[block.id]=el;}}
+                    value={block.content}
+                    onChange={e=>handleBlockChange(e,block)}
+                    onKeyDown={e=>handleBlockKeyDown(e,block)}
+                    placeholder={bIdx===0&&!block.content?"Start writing or type '/' for commands…":""}
+                    className="w-full bg-transparent outline-none resize-none"
+                    style={{...blockStyle(block.type),border:'none',padding:'1px 0',display:'block'}}
+                    rows={1}/>
+                )}
+              </div>
+            )}
+            {slashMenu && slashMenu.blockId===block.id && filteredCmds.length>0 && (
+              <div className="glass" style={{position:'absolute',zIndex:60,top:'100%',left:0,minWidth:'210px',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.1)',boxShadow:'0 12px 32px rgba(0,0,0,0.7)',overflow:'hidden'}}>
+                {filteredCmds.slice(0,8).map((cmd,ci)=>(
+                  <div key={cmd.type}
+                    onMouseDown={e=>{e.preventDefault();applySlashCmd(cmd.type,block.id);}}
+                    style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',background:ci===effectiveSlashIdx?'rgba(99,102,241,0.25)':'transparent'}}>
+                    <span style={{width:'28px',fontSize:'0.72rem',fontWeight:700,color:'#818cf8',fontFamily:'monospace',flexShrink:0}}>{cmd.icon}</span>
+                    <div>
+                      <div style={{fontSize:'0.8rem',fontWeight:500,color:'#e2e8f0'}}>{cmd.label}</div>
+                      <div style={{fontSize:'0.68rem',color:'#64748b'}}>{cmd.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
+      <div style={{minHeight:'100px',cursor:'text'}} onClick={()=>{
+        const last=blocks[blocks.length-1];
+        if(!last) return;
+        if(last.content!=='') addBlockAfter(last.id,'text');
+        else { setTimeout(()=>{ const el=taRefs.current[last.id]; if(el) el.focus(); },0); }
+      }}/>
+    </div>
+  );
+}
 
-      {showAdd && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={()=>setShowAdd(false)}></div>
-          <div className="glass p-5 rounded z-50 w-[560px] flex flex-col gap-3">
-            <h3 className="font-semibold">{editing?'Edit Note':'New Note'}</h3>
-            <input className="w-full p-2 bg-transparent border border-white/10 rounded" placeholder="Title" value={title} onChange={e=>setTitle(e.target.value)} />
-            <input className="w-full p-2 bg-transparent border border-white/10 rounded text-sm" placeholder="Tag (optional)" value={tag} onChange={e=>setTag(e.target.value)} />
-            <textarea className="w-full p-2 bg-transparent border border-white/10 rounded text-sm" rows={8} placeholder="Write your note..." value={body} onChange={e=>setBody(e.target.value)} />
-            <div className="flex justify-end gap-2">
-              <button className="px-3 py-1 rounded" onClick={()=>setShowAdd(false)}>Cancel</button>
-              <button className="px-3 py-1 rounded bg-indigo-600" onClick={save}>Save</button>
+function NotesSubtab({data, setData, toasts}){
+  const rawNotes = data.notes || [];
+  const [activeId, setActiveId] = useState(rawNotes.length>0 ? rawNotes[rawNotes.length-1].id : null);
+  const [search, setSearch] = useState('');
+
+  const activeNote = rawNotes.find(n=>n.id===activeId) || null;
+
+  function newNote(){
+    const n={id:uid('nt'),title:'',blocks:[{id:uid('bl'),type:'text',content:'',checked:false}],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    setData(d=>({...d,notes:[...(d.notes||[]),n]}));
+    setActiveId(n.id);
+  }
+
+  function deleteNote(id){
+    const remaining = rawNotes.filter(n=>n.id!==id);
+    setData(d=>({...d,notes:remaining}));
+    if(activeId===id) setActiveId(remaining.length>0?remaining[remaining.length-1].id:null);
+    toasts.push('Note deleted');
+  }
+
+  function handleChange(updatedNote){
+    setData(d=>({...d,notes:(d.notes||[]).map(n=>n.id===updatedNote.id?updatedNote:n)}));
+  }
+
+  const filtered = search
+    ? rawNotes.filter(n=>(n.title||'').toLowerCase().includes(search.toLowerCase()) ||
+        (n.blocks||[]).some(b=>b.content&&b.content.toLowerCase().includes(search.toLowerCase())) ||
+        (n.body||'').toLowerCase().includes(search.toLowerCase()))
+    : rawNotes;
+
+  const sortedFiltered = filtered.slice().sort((a,b)=>new Date(b.updatedAt||b.createdAt)-new Date(a.updatedAt||a.createdAt));
+
+  function getNotePreview(n){
+    if(n.blocks) return n.blocks.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,55)||'';
+    return (n.body||'').slice(0,55);
+  }
+
+  return (
+    <div style={{display:'flex',height:'calc(100vh - 140px)',gap:0,margin:'-8px -16px'}}>
+      {/* Sidebar */}
+      <div style={{width:'224px',flexShrink:0,borderRight:'1px solid rgba(255,255,255,0.06)',display:'flex',flexDirection:'column',background:'rgba(255,255,255,0.01)'}}>
+        <div style={{padding:'12px 10px 8px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+          <button onClick={newNote} className="w-full py-1.5 rounded-lg text-sm font-medium"
+            style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>
+            + New Note
+          </button>
+        </div>
+        <div style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..."
+            className="w-full bg-transparent text-xs outline-none"
+            style={{color:'#94a3b8',padding:'3px 0'}}/>
+        </div>
+        <div style={{flex:1,overflowY:'auto'}}>
+          {sortedFiltered.length===0 && (
+            <div className="text-xs text-center" style={{color:'#334155',padding:'20px 10px'}}>
+              {search?'No matches':'No notes yet'}
             </div>
+          )}
+          {sortedFiltered.map(n=>(
+            <div key={n.id} onClick={()=>setActiveId(n.id)} className="group cursor-pointer"
+              style={{padding:'10px 12px',background:activeId===n.id?'rgba(99,102,241,0.15)':'transparent',
+                borderBottom:'1px solid rgba(255,255,255,0.03)',position:'relative'}}>
+              <div className="text-xs font-medium truncate" style={{color:activeId===n.id?'#a5b4fc':'#cbd5e1'}}>
+                {n.title||'Untitled'}
+              </div>
+              {getNotePreview(n) && (
+                <div className="text-xs truncate mt-0.5" style={{color:'#3f4d5f'}}>{getNotePreview(n)}</div>
+              )}
+              <div className="flex items-center justify-between mt-1">
+                <div className="text-xs" style={{color:'#1e293b',fontSize:'0.65rem'}}>
+                  {new Date(n.updatedAt||n.createdAt).toLocaleDateString()}
+                </div>
+                <button onClick={e=>{e.stopPropagation();deleteNote(n.id);}}
+                  className="text-xs opacity-0 group-hover:opacity-100"
+                  style={{color:'#f87171',lineHeight:1,padding:'0 2px'}}>x</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Editor */}
+      {activeNote ? (
+        <NoteEditor key={activeNote.id} note={migrateNote(activeNote)} onChange={handleChange}/>
+      ) : (
+        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{textAlign:'center'}}>
+            <div className="text-sm mb-3" style={{color:'#475569'}}>
+              {rawNotes.length===0?'No notes yet':'Select a note or create one'}
+            </div>
+            <button onClick={newNote} className="text-sm px-4 py-2 rounded-lg"
+              style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>
+              + New Note
+            </button>
           </div>
         </div>
       )}
@@ -7157,7 +7439,7 @@ function followUpStatus(lastContacted, followUpDays=14){
 
 // ---- Consulting ----
 function getDefaultConsulting(){
-  return {drills:[],cases:[],errorLog:[],practiceplan:null,consultingVoiceEnabled:false};
+  return {drills:[],cases:[],caseLog:[],errorLog:[],practiceplan:null,consultingVoiceEnabled:false};
 }
 
 // ---- Resume Editor ----
@@ -12141,6 +12423,22 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoi
   const scrollRef=useRef(null);
   const dict=useDictation(t=>{setInput(p=>p?p+' '+t:t);});
 
+  const loggedMagverseIds = new Set((consulting.caseLog||[]).filter(cl=>cl.magverseCaseId).map(cl=>cl.magverseCaseId));
+
+  function quickLogCase(ac){
+    if(loggedMagverseIds.has(ac.id)){toasts.push('Already in Tracker');return;}
+    const scores=Object.values(ac.competencyScores||{});
+    const rating=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length):5;
+    setConsulting(c=>({...c,caseLog:[...(c.caseLog||[]),{
+      id:uid('cl'),date:new Date().toISOString().slice(0,10),
+      caseName:ac.title,source:'Magverse',caseType:ac.type,
+      industry:ac.industry||'',mainFeedback:ac.debriefInsight||'',
+      wellTags:[],struggleTags:[],rating,takeaway:'',
+      magverseCaseId:ac.id,createdAt:Date.now()
+    }]}));
+    toasts.push('Logged to Tracker');
+  }
+
   function startCaseVoice(){
     const R=window.SpeechRecognition||window.webkitSpeechRecognition;
     if(!R){toasts.push('Speech recognition not supported');return;}
@@ -12357,7 +12655,17 @@ function CasesSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoi
           {activeCase.strengths?.length>0&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#34d399'}}>STRENGTHS</div><ul className="space-y-1">{activeCase.strengths.map((s,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>+ {s}</li>)}</ul></div>}
           {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-1" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
         </div>
-        <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>← All Cases</button>
+        <div style={{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}}>
+          <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>&#x2190; All Cases</button>
+          {activeCase&&activeCase.state==='done'&&(
+            <button onClick={()=>quickLogCase(activeCase)} className="px-4 py-2.5 rounded-lg text-sm font-medium"
+              style={{background:loggedMagverseIds.has(activeCase.id)?'rgba(255,255,255,0.03)':'rgba(99,102,241,0.15)',
+                color:loggedMagverseIds.has(activeCase.id)?'#475569':'#818cf8',
+                border:'1px solid rgba(99,102,241,0.2)'}}>
+              {loggedMagverseIds.has(activeCase.id)?'Logged to Tracker':'Log to Tracker'}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -12856,6 +13164,327 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
   );
 }
 
+/* ----------- Case Tracker ----------- */
+const CASE_SOURCES = ['Magverse','RocketBlocks','Case Partner','Casebook','Club','Interview Prep','Other'];
+const CASE_TYPES_TRACKER = ['Profitability','Market Entry','M&A','Growth','Operations','Pricing','Estimation','Other'];
+const CASE_TAGS = ['Structuring','Frameworks','Quantitative','Mental Math','Charts','Brainstorming','Business Intuition','Hypothesis-Driven','Synthesis','Recommendation','Communication','Executive Presence','Time Management','Clarifying Questions'];
+
+function CaseTrackerSubtab({consulting, setConsulting, toasts}){
+  const caseLog = consulting.caseLog || [];
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [filterSource, setFilterSource] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [sortBy, setSortBy] = useState('date');
+  const emptyDraft = ()=>({id:'',date:new Date().toISOString().slice(0,10),caseName:'',source:'',caseType:'',industry:'',mainFeedback:'',wellTags:[],struggleTags:[],rating:5,takeaway:'',magverseCaseId:'',createdAt:Date.now()});
+  const [draft, setDraft] = useState(emptyDraft);
+
+  function openAdd(){ setDraft({...emptyDraft(),id:uid('cl')}); setEditId(null); setShowForm(true); }
+  function openEdit(entry){ setDraft({...entry,wellTags:entry.wellTags||[],struggleTags:entry.struggleTags||(entry.didWell?[]:[]),}); setEditId(entry.id); setShowForm(true); }
+  function save(){
+    if(!draft.caseName.trim()){toasts.push('Case name required');return;}
+    if(editId){
+      setConsulting(c=>({...c,caseLog:(c.caseLog||[]).map(e=>e.id===editId?{...draft}:e)}));
+      toasts.push('Entry updated');
+    } else {
+      setConsulting(c=>({...c,caseLog:[...(c.caseLog||[]),{...draft}]}));
+      toasts.push('Case logged');
+    }
+    setShowForm(false);
+  }
+  function remove(id){
+    setConsulting(c=>({...c,caseLog:(c.caseLog||[]).filter(e=>e.id!==id)}));
+    if(expandedId===id) setExpandedId(null);
+    toasts.push('Entry deleted');
+  }
+  function toggleTag(field, tag){ setDraft(d=>({...d,[field]:(d[field]||[]).includes(tag)?(d[field]||[]).filter(t=>t!==tag):[...(d[field]||[]),tag]})); }
+
+  const now = new Date();
+  const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate()-7);
+  const monthAgo = new Date(now); monthAgo.setDate(monthAgo.getDate()-30);
+  const thisWeek = caseLog.filter(e=>new Date(e.date)>=weekAgo).length;
+  const thisMonth = caseLog.filter(e=>new Date(e.date)>=monthAgo).length;
+  const magverseCount = caseLog.filter(e=>e.source==='Magverse').length;
+  const externalCount = caseLog.filter(e=>e.source&&e.source!=='Magverse').length;
+
+  let filtered = caseLog;
+  if(filterSource) filtered = filtered.filter(e=>e.source===filterSource);
+  if(filterType) filtered = filtered.filter(e=>e.caseType===filterType);
+  if(sortBy==='rating') filtered = filtered.slice().sort((a,b)=>(b.rating||0)-(a.rating||0));
+  else filtered = filtered.slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  const allStruggles = caseLog.flatMap(e=>(e.struggleTags||[]));
+  const allWells = caseLog.flatMap(e=>(e.wellTags||[]));
+  const tally = arr=>{ const c={}; arr.forEach(t=>{c[t]=(c[t]||0)+1;}); return Object.entries(c).sort((a,b)=>b[1]-a[1]); };
+  const topStruggles = tally(allStruggles).slice(0,4);
+  const topWells = tally(allWells).slice(0,4);
+
+  const ratingColor = r => r>=8?'#34d399':r>=6?'#86efac':r>=4?'#f59e0b':'#f87171';
+
+  const selStyle = (active, activeColor, inactiveColor) => ({
+    background: active ? activeColor : 'rgba(255,255,255,0.04)',
+    color: active ? inactiveColor : '#64748b',
+    border: active ? ('1px solid ' + activeColor.replace('0.2','0.35')) : '1px solid rgba(255,255,255,0.06)',
+  });
+
+  return (
+    <div style={{maxWidth:'920px'}}>
+      {/* Counters */}
+      <div className="grid grid-cols-5 gap-3 mb-5">
+        {[['Total',caseLog.length,'#818cf8'],['This Week',thisWeek,'#34d399'],['This Month',thisMonth,'#60a5fa'],['Magverse',magverseCount,'#a78bfa'],['External',externalCount,'#f59e0b']].map(([label,count,color])=>(
+          <div key={label} className="glass rounded-xl p-3 border-subtle text-center">
+            <div className="text-2xl font-bold" style={{color}}>{count}</div>
+            <div className="text-xs mt-0.5" style={{color:'#475569'}}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Pattern insights */}
+      {caseLog.length>=3&&(topStruggles.length>0||topWells.length>0)&&(
+        <div className="glass rounded-xl p-4 border-subtle mb-5 flex gap-8 flex-wrap">
+          {topStruggles.length>0&&(
+            <div>
+              <div className="text-xs font-semibold mb-2" style={{color:'#f87171'}}>RECURRING STRUGGLES</div>
+              <div className="flex flex-wrap gap-1">
+                {topStruggles.map(([tag,n])=>(
+                  <span key={tag} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(248,113,113,0.1)',color:'#fca5a5'}}>{tag} <span style={{opacity:.6}}>({n})</span></span>
+                ))}
+              </div>
+            </div>
+          )}
+          {topWells.length>0&&(
+            <div>
+              <div className="text-xs font-semibold mb-2" style={{color:'#34d399'}}>CONSISTENT STRENGTHS</div>
+              <div className="flex flex-wrap gap-1">
+                {topWells.map(([tag,n])=>(
+                  <span key={tag} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(52,211,153,0.1)',color:'#6ee7b7'}}>{tag} <span style={{opacity:.6}}>({n})</span></span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <button onClick={openAdd} className="px-4 py-1.5 rounded-lg text-sm font-semibold"
+          style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>+ Add Case</button>
+        <select value={filterSource} onChange={e=>setFilterSource(e.target.value)}
+          className="text-xs px-2 py-1.5 rounded-lg"
+          style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.08)',background:'rgba(255,255,255,0.03)'}}>
+          <option value=''>All Sources</option>
+          {CASE_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+        <select value={filterType} onChange={e=>setFilterType(e.target.value)}
+          className="text-xs px-2 py-1.5 rounded-lg"
+          style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.08)',background:'rgba(255,255,255,0.03)'}}>
+          <option value=''>All Types</option>
+          {CASE_TYPES_TRACKER.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+        <div className="ml-auto flex gap-1">
+          {[['date','Date'],['rating','Rating']].map(([v,l])=>(
+            <button key={v} onClick={()=>setSortBy(v)} className="text-xs px-3 py-1 rounded-lg"
+              style={{background:sortBy===v?'rgba(99,102,241,0.2)':'transparent',color:sortBy===v?'#818cf8':'#64748b'}}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      {filtered.length===0&&(
+        <div className="text-center py-14" style={{color:'#475569'}}>
+          <div className="text-sm mb-1">No cases logged yet</div>
+          <div className="text-xs">Click "+ Add Case" to start tracking your practice</div>
+        </div>
+      )}
+      {filtered.length>0&&(
+        <div className="grid text-xs font-semibold px-3 py-2 mb-1"
+          style={{gridTemplateColumns:'88px 1fr 98px 108px 52px',color:'#475569',borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
+          <span>Date</span><span>Case</span><span>Source</span><span>Type</span><span>Rating</span>
+        </div>
+      )}
+      <div style={{display:'flex',flexDirection:'column',gap:'2px'}}>
+        {filtered.map(entry=>(
+          <div key={entry.id}>
+            <div className="grid items-center px-3 py-2.5 rounded-lg cursor-pointer"
+              style={{gridTemplateColumns:'88px 1fr 98px 108px 52px',
+                background:expandedId===entry.id?'rgba(99,102,241,0.1)':'transparent',
+                transition:'background .1s'}}
+              onMouseEnter={e=>{ if(expandedId!==entry.id) e.currentTarget.style.background='rgba(255,255,255,0.02)'; }}
+              onMouseLeave={e=>{ if(expandedId!==entry.id) e.currentTarget.style.background='transparent'; }}
+              onClick={()=>setExpandedId(expandedId===entry.id?null:entry.id)}>
+              <span className="text-xs" style={{color:'#475569'}}>{entry.date}</span>
+              <div>
+                <span className="text-sm font-medium" style={{color:'#e2e8f0'}}>{entry.caseName}</span>
+                {(entry.struggleTags||[]).length>0&&(
+                  <div style={{display:'flex',gap:'4px',flexWrap:'wrap',marginTop:'2px'}}>
+                    {(entry.struggleTags||[]).slice(0,2).map(t=>(
+                      <span key={t} style={{fontSize:'0.62rem',padding:'1px 6px',borderRadius:'9999px',background:'rgba(248,113,113,0.1)',color:'#fca5a5'}}>{t}</span>
+                    ))}
+                    {(entry.struggleTags||[]).length>2&&<span style={{fontSize:'0.62rem',color:'#475569'}}>+{(entry.struggleTags||[]).length-2}</span>}
+                  </div>
+                )}
+              </div>
+              <span className="text-xs" style={{color:'#94a3b8'}}>{entry.source||'—'}</span>
+              <span className="text-xs" style={{color:'#94a3b8'}}>{entry.caseType||'—'}</span>
+              <span className="text-sm font-bold" style={{color:ratingColor(entry.rating||0)}}>{entry.rating||'—'}</span>
+            </div>
+            {expandedId===entry.id&&(
+              <div style={{margin:'0 8px 6px',padding:'16px',borderRadius:'10px',background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                {entry.mainFeedback&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#475569'}}>MAIN FEEDBACK</div><div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{entry.mainFeedback}</div></div>}
+                <div className="grid grid-cols-2 gap-4 mb-3">
+                  {(entry.wellTags||[]).length>0&&(
+                    <div>
+                      <div className="text-xs font-semibold mb-1.5" style={{color:'#34d399'}}>DID WELL</div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:'4px'}}>
+                        {(entry.wellTags||[]).map(t=><span key={t} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(52,211,153,0.1)',color:'#6ee7b7'}}>{t}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {(entry.struggleTags||[]).length>0&&(
+                    <div>
+                      <div className="text-xs font-semibold mb-1.5" style={{color:'#f87171'}}>STRUGGLED WITH</div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:'4px'}}>
+                        {(entry.struggleTags||[]).map(t=><span key={t} className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(248,113,113,0.1)',color:'#fca5a5'}}>{t}</span>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {entry.takeaway&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#818cf8'}}>TAKEAWAY FOR NEXT CASE</div><div className="text-sm italic leading-relaxed" style={{color:'#94a3b8'}}>{entry.takeaway}</div></div>}
+                {entry.industry&&<div className="text-xs mb-3" style={{color:'#475569'}}>Industry: {entry.industry}</div>}
+                {entry.magverseCaseId&&<div className="text-xs mb-3" style={{color:'#334155'}}>Source: Magverse case</div>}
+                <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+                  <button onClick={e=>{e.stopPropagation();openEdit(entry);}} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>Edit</button>
+                  <button onClick={e=>{e.stopPropagation();remove(entry.id);}} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(248,113,113,0.08)',color:'#f87171'}}>Delete</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Form modal */}
+      {showForm&&(
+        <div style={{position:'fixed',inset:0,zIndex:50,display:'flex',alignItems:'flex-start',justifyContent:'center',paddingTop:'32px',background:'rgba(0,0,0,0.65)',backdropFilter:'blur(4px)'}}>
+          <div className="glass rounded-xl border-subtle w-full mx-4 p-6 overflow-y-auto"
+            style={{maxWidth:'640px',maxHeight:'calc(100vh - 64px)',border:'1px solid rgba(255,255,255,0.09)'}}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold">{editId?'Edit Entry':'Log a Case'}</h3>
+              <button onClick={()=>setShowForm(false)} style={{color:'#64748b',fontSize:'1.2rem',lineHeight:1}}>x</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>DATE</div>
+                  <input type="date" value={draft.date} onChange={e=>setDraft(d=>({...d,date:e.target.value}))}
+                    className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                    style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>RATING: {draft.rating||5}/10</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',marginTop:'8px'}}>
+                    <input type="range" min="1" max="10" value={draft.rating||5}
+                      onChange={e=>setDraft(d=>({...d,rating:parseInt(e.target.value)}))}
+                      style={{flex:1,accentColor:'#6366f1'}}/>
+                    <span className="text-sm font-bold w-5" style={{color:ratingColor(draft.rating||5)}}>{draft.rating||5}</span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>CASE NAME *</div>
+                <input value={draft.caseName} onChange={e=>setDraft(d=>({...d,caseName:e.target.value}))}
+                  placeholder="e.g. RetailCo Profitability" className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                  style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>SOURCE</div>
+                  <select value={draft.source} onChange={e=>setDraft(d=>({...d,source:e.target.value}))}
+                    className="w-full px-3 py-2 rounded-lg text-sm"
+                    style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0',background:'rgba(255,255,255,0.03)'}}>
+                    <option value=''>Select...</option>
+                    {CASE_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>TYPE</div>
+                  <select value={draft.caseType} onChange={e=>setDraft(d=>({...d,caseType:e.target.value}))}
+                    className="w-full px-3 py-2 rounded-lg text-sm"
+                    style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0',background:'rgba(255,255,255,0.03)'}}>
+                    <option value=''>Select...</option>
+                    {CASE_TYPES_TRACKER.map(t=><option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>INDUSTRY</div>
+                  <input value={draft.industry||''} onChange={e=>setDraft(d=>({...d,industry:e.target.value}))}
+                    placeholder="e.g. Retail" className="w-full px-3 py-2 rounded-lg text-sm bg-transparent"
+                    style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-1" style={{color:'#64748b'}}>MAIN FEEDBACK / NOTES</div>
+                <textarea value={draft.mainFeedback||''} onChange={e=>setDraft(d=>({...d,mainFeedback:e.target.value}))}
+                  rows={2} placeholder="What was the key feedback or lesson?"
+                  className="w-full px-3 py-2 rounded-lg text-sm bg-transparent resize-none"
+                  style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-2" style={{color:'#34d399'}}>DID WELL</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+                  {CASE_TAGS.map(tag=>{
+                    const on=(draft.wellTags||[]).includes(tag);
+                    return (
+                      <button key={tag} onClick={()=>toggleTag('wellTags',tag)}
+                        className="text-xs px-2.5 py-1 rounded-full"
+                        style={{background:on?'rgba(52,211,153,0.2)':'rgba(255,255,255,0.04)',
+                          color:on?'#6ee7b7':'#64748b',
+                          border:on?'1px solid rgba(52,211,153,0.35)':'1px solid rgba(255,255,255,0.06)'}}>
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-2" style={{color:'#f87171'}}>STRUGGLED WITH</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+                  {CASE_TAGS.map(tag=>{
+                    const on=(draft.struggleTags||[]).includes(tag);
+                    return (
+                      <button key={tag} onClick={()=>toggleTag('struggleTags',tag)}
+                        className="text-xs px-2.5 py-1 rounded-full"
+                        style={{background:on?'rgba(248,113,113,0.2)':'rgba(255,255,255,0.04)',
+                          color:on?'#fca5a5':'#64748b',
+                          border:on?'1px solid rgba(248,113,113,0.35)':'1px solid rgba(255,255,255,0.06)'}}>
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold mb-1" style={{color:'#818cf8'}}>TAKEAWAY FOR NEXT CASE</div>
+                <textarea value={draft.takeaway||''} onChange={e=>setDraft(d=>({...d,takeaway:e.target.value}))}
+                  rows={2} placeholder="What will you do differently next time?"
+                  className="w-full px-3 py-2 rounded-lg text-sm bg-transparent resize-none"
+                  style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'flex-end',gap:'10px',paddingTop:'4px'}}>
+                <button onClick={()=>setShowForm(false)} className="px-4 py-2 rounded-lg text-sm" style={{color:'#64748b'}}>Cancel</button>
+                <button onClick={save} className="px-5 py-2 rounded-lg text-sm font-semibold"
+                  style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>
+                  {editId?'Update':'Log Case'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ----------- Main ConsultingPanel ----------- */
 function ConsultingPanel({data, setData, toasts, isMobile}){
   const [subtab,setSubtab]=useState('home');
@@ -12870,7 +13499,7 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
 
   const goToDrill=(dim,type='')=>{setDrillInit({dim,type});setSubtab('drills');};
 
-  const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
+  const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'tracker',label:'Tracker'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
 
   return (
     <div>
@@ -12896,6 +13525,7 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
       {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
       {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
       {subtab==='learn'      &&<LearnSubtab/>}
+      {subtab==='tracker'    &&<CaseTrackerSubtab consulting={consulting} setConsulting={setConsulting} toasts={toasts}/>}
       {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onDrillFromError={goToDrill}/>}
     </div>
   );
