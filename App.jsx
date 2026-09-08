@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v94 executing');
+console.log('[Magverse] App.jsx v95 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -3768,346 +3768,704 @@ function NotesPanel({data, setData, toasts, isMobile}){
 }
 
 // ---- Notes Block Editor ----
+const NOTE_COLORS = {
+  default:null, gray:'#94a3b8', brown:'#b45309', orange:'#f97316',
+  yellow:'#ca8a04', green:'#22c55e', blue:'#60a5fa', purple:'#a855f7',
+  pink:'#ec4899', red:'#f87171'
+};
+const NOTE_BG_COLORS = {
+  default:null,
+  'gray-bg':'rgba(148,163,184,0.12)','brown-bg':'rgba(180,83,9,0.12)',
+  'orange-bg':'rgba(249,115,22,0.12)','yellow-bg':'rgba(202,138,4,0.12)',
+  'green-bg':'rgba(34,197,94,0.12)','blue-bg':'rgba(96,165,250,0.12)',
+  'purple-bg':'rgba(168,85,247,0.12)','pink-bg':'rgba(236,72,153,0.12)',
+  'red-bg':'rgba(239,68,68,0.12)'
+};
 const NOTE_BLOCK_TYPES = [
-  {type:'text',   icon:'T',   label:'Text',        desc:'Plain paragraph'},
-  {type:'h1',     icon:'H1',  label:'Heading 1',   desc:'Large header'},
-  {type:'h2',     icon:'H2',  label:'Heading 2',   desc:'Medium header'},
-  {type:'h3',     icon:'H3',  label:'Heading 3',   desc:'Small header'},
-  {type:'bullet', icon:'*',   label:'Bullet list', desc:'Unordered list'},
-  {type:'numbered',icon:'1.', label:'Numbered',    desc:'Ordered list'},
-  {type:'todo',   icon:'[ ]', label:'To-do',       desc:'Checkbox item'},
-  {type:'quote',  icon:'>',   label:'Quote',       desc:'Blockquote'},
-  {type:'divider',icon:'---', label:'Divider',     desc:'Horizontal line'},
-  {type:'code',   icon:'{}',  label:'Code',        desc:'Code block'},
+  {type:'text',    icon:'T',   label:'Text',       desc:'Plain paragraph',     aliases:['p','paragraph']},
+  {type:'h1',      icon:'H1',  label:'Heading 1',  desc:'Large header',        aliases:['heading','title','h','h1']},
+  {type:'h2',      icon:'H2',  label:'Heading 2',  desc:'Medium header',       aliases:['h2','subheading']},
+  {type:'h3',      icon:'H3',  label:'Heading 3',  desc:'Small header',        aliases:['h3']},
+  {type:'bullet',  icon:'*',   label:'Bullet',     desc:'Unordered list',      aliases:['list','ul','b','-']},
+  {type:'numbered',icon:'1.',  label:'Numbered',   desc:'Ordered list',        aliases:['ol','number','ordered']},
+  {type:'todo',    icon:'[ ]', label:'To-do',      desc:'Checkbox item',       aliases:['task','checkbox','check','action']},
+  {type:'toggle',  icon:'>',   label:'Toggle',     desc:'Collapsible section', aliases:['collapse','fold','expand']},
+  {type:'quote',   icon:'"',   label:'Quote',      desc:'Blockquote',          aliases:['blockquote','cite']},
+  {type:'callout', icon:'!',   label:'Callout',    desc:'Highlighted callout', aliases:['note','info','tip','warning','insight']},
+  {type:'divider', icon:'---', label:'Divider',    desc:'Horizontal line',     aliases:['hr','line','separator']},
+  {type:'code',    icon:'{}',  label:'Code',       desc:'Code block',          aliases:['snippet','pre','block']},
 ];
+const NOTE_ICONS = ['📝','💡','⭐','🎯','📌','🔍','💼','📚','🧠','✅','🎓','🏆','💬','🔗','📅','🌟','🎪','🔑','💎','🚀'];
+const CALLOUT_ICONS = ['💡','⚠','ℹ','✅','❌','🎯','📌','🔥','💬','❓'];
+
+function matchesSlashFilter(cmd, filter){
+  if(!filter) return true;
+  const f = filter.toLowerCase();
+  if(cmd.type.startsWith(f)) return true;
+  if(cmd.label.toLowerCase().startsWith(f)) return true;
+  if(cmd.label.toLowerCase().includes(f)) return true;
+  if(cmd.aliases && cmd.aliases.some(a=>a.startsWith(f)||a.includes(f))) return true;
+  return false;
+}
 
 function migrateNote(note){
-  if(note.blocks) return note;
-  return {...note, blocks: note.body
-    ? [{id:uid('bl'), type:'text', content:note.body, checked:false}]
-    : [{id:uid('bl'), type:'text', content:'', checked:false}]
+  if(note.blocks){
+    return {...note, blocks:note.blocks.map(b=>({indent:0,color:null,bgColor:null,collapsed:false,...b}))};
+  }
+  return {
+    ...note,
+    blocks: note.body
+      ? [{id:uid('bl'),type:'text',content:note.body,checked:false,indent:0,color:null,bgColor:null}]
+      : [{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}]
   };
 }
 
-function NoteEditor({note, onChange}){
-  const [title, setTitle] = useState(note.title||'');
-  const [blocks, setBlocks] = useState(()=>{
-    const m = migrateNote(note);
-    return (m.blocks && m.blocks.length > 0)
-      ? m.blocks
-      : [{id:uid('bl'), type:'text', content:'', checked:false}];
+function getVisibleBlocks(blocks, openToggles){
+  const visible = [];
+  let collapsedAt = -1;
+  for(const b of blocks){
+    const ind = b.indent || 0;
+    if(collapsedAt >= 0){ if(ind > collapsedAt) continue; else collapsedAt = -1; }
+    visible.push(b);
+    if(b.type === 'toggle' && !openToggles.has(b.id)) collapsedAt = ind;
+  }
+  return visible;
+}
+
+function NoteEditor({note, onChange, allNotes, onOpenNote}){
+  const [title,setTitle] = useState(note.title||'');
+  const [icon,setIcon] = useState(note.icon||'');
+  const [blocks,setBlocks] = useState(()=>{
+    const m=migrateNote(note);
+    return (m.blocks&&m.blocks.length>0)?m.blocks:[{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}];
   });
-  const [slashMenu, setSlashMenu] = useState(null); // {blockId, filter}
-  const [slashIdx, setSlashIdx] = useState(0);
+  const [slashMenu,setSlashMenu] = useState(null);
+  const [slashIdx,setSlashIdx] = useState(0);
+  const [linkMenu,setLinkMenu] = useState(null);
+  const [linkIdx,setLinkIdx] = useState(0);
+  const [blockMenu,setBlockMenu] = useState(null);
+  const [openToggles,setOpenToggles] = useState(new Set());
+  const [hoveredId,setHoveredId] = useState(null);
+  const [dragId,setDragId] = useState(null);
+  const [dragOverId,setDragOverId] = useState(null);
+  const [iconPickerOpen,setIconPickerOpen] = useState(false);
   const taRefs = useRef({});
   const saveTimer = useRef(null);
   const titleRef = useRef(null);
 
-  // Reset when note id changes
   useEffect(()=>{
-    const m = migrateNote(note);
-    setTitle(note.title||'');
-    setBlocks((m.blocks && m.blocks.length > 0) ? m.blocks : [{id:uid('bl'),type:'text',content:'',checked:false}]);
-    setSlashMenu(null);
-    setSlashIdx(0);
-  }, [note.id]); // eslint-disable-line
+    const m=migrateNote(note);
+    setTitle(note.title||''); setIcon(note.icon||'');
+    setBlocks((m.blocks&&m.blocks.length>0)?m.blocks:[{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}]);
+    setSlashMenu(null); setLinkMenu(null); setBlockMenu(null); setOpenToggles(new Set());
+  },[note.id]); // eslint-disable-line
 
-  // Auto-resize all textareas after blocks change
   useEffect(()=>{
-    Object.values(taRefs.current).forEach(el=>{
-      if(el){el.style.height='auto';el.style.height=el.scrollHeight+'px';}
-    });
+    Object.values(taRefs.current).forEach(el=>{ if(el){el.style.height='auto';el.style.height=el.scrollHeight+'px';} });
     if(titleRef.current){titleRef.current.style.height='auto';titleRef.current.style.height=titleRef.current.scrollHeight+'px';}
   });
 
-  function scheduleSave(t, bl){
-    if(saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(()=>{
-      const autoTitle = t.trim() || (bl.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,60)) || 'Untitled';
-      onChange({...note, title: t || autoTitle, blocks: bl, updatedAt: new Date().toISOString()});
-    }, 400);
-  }
+  useEffect(()=>{
+    const h=()=>setBlockMenu(null);
+    document.addEventListener('mousedown',h);
+    return ()=>document.removeEventListener('mousedown',h);
+  },[]);
 
-  function updateBlock(id, patch){
-    const nb = blocks.map(b=>b.id===id?{...b,...patch}:b);
-    setBlocks(nb);
-    scheduleSave(title, nb);
-  }
+  function save(t,bl,ic){ onChange({...note,title:t.trim()||(bl.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,60))||'Untitled',icon:ic!==undefined?ic:icon,blocks:bl,updatedAt:new Date().toISOString()}); }
+  function scheduleSave(t,bl,ic){ if(saveTimer.current) clearTimeout(saveTimer.current); saveTimer.current=setTimeout(()=>save(t,bl,ic),400); }
 
-  function addBlockAfter(afterId, type){
-    const t = type || 'text';
-    const newId = uid('bl');
-    const idx = blocks.findIndex(b=>b.id===afterId);
-    const newBlock = {id:newId, type:t, content:'', checked:false};
-    const next = [...blocks.slice(0,idx+1), newBlock, ...blocks.slice(idx+1)];
-    setBlocks(next);
-    scheduleSave(title, next);
-    setTimeout(()=>{ const el=taRefs.current[newId]; if(el) el.focus(); }, 0);
+  function updateBlock(id,patch){ const nb=blocks.map(b=>b.id===id?{...b,...patch}:b); setBlocks(nb); scheduleSave(title,nb,icon); }
+  function addBlockAfter(afterId,type,extraFields){
+    const newId=uid('bl'); const idx=blocks.findIndex(b=>b.id===afterId);
+    const parentIndent=blocks[idx]?.indent||0;
+    const nb=[...blocks.slice(0,idx+1),{id:newId,type:type||'text',content:'',checked:false,indent:parentIndent,...(extraFields||{})},  ...blocks.slice(idx+1)];
+    setBlocks(nb); scheduleSave(title,nb,icon);
+    setTimeout(()=>{ const el=taRefs.current[newId]; if(el) el.focus(); },0);
   }
-
   function deleteBlock(id){
-    if(blocks.length <= 1){ updateBlock(id,{content:'',type:'text'}); return; }
-    const idx = blocks.findIndex(b=>b.id===id);
-    const prev = blocks[idx-1];
-    const next = blocks.filter(b=>b.id!==id);
-    setBlocks(next);
-    scheduleSave(title, next);
+    if(blocks.length<=1){updateBlock(id,{content:'',type:'text'});return;}
+    const idx=blocks.findIndex(b=>b.id===id); const prev=blocks[idx-1];
+    const nb=blocks.filter(b=>b.id!==id); setBlocks(nb); scheduleSave(title,nb,icon);
     if(prev) setTimeout(()=>{ const el=taRefs.current[prev.id]; if(el){el.focus();el.selectionStart=el.selectionEnd=el.value.length;} },0);
   }
+  function duplicateBlock(id){ const idx=blocks.findIndex(b=>b.id===id); const nb=[...blocks.slice(0,idx+1),{...blocks[idx],id:uid('bl')},...blocks.slice(idx+1)]; setBlocks(nb); scheduleSave(title,nb,icon); }
+  function moveBlock(id,dir){ const idx=blocks.findIndex(b=>b.id===id); if(dir==='up'&&idx<=0||dir==='down'&&idx>=blocks.length-1) return; const nb=[...blocks]; const si=dir==='up'?idx-1:idx+1; [nb[idx],nb[si]]=[nb[si],nb[idx]]; setBlocks(nb); scheduleSave(title,nb,icon); }
 
-  const slashFilter = slashMenu ? slashMenu.filter.toLowerCase() : '';
-  const filteredCmds = NOTE_BLOCK_TYPES.filter(c=>
-    !slashFilter || c.label.toLowerCase().startsWith(slashFilter) || c.type.startsWith(slashFilter)
-  );
-  const effectiveSlashIdx = Math.min(slashIdx, Math.max(0, filteredCmds.length-1));
+  function handleDragStart(e,id){ e.stopPropagation(); setDragId(id); e.dataTransfer.effectAllowed='move'; }
+  function handleDragOver(e,id){ e.preventDefault(); e.dataTransfer.dropEffect='move'; if(id!==dragOverId) setDragOverId(id); }
+  function handleDrop(e,targetId){ e.preventDefault(); if(!dragId||dragId===targetId){setDragId(null);setDragOverId(null);return;} const fi=blocks.findIndex(b=>b.id===dragId); const ti=blocks.findIndex(b=>b.id===targetId); const nb=[...blocks]; const [moved]=nb.splice(fi,1); nb.splice(ti>fi?ti:ti,0,moved); setBlocks(nb); scheduleSave(title,nb,icon); setDragId(null); setDragOverId(null); }
+  function handleDragEnd(){ setDragId(null); setDragOverId(null); }
 
-  function applySlashCmd(type, blockId){
-    const nb = blocks.map(b=>b.id===blockId?{...b,type,content:''}:b);
-    setBlocks(nb);
-    setSlashMenu(null);
-    scheduleSave(title, nb);
+  const slashFilter=slashMenu?slashMenu.filter:'';
+  const filteredCmds=NOTE_BLOCK_TYPES.filter(c=>matchesSlashFilter(c,slashFilter));
+  const slashEff=Math.min(slashIdx,Math.max(0,filteredCmds.length-1));
+
+  function applySlashCmd(type,blockId){
+    const extraFields = type==='callout'?{calloutIcon:'💡',bgColor:'purple-bg'}:{};
+    const nb=blocks.map(b=>b.id===blockId?{...b,type,content:'',...extraFields}:b);
+    setBlocks(nb); setSlashMenu(null); scheduleSave(title,nb,icon);
     setTimeout(()=>{ const el=taRefs.current[blockId]; if(el) el.focus(); },0);
   }
 
-  function handleBlockKeyDown(e, block){
-    if(slashMenu && slashMenu.blockId===block.id){
-      if(e.key==='ArrowDown'){e.preventDefault();setSlashIdx(i=>Math.min(i+1,filteredCmds.length-1));return;}
-      if(e.key==='ArrowUp'){e.preventDefault();setSlashIdx(i=>Math.max(i-1,0));return;}
-      if(e.key==='Enter'){e.preventDefault();if(filteredCmds[effectiveSlashIdx]) applySlashCmd(filteredCmds[effectiveSlashIdx].type,block.id);return;}
-      if(e.key==='Escape'){setSlashMenu(null);return;}
-    }
-    if(e.key==='Enter' && !e.shiftKey && block.type!=='code'){
-      e.preventDefault();
-      const isListType = ['bullet','numbered','todo'].includes(block.type);
-      const nextType = (isListType && block.content.trim()) ? block.type : 'text';
-      if(isListType && !block.content.trim()){
-        updateBlock(block.id,{type:'text'});
-      } else {
-        addBlockAfter(block.id, nextType);
-      }
-      return;
-    }
-    if(e.key==='Backspace' && block.content==='' && blocks.length>1){
-      e.preventDefault(); deleteBlock(block.id); return;
-    }
-    if(e.key==='ArrowUp'){
-      const el=taRefs.current[block.id];
-      if(el && el.selectionStart===0){
-        e.preventDefault();
-        const idx=blocks.findIndex(b=>b.id===block.id);
-        if(idx>0){ const pEl=taRefs.current[blocks[idx-1].id]; if(pEl){pEl.focus();pEl.selectionStart=pEl.selectionEnd=pEl.value.length;} }
-      }
-    }
-    if(e.key==='ArrowDown'){
-      const el=taRefs.current[block.id];
-      if(el && el.selectionStart===el.value.length){
-        e.preventDefault();
-        const idx=blocks.findIndex(b=>b.id===block.id);
-        if(idx<blocks.length-1){ const nEl=taRefs.current[blocks[idx+1].id]; if(nEl){nEl.focus();nEl.selectionStart=0;} }
-      }
-    }
+  const linkQuery=linkMenu?linkMenu.query.toLowerCase():'';
+  const filteredLinks=(allNotes||[]).filter(n=>n.id!==note.id&&!n.trashed&&(linkQuery?(n.title||'').toLowerCase().includes(linkQuery):true)).slice(0,6);
+
+  function applyLinkCmd(noteTitle,blockId){
+    const b=blocks.find(b=>b.id===blockId); if(!b) return;
+    const pos=b.content.lastIndexOf('[[');
+    const nc=b.content.slice(0,pos)+'[['+noteTitle+']]';
+    updateBlock(blockId,{content:nc}); setLinkMenu(null);
+    setTimeout(()=>{ const el=taRefs.current[blockId]; if(el){el.focus();el.selectionStart=el.selectionEnd=nc.length;} },0);
   }
 
-  function handleBlockChange(e, block){
-    const val = e.target.value;
-    // Slash command
-    if(val.startsWith('/') && !val.includes(' ')){
-      setSlashMenu({blockId:block.id, filter:val.slice(1)});
-      setSlashIdx(0);
-    } else if(slashMenu && slashMenu.blockId===block.id){
-      setSlashMenu(null);
+  const backlinks=(allNotes||[]).filter(n=>n.id!==note.id&&!n.trashed&&(n.blocks||[]).some(b=>b.content&&b.content.includes('[[' + (note.title||'') + ']]')));
+
+  function blockTextStyle(block){
+    const color=NOTE_COLORS[block.color]||null;
+    const t=block.type;
+    if(t==='h1') return {fontSize:'1.75rem',fontWeight:700,lineHeight:1.2,color:color||'#e2e8f0'};
+    if(t==='h2') return {fontSize:'1.35rem',fontWeight:600,lineHeight:1.3,color:color||'#e2e8f0'};
+    if(t==='h3') return {fontSize:'1.1rem',fontWeight:600,lineHeight:1.4,color:color||'#cbd5e1'};
+    if(t==='quote') return {fontSize:'0.9rem',lineHeight:1.7,color:color||'#94a3b8',fontStyle:'italic'};
+    if(t==='code') return {fontSize:'0.82rem',lineHeight:1.6,color:color||'#a5b4fc',fontFamily:'monospace'};
+    if(t==='callout') return {fontSize:'0.9rem',lineHeight:1.7,color:color||'#e2e8f0'};
+    return {fontSize:'0.9rem',lineHeight:1.7,color:color||'#e2e8f0'};
+  }
+
+  function handleBlockKeyDown(e,block){
+    if(slashMenu&&slashMenu.blockId===block.id){
+      if(e.key==='ArrowDown'){e.preventDefault();setSlashIdx(i=>Math.min(i+1,filteredCmds.length-1));return;}
+      if(e.key==='ArrowUp'){e.preventDefault();setSlashIdx(i=>Math.max(i-1,0));return;}
+      if(e.key==='Enter'){e.preventDefault();if(filteredCmds[slashEff]) applySlashCmd(filteredCmds[slashEff].type,block.id);return;}
+      if(e.key==='Escape'){setSlashMenu(null);return;}
     }
-    // Markdown shortcuts (trailing space on text block)
-    if(!val.startsWith('/') && val.endsWith(' ') && block.type==='text'){
-      const trimmed = val.trimEnd();
-      const MAP = {'#':'h1','##':'h2','###':'h3','-':'bullet','1.':'numbered','>':'quote','[]':'todo','[ ]':'todo'};
-      const newType = MAP[trimmed];
-      if(newType){
-        const nb = blocks.map(b=>b.id===block.id?{...b,type:newType,content:''}:b);
-        setBlocks(nb); scheduleSave(title,nb); return;
+    if(linkMenu&&linkMenu.blockId===block.id){
+      if(e.key==='ArrowDown'){e.preventDefault();setLinkIdx(i=>Math.min(i+1,filteredLinks.length-1));return;}
+      if(e.key==='ArrowUp'){e.preventDefault();setLinkIdx(i=>Math.max(i-1,0));return;}
+      if(e.key==='Enter'&&filteredLinks.length>0){e.preventDefault();applyLinkCmd(filteredLinks[linkIdx].title||'Untitled',block.id);return;}
+      if(e.key==='Escape'){setLinkMenu(null);return;}
+    }
+    if(e.key==='Tab'){
+      e.preventDefault();
+      const idx=blocks.findIndex(b=>b.id===block.id);
+      const maxI=idx>0?(blocks[idx-1].indent||0)+1:0;
+      if(!e.shiftKey&&(block.indent||0)<4&&(block.indent||0)<=maxI) updateBlock(block.id,{indent:(block.indent||0)+1});
+      else if(e.shiftKey&&(block.indent||0)>0) updateBlock(block.id,{indent:(block.indent||0)-1});
+      return;
+    }
+    if(e.key==='Enter'&&!e.shiftKey&&block.type!=='code'){
+      e.preventDefault();
+      if(block.type==='toggle'){
+        const newId=uid('bl'); const idx=blocks.findIndex(b=>b.id===block.id);
+        const nb=[...blocks.slice(0,idx+1),{id:newId,type:'text',content:'',checked:false,indent:(block.indent||0)+1,color:null,bgColor:null},...blocks.slice(idx+1)];
+        setBlocks(nb); scheduleSave(title,nb,icon);
+        setOpenToggles(s=>{const ns=new Set(s);ns.add(block.id);return ns;});
+        setTimeout(()=>{ const el=taRefs.current[newId]; if(el) el.focus(); },0);
+        return;
       }
+      const isList=['bullet','numbered','todo'].includes(block.type);
+      const nextType=(isList&&block.content.trim())?block.type:'text';
+      if(isList&&!block.content.trim()) updateBlock(block.id,{type:'text'});
+      else addBlockAfter(block.id,nextType);
+      return;
+    }
+    if(e.key==='Backspace'&&block.content===''&&blocks.length>1){e.preventDefault();deleteBlock(block.id);return;}
+    if(e.key==='ArrowUp'){const el=taRefs.current[block.id]; if(el&&el.selectionStart===0){e.preventDefault();const idx=blocks.findIndex(b=>b.id===block.id);if(idx>0){const pEl=taRefs.current[blocks[idx-1].id];if(pEl){pEl.focus();pEl.selectionStart=pEl.selectionEnd=pEl.value.length;}}}}
+    if(e.key==='ArrowDown'){const el=taRefs.current[block.id]; if(el&&el.selectionStart===el.value.length){e.preventDefault();const idx=blocks.findIndex(b=>b.id===block.id);if(idx<blocks.length-1){const nEl=taRefs.current[blocks[idx+1].id];if(nEl){nEl.focus();nEl.selectionStart=0;}}}}
+  }
+
+  function handleBlockChange(e,block){
+    const val=e.target.value;
+    if(val.startsWith('/')&&!val.includes(' ')){ setSlashMenu({blockId:block.id,filter:val.slice(1)}); setSlashIdx(0); }
+    else if(slashMenu&&slashMenu.blockId===block.id) setSlashMenu(null);
+    const llPos=val.lastIndexOf('[[');
+    if(llPos>=0&&!val.slice(llPos).includes(']]')){ setLinkMenu({blockId:block.id,query:val.slice(llPos+2)}); setLinkIdx(0); }
+    else if(linkMenu&&linkMenu.blockId===block.id) setLinkMenu(null);
+    if(!val.startsWith('/')&&val.endsWith(' ')&&block.type==='text'){
+      const trimmed=val.trimEnd();
+      const MAP={'#':'h1','##':'h2','###':'h3','-':'bullet','*':'bullet','1.':'numbered','>':'quote','[]':'todo','[ ]':'todo','```':'code'};
+      const newType=MAP[trimmed];
+      if(newType){const nb=blocks.map(b=>b.id===block.id?{...b,type:newType,content:''}:b);setBlocks(nb);scheduleSave(title,nb,icon);return;}
+      if(trimmed==='---'){const nb=blocks.map(b=>b.id===block.id?{...b,type:'divider',content:''}:b);setBlocks(nb);scheduleSave(title,nb,icon);return;}
     }
     updateBlock(block.id,{content:val});
   }
 
-  function blockStyle(type){
-    if(type==='h1') return {fontSize:'1.75rem',fontWeight:700,lineHeight:1.2,color:'#e2e8f0'};
-    if(type==='h2') return {fontSize:'1.35rem',fontWeight:600,lineHeight:1.3,color:'#e2e8f0'};
-    if(type==='h3') return {fontSize:'1.1rem',fontWeight:600,lineHeight:1.4,color:'#cbd5e1'};
-    if(type==='quote') return {fontSize:'0.9rem',lineHeight:1.7,color:'#94a3b8',fontStyle:'italic'};
-    if(type==='code') return {fontSize:'0.82rem',lineHeight:1.6,color:'#a5b4fc',fontFamily:'monospace'};
-    return {fontSize:'0.9rem',lineHeight:1.7,color:'#e2e8f0'};
-  }
+  const visibleBlocks=getVisibleBlocks(blocks,openToggles);
 
   return (
-    <div style={{flex:1,overflowY:'auto',padding:'36px 48px 80px',maxWidth:'740px'}}>
-      <textarea ref={titleRef} value={title}
-        onChange={e=>{setTitle(e.target.value);scheduleSave(e.target.value,blocks);}}
-        placeholder="Untitled"
-        className="w-full bg-transparent outline-none resize-none font-bold"
-        style={{fontSize:'2rem',color:'#e2e8f0',border:'none',marginBottom:'28px',lineHeight:1.15,minHeight:'48px',display:'block'}}
-        rows={1}/>
-      <div style={{display:'flex',flexDirection:'column',gap:'2px'}}>
-        {blocks.map((block, bIdx)=>(
-          <div key={block.id} style={{position:'relative'}}>
-            {block.type==='divider' ? (
-              <div style={{padding:'8px 0',cursor:'default'}} onClick={()=>{ if(blocks.length>1) deleteBlock(block.id); }}>
-                <div style={{borderTop:'1px solid rgba(255,255,255,0.1)'}}/>
+    <div style={{flex:1,overflowY:'auto',padding:'36px 48px 80px',maxWidth:'740px',position:'relative'}}>
+      {/* Icon + Title */}
+      <div style={{marginBottom:'24px',position:'relative'}}>
+        <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
+          <div onClick={()=>setIconPickerOpen(p=>!p)} title={icon?'Change icon':'Add icon'}
+            style={{fontSize:'1.5rem',cursor:'pointer',userSelect:'none',lineHeight:1,opacity:icon?1:0.25,minWidth:'32px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'6px',padding:'2px'}}>
+            {icon||'&#128196;'}
+          </div>
+          {iconPickerOpen && (
+            <div onMouseDown={e=>e.stopPropagation()} style={{position:'absolute',top:'100%',left:0,zIndex:80,background:'#1a1a24',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'12px',padding:'10px',display:'flex',flexWrap:'wrap',gap:'6px',boxShadow:'0 12px 32px rgba(0,0,0,0.7)',width:'220px'}}>
+              <div onMouseDown={e=>{e.stopPropagation();setIcon('');setIconPickerOpen(false);scheduleSave(title,blocks,'');}} style={{padding:'3px 8px',borderRadius:'6px',fontSize:'0.72rem',color:'#64748b',cursor:'pointer',background:'rgba(255,255,255,0.05)'}}>None</div>
+              {NOTE_ICONS.map(em=>(
+                <div key={em} onMouseDown={e=>{e.stopPropagation();setIcon(em);setIconPickerOpen(false);scheduleSave(title,blocks,em);}} style={{fontSize:'1.2rem',cursor:'pointer',padding:'3px',borderRadius:'4px',lineHeight:1}}>{em}</div>
+              ))}
+            </div>
+          )}
+        </div>
+        <textarea ref={titleRef} value={title} onChange={e=>{setTitle(e.target.value);scheduleSave(e.target.value,blocks,icon);}}
+          placeholder="Untitled" className="w-full bg-transparent outline-none resize-none font-bold"
+          style={{fontSize:'2rem',color:'#e2e8f0',border:'none',lineHeight:1.15,minHeight:'48px',display:'block'}} rows={1}/>
+        {!title&&!blocks.find(b=>b.content) && (
+          <div style={{fontSize:'0.82rem',color:'#334155',marginTop:'4px'}}>Type '/' for commands, '[[' to link a note</div>
+        )}
+      </div>
+
+      {/* Blocks */}
+      <div style={{display:'flex',flexDirection:'column',gap:'1px'}}>
+        {visibleBlocks.map((block,bIdx)=>{
+          const isHovered=hoveredId===block.id;
+          const isDragging=dragId===block.id;
+          const isDragOver=dragOverId===block.id;
+          const indentPx=(block.indent||0)*24;
+          const bgColor=NOTE_BG_COLORS[block.bgColor]||null;
+          const textColor=NOTE_COLORS[block.color]||null;
+
+          // Divider
+          if(block.type==='divider') return (
+            <div key={block.id} onMouseEnter={()=>setHoveredId(block.id)} onMouseLeave={()=>setHoveredId(null)}
+              onDragOver={e=>handleDragOver(e,block.id)} onDrop={e=>handleDrop(e,block.id)}
+              style={{padding:'8px 0',paddingLeft:indentPx,cursor:'default',borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',opacity:isDragging?0.4:1}}>
+              <div style={{borderTop:'1px solid rgba(255,255,255,0.1)'}}/>
+            </div>
+          );
+
+          // Toggle block
+          if(block.type==='toggle'){
+            const isOpen=openToggles.has(block.id);
+            return (
+              <div key={block.id} onMouseEnter={()=>setHoveredId(block.id)} onMouseLeave={()=>setHoveredId(null)}
+                onDragOver={e=>handleDragOver(e,block.id)} onDrop={e=>handleDrop(e,block.id)}
+                style={{position:'relative',paddingLeft:indentPx,borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',opacity:isDragging?0.4:1,background:bgColor||'transparent',borderRadius:bgColor?'6px':0}}>
+                <div style={{display:'flex',alignItems:'flex-start',gap:'4px'}}>
+                  <span draggable onDragStart={e=>handleDragStart(e,block.id)} onDragEnd={handleDragEnd} onMouseDown={e=>e.stopPropagation()}
+                    style={{opacity:isHovered?0.6:0,transition:'opacity 0.1s',cursor:'grab',color:'#475569',fontSize:'11px',userSelect:'none',flexShrink:0,paddingTop:'5px',marginLeft:'-18px',width:'16px',textAlign:'center'}}>
+                    &#8942;&#8942;
+                  </span>
+                  <span onClick={()=>setOpenToggles(s=>{const ns=new Set(s);ns.has(block.id)?ns.delete(block.id):ns.add(block.id);return ns;})}
+                    style={{cursor:'pointer',color:'#64748b',fontSize:'10px',flexShrink:0,paddingTop:'6px',width:'16px',userSelect:'none',transition:'transform 0.15s',transform:isOpen?'rotate(90deg)':'rotate(0deg)',display:'inline-block',textAlign:'center'}}>
+                    &#9654;
+                  </span>
+                  <textarea ref={el=>{taRefs.current[block.id]=el;}} value={block.content} onChange={e=>handleBlockChange(e,block)} onKeyDown={e=>handleBlockKeyDown(e,block)}
+                    placeholder="Toggle..." className="flex-1 bg-transparent outline-none resize-none"
+                    style={{fontSize:'0.9rem',fontWeight:500,lineHeight:1.7,color:textColor||'#e2e8f0',border:'none',padding:'1px 0'}} rows={1}/>
+                  {isHovered && (
+                    <button onMouseDown={e=>{e.stopPropagation();e.preventDefault();const rect=e.currentTarget.getBoundingClientRect();setBlockMenu(p=>p&&p.blockId===block.id?null:{blockId:block.id,x:rect.left,y:rect.bottom,showTurnInto:false,showColor:false});}}
+                      style={{opacity:0.5,cursor:'pointer',color:'#475569',fontSize:'14px',padding:'0 4px',flexShrink:0,lineHeight:'1.7',background:'none',border:'none'}}>&#8943;</button>
+                  )}
+                </div>
+                {slashMenu&&slashMenu.blockId===block.id&&filteredCmds.length>0&&<SlashDropdown cmds={filteredCmds} eff={slashEff} onApply={t=>applySlashCmd(t,block.id)}/>}
               </div>
-            ) : (
-              <div style={{display:'flex',alignItems:'flex-start',paddingLeft: block.type==='quote'?'14px':0,
-                borderLeft: block.type==='quote'?'3px solid #6366f1':'none'}}>
-                {block.type==='bullet' && <span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',userSelect:'none'}}>&#x2022;</span>}
-                {block.type==='numbered' && <span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',minWidth:'20px',userSelect:'none'}}>{blocks.slice(0,bIdx+1).filter(b=>b.type==='numbered').length}.</span>}
-                {block.type==='todo' && <input type="checkbox" checked={!!block.checked} onChange={e=>updateBlock(block.id,{checked:e.target.checked})} style={{marginRight:'8px',flexShrink:0,marginTop:'5px',cursor:'pointer',accentColor:'#6366f1'}}/>}
-                {block.type==='code' ? (
-                  <textarea
-                    ref={el=>{taRefs.current[block.id]=el;}}
-                    value={block.content}
-                    onChange={e=>handleBlockChange(e,block)}
-                    onKeyDown={e=>handleBlockKeyDown(e,block)}
-                    placeholder={bIdx===0&&!block.content?"Start writing or type '/' for commands…":""}
+            );
+          }
+
+          // Regular block
+          const isCallout=block.type==='callout';
+          const isQuote=block.type==='quote';
+          const isTodo=block.type==='todo';
+
+          return (
+            <div key={block.id} onMouseEnter={()=>setHoveredId(block.id)} onMouseLeave={()=>setHoveredId(null)}
+              onDragOver={e=>handleDragOver(e,block.id)} onDrop={e=>handleDrop(e,block.id)}
+              style={{position:'relative',paddingLeft:indentPx,borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',opacity:isDragging?0.4:1}}>
+              <div style={{display:'flex',alignItems:'flex-start',background:isCallout?(bgColor||'rgba(99,102,241,0.08)'):(bgColor||'transparent'),borderRadius:(isCallout||bgColor)?'6px':0,padding:isCallout?'6px 10px':(bgColor?'2px 6px':'0'),borderLeft:isQuote?'3px solid #6366f1':'none',paddingLeft:isQuote?'14px':undefined}}>
+                {/* Drag handle */}
+                <span draggable onDragStart={e=>handleDragStart(e,block.id)} onDragEnd={handleDragEnd} onMouseDown={e=>e.stopPropagation()}
+                  style={{opacity:isHovered?0.6:0,transition:'opacity 0.1s',cursor:'grab',color:'#475569',fontSize:'11px',userSelect:'none',flexShrink:0,paddingTop:'5px',marginLeft:isQuote?'-2px':'-18px',width:'16px',textAlign:'center'}}>
+                  &#8942;&#8942;
+                </span>
+                {/* Callout icon */}
+                {isCallout && (
+                  <span style={{fontSize:'1rem',flexShrink:0,marginRight:'8px',lineHeight:'1.7',cursor:'pointer'}} title="Change icon"
+                    onClick={()=>{ const icons=CALLOUT_ICONS; const cur=block.calloutIcon||'💡'; const ni=icons[(icons.indexOf(cur)+1)%icons.length]; updateBlock(block.id,{calloutIcon:ni}); }}>
+                    {block.calloutIcon||'💡'}
+                  </span>
+                )}
+                {/* List prefix */}
+                {block.type==='bullet'&&<span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',userSelect:'none'}}>&#x2022;</span>}
+                {block.type==='numbered'&&<span style={{color:'#6366f1',marginRight:'8px',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',minWidth:'20px',userSelect:'none'}}>{visibleBlocks.slice(0,bIdx+1).filter(b=>b.type==='numbered').length}.</span>}
+                {isTodo&&<input type="checkbox" checked={!!block.checked} onChange={e=>updateBlock(block.id,{checked:e.target.checked})} style={{marginRight:'8px',flexShrink:0,marginTop:'5px',cursor:'pointer',accentColor:'#6366f1'}}/>}
+                {/* Textarea */}
+                {block.type==='code'?(
+                  <textarea ref={el=>{taRefs.current[block.id]=el;}} value={block.content} onChange={e=>handleBlockChange(e,block)} onKeyDown={e=>handleBlockKeyDown(e,block)}
+                    placeholder={bIdx===0&&!block.content?"Code...":""}
                     className="w-full outline-none resize-none"
-                    style={{...blockStyle(block.type),background:'rgba(255,255,255,0.04)',padding:'10px 14px',borderRadius:'8px',border:'1px solid rgba(255,255,255,0.07)',minHeight:'60px'}}
-                    rows={1}/>
-                ) : (
-                  <textarea
-                    ref={el=>{taRefs.current[block.id]=el;}}
-                    value={block.content}
-                    onChange={e=>handleBlockChange(e,block)}
-                    onKeyDown={e=>handleBlockKeyDown(e,block)}
-                    placeholder={bIdx===0&&!block.content?"Start writing or type '/' for commands…":""}
-                    className="w-full bg-transparent outline-none resize-none"
-                    style={{...blockStyle(block.type),border:'none',padding:'1px 0',display:'block'}}
-                    rows={1}/>
+                    style={{...blockTextStyle(block),background:'rgba(255,255,255,0.04)',padding:'10px 14px',borderRadius:'8px',border:'1px solid rgba(255,255,255,0.07)',minHeight:'60px'}} rows={1}/>
+                ):(
+                  <textarea ref={el=>{taRefs.current[block.id]=el;}} value={block.content} onChange={e=>handleBlockChange(e,block)} onKeyDown={e=>handleBlockKeyDown(e,block)}
+                    placeholder={bIdx===0&&blocks.length===1&&!block.content?"Start writing or '/' for commands…":""}
+                    className="flex-1 bg-transparent outline-none resize-none"
+                    style={{...blockTextStyle(block),border:'none',padding:'1px 0',display:'block',textDecoration:isTodo&&block.checked?'line-through':'none',opacity:isTodo&&block.checked?0.45:1}} rows={1}/>
+                )}
+                {/* Block options button */}
+                {isHovered&&(
+                  <button onMouseDown={e=>{e.stopPropagation();e.preventDefault();const rect=e.currentTarget.getBoundingClientRect();setBlockMenu(p=>p&&p.blockId===block.id?null:{blockId:block.id,x:rect.left,y:rect.bottom,showTurnInto:false,showColor:false});}}
+                    style={{opacity:0.5,cursor:'pointer',color:'#475569',fontSize:'14px',padding:'0 4px',flexShrink:0,lineHeight:'1.7',background:'none',border:'none'}}>&#8943;</button>
                 )}
               </div>
-            )}
-            {slashMenu && slashMenu.blockId===block.id && filteredCmds.length>0 && (
-              <div className="glass" style={{position:'absolute',zIndex:60,top:'100%',left:0,minWidth:'210px',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.1)',boxShadow:'0 12px 32px rgba(0,0,0,0.7)',overflow:'hidden'}}>
-                {filteredCmds.slice(0,8).map((cmd,ci)=>(
-                  <div key={cmd.type}
-                    onMouseDown={e=>{e.preventDefault();applySlashCmd(cmd.type,block.id);}}
-                    style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',background:ci===effectiveSlashIdx?'rgba(99,102,241,0.25)':'transparent'}}>
-                    <span style={{width:'28px',fontSize:'0.72rem',fontWeight:700,color:'#818cf8',fontFamily:'monospace',flexShrink:0}}>{cmd.icon}</span>
-                    <div>
-                      <div style={{fontSize:'0.8rem',fontWeight:500,color:'#e2e8f0'}}>{cmd.label}</div>
-                      <div style={{fontSize:'0.68rem',color:'#64748b'}}>{cmd.desc}</div>
+              {/* Slash menu */}
+              {slashMenu&&slashMenu.blockId===block.id&&filteredCmds.length>0&&<SlashDropdown cmds={filteredCmds} eff={slashEff} onApply={t=>applySlashCmd(t,block.id)}/>}
+              {/* [[ link menu */}
+              {linkMenu&&linkMenu.blockId===block.id&&filteredLinks.length>0&&(
+                <div className="glass" style={{position:'absolute',zIndex:60,top:'100%',left:indentPx,minWidth:'200px',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.1)',boxShadow:'0 12px 32px rgba(0,0,0,0.7)',overflow:'hidden'}}>
+                  {filteredLinks.map((n,li)=>(
+                    <div key={n.id} onMouseDown={e=>{e.preventDefault();applyLinkCmd(n.title||'Untitled',block.id);}}
+                      style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'8px',cursor:'pointer',background:li===linkIdx?'rgba(99,102,241,0.25)':'transparent'}}>
+                      <span style={{fontSize:'0.9rem'}}>{n.icon||'&#128196;'}</span>
+                      <div style={{fontSize:'0.8rem',color:'#e2e8f0'}}>{n.title||'Untitled'}</div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      <div style={{minHeight:'100px',cursor:'text'}} onClick={()=>{
+
+      {/* Click-to-add at bottom */}
+      <div style={{minHeight:'80px',cursor:'text'}} onClick={()=>{
         const last=blocks[blocks.length-1];
         if(!last) return;
-        if(last.content!=='') addBlockAfter(last.id,'text');
+        if(last.content!==''||last.type==='divider') addBlockAfter(last.id,'text');
         else { setTimeout(()=>{ const el=taRefs.current[last.id]; if(el) el.focus(); },0); }
       }}/>
+
+      {/* Backlinks */}
+      {backlinks.length>0&&(
+        <div style={{borderTop:'1px solid rgba(255,255,255,0.06)',paddingTop:'16px',marginTop:'8px'}}>
+          <div style={{fontSize:'0.68rem',color:'#334155',marginBottom:'8px',fontWeight:600,letterSpacing:'0.08em',textTransform:'uppercase'}}>
+            Linked from {backlinks.length} {backlinks.length===1?'page':'pages'}
+          </div>
+          {backlinks.map(n=>(
+            <div key={n.id} onClick={()=>onOpenNote&&onOpenNote(n.id)}
+              style={{display:'flex',alignItems:'center',gap:'6px',padding:'4px 0',cursor:'pointer',color:'#818cf8',fontSize:'0.82rem'}}>
+              <span style={{fontSize:'0.85rem'}}>{n.icon||'&#128196;'}</span>
+              {n.title||'Untitled'}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Block context menu */}
+      {blockMenu&&(
+        <div onMouseDown={e=>e.stopPropagation()} style={{position:'fixed',top:blockMenu.y+4,left:blockMenu.x,zIndex:90,background:'#111118',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'10px',boxShadow:'0 16px 40px rgba(0,0,0,0.8)',minWidth:'180px',padding:'4px 0',overflow:'visible'}}>
+          {(()=>{
+            const bm=blocks.find(b=>b.id===blockMenu.blockId); if(!bm) return null;
+            return (<>
+              {[['Move up','&#8679;',()=>moveBlock(bm.id,'up')],['Move down','&#8681;',()=>moveBlock(bm.id,'down')],['Duplicate','+',()=>duplicateBlock(bm.id)]].map(([label,icon,fn])=>(
+                <div key={label} onClick={()=>{fn();setBlockMenu(null);}} style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1',display:'flex',gap:'10px',alignItems:'center'}} className="hover:bg-white/5">
+                  <span style={{color:'#64748b',fontSize:'12px'}} dangerouslySetInnerHTML={{__html:icon}}/>{label}
+                </div>
+              ))}
+              <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',margin:'4px 0'}}/>
+              <div onClick={()=>setBlockMenu(p=>({...p,showTurnInto:!p.showTurnInto,showColor:false}))} style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1',display:'flex',gap:'10px',alignItems:'center',justifyContent:'space-between'}} className="hover:bg-white/5">
+                <span>Turn into</span><span style={{color:'#64748b',fontSize:'10px'}}>&#9654;</span>
+              </div>
+              {blockMenu.showTurnInto&&(
+                <div style={{padding:'6px 10px',display:'flex',flexWrap:'wrap',gap:'4px',maxWidth:'200px'}}>
+                  {NOTE_BLOCK_TYPES.filter(c=>!['divider'].includes(c.type)).map(cmd=>(
+                    <div key={cmd.type} onMouseDown={e=>{e.preventDefault();updateBlock(bm.id,{type:cmd.type});setBlockMenu(null);}} title={cmd.label}
+                      style={{padding:'4px 7px',borderRadius:'6px',cursor:'pointer',fontSize:'0.68rem',color:'#818cf8',background:'rgba(99,102,241,0.1)',fontFamily:'monospace',fontWeight:700}}>
+                      {cmd.icon}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div onClick={()=>setBlockMenu(p=>({...p,showColor:!p.showColor,showTurnInto:false}))} style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1',display:'flex',gap:'10px',alignItems:'center',justifyContent:'space-between'}} className="hover:bg-white/5">
+                <span>Color</span><span style={{color:'#64748b',fontSize:'10px'}}>&#9654;</span>
+              </div>
+              {blockMenu.showColor&&(
+                <div style={{padding:'4px 12px 8px'}}>
+                  <div style={{fontSize:'0.62rem',color:'#64748b',marginBottom:'4px',marginTop:'2px',fontWeight:600}}>TEXT</div>
+                  <div style={{display:'flex',gap:'4px',flexWrap:'wrap',marginBottom:'6px'}}>
+                    {Object.entries(NOTE_COLORS).map(([k,v])=>(
+                      <div key={k} onMouseDown={e=>{e.preventDefault();updateBlock(bm.id,{color:k==='default'?null:k});setBlockMenu(null);}} title={k}
+                        style={{width:'18px',height:'18px',borderRadius:'50%',cursor:'pointer',background:v||'rgba(226,232,240,0.7)',border:bm.color===k?'2px solid #818cf8':'2px solid rgba(255,255,255,0.1)'}}/>
+                    ))}
+                  </div>
+                  <div style={{fontSize:'0.62rem',color:'#64748b',marginBottom:'4px',fontWeight:600}}>BACKGROUND</div>
+                  <div style={{display:'flex',gap:'4px',flexWrap:'wrap'}}>
+                    {Object.entries(NOTE_BG_COLORS).map(([k,v])=>(
+                      <div key={k} onMouseDown={e=>{e.preventDefault();updateBlock(bm.id,{bgColor:k==='default'?null:k});setBlockMenu(null);}} title={k.replace('-bg','')}
+                        style={{width:'18px',height:'18px',borderRadius:'50%',cursor:'pointer',background:v||'rgba(255,255,255,0.08)',border:bm.bgColor===k?'2px solid #818cf8':'2px solid rgba(255,255,255,0.08)'}}/>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',margin:'4px 0'}}/>
+              <div onClick={()=>{deleteBlock(bm.id);setBlockMenu(null);}} style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#f87171',display:'flex',gap:'10px',alignItems:'center'}} className="hover:bg-white/5">
+                Delete block
+              </div>
+            </>);
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SlashDropdown({cmds, eff, onApply}){
+  return (
+    <div className="glass" style={{position:'absolute',zIndex:60,top:'100%',left:0,minWidth:'220px',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.1)',boxShadow:'0 12px 32px rgba(0,0,0,0.7)',overflow:'hidden'}}>
+      {cmds.slice(0,10).map((cmd,ci)=>(
+        <div key={cmd.type} onMouseDown={e=>{e.preventDefault();onApply(cmd.type);}}
+          style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',background:ci===eff?'rgba(99,102,241,0.25)':'transparent'}}>
+          <span style={{width:'28px',fontSize:'0.72rem',fontWeight:700,color:'#818cf8',fontFamily:'monospace',flexShrink:0}}>{cmd.icon}</span>
+          <div>
+            <div style={{fontSize:'0.8rem',fontWeight:500,color:'#e2e8f0'}}>{cmd.label}</div>
+            <div style={{fontSize:'0.68rem',color:'#64748b'}}>{cmd.desc}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NoteListItem({note, active, onSelect, onTrash, onToggleFav}){
+  const preview = note.blocks ? (note.blocks.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,50)||'') : ((note.body||'').slice(0,50));
+  return (
+    <div onClick={onSelect} className="group cursor-pointer"
+      style={{padding:'9px 12px',background:active?'rgba(99,102,241,0.15)':'transparent',borderBottom:'1px solid rgba(255,255,255,0.03)',position:'relative'}}>
+      <div style={{display:'flex',alignItems:'center',gap:'5px',marginBottom:'1px'}}>
+        {note.icon && <span style={{fontSize:'0.8rem',lineHeight:1,flexShrink:0}}>{note.icon}</span>}
+        <div className="text-xs font-medium truncate" style={{color:active?'#a5b4fc':'#cbd5e1',flex:1}}>
+          {note.title||'Untitled'}
+        </div>
+        <div className="opacity-0 group-hover:opacity-100" style={{display:'flex',gap:'2px',flexShrink:0}}>
+          <button onClick={e=>{e.stopPropagation();onToggleFav();}} title={note.favorite?'Unfavorite':'Favorite'}
+            style={{background:'none',border:'none',cursor:'pointer',color:note.favorite?'#fbbf24':'#334155',fontSize:'10px',lineHeight:1,padding:'1px'}}>
+            {note.favorite?'★':'☆'}
+          </button>
+          <button onClick={e=>{e.stopPropagation();onTrash();}} title="Move to trash"
+            style={{background:'none',border:'none',cursor:'pointer',color:'#475569',fontSize:'10px',lineHeight:1,padding:'1px'}}>
+            &#128465;
+          </button>
+        </div>
+      </div>
+      {preview && <div className="text-xs truncate" style={{color:'#2d3a4a',fontSize:'0.68rem'}}>{preview}</div>}
+      <div style={{fontSize:'0.6rem',color:'#1e293b',marginTop:'2px'}}>
+        {new Date(note.updatedAt||note.createdAt).toLocaleDateString()}
+      </div>
+    </div>
+  );
+}
+
+function NotesCmdK({notes, onSelect, onClose, onNew}){
+  const [q,setQ] = useState('');
+  const [idx,setIdx] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(()=>{ setTimeout(()=>inputRef.current&&inputRef.current.focus(),30); },[]);
+  const results = q.trim()
+    ? notes.filter(n=>!n.trashed&&((n.title||'').toLowerCase().includes(q.toLowerCase())||(n.blocks||[]).some(b=>b.content&&b.content.toLowerCase().includes(q.toLowerCase()))))
+    : notes.filter(n=>!n.trashed).slice(0,8);
+  const eff = Math.min(idx, Math.max(0, results.length-1));
+  function handleKey(e){
+    if(e.key==='ArrowDown'){e.preventDefault();setIdx(i=>Math.min(i+1,results.length-1));}
+    else if(e.key==='ArrowUp'){e.preventDefault();setIdx(i=>Math.max(i-1,0));}
+    else if(e.key==='Enter'){if(results[eff]) onSelect(results[eff].id); else if(q.trim()) onNew(q.trim());}
+    else if(e.key==='Escape') onClose();
+  }
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'flex-start',justifyContent:'center',paddingTop:'80px'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'480px',background:'#111118',border:'1px solid rgba(255,255,255,0.1)',borderRadius:'14px',boxShadow:'0 24px 60px rgba(0,0,0,0.9)',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',borderBottom:'1px solid rgba(255,255,255,0.07)',padding:'0 14px'}}>
+          <span style={{color:'#334155',fontSize:'14px',marginRight:'8px'}}>&#128269;</span>
+          <input ref={inputRef} value={q} onChange={e=>{setQ(e.target.value);setIdx(0);}} onKeyDown={handleKey}
+            placeholder="Search notes or type to create..."
+            className="flex-1 bg-transparent outline-none py-3 text-sm" style={{color:'#e2e8f0'}}/>
+          {q && <button onClick={()=>setQ('')} style={{color:'#334155',background:'none',border:'none',cursor:'pointer',fontSize:'12px'}}>&#10005;</button>}
+        </div>
+        <div style={{maxHeight:'320px',overflowY:'auto'}}>
+          {results.length===0&&q&&(
+            <div onClick={()=>onNew(q.trim())} style={{padding:'10px 16px',cursor:'pointer',color:'#818cf8',fontSize:'0.82rem',display:'flex',alignItems:'center',gap:'8px'}} className="hover:bg-white/5">
+              <span style={{color:'#475569'}}>+</span> Create "{q}"
+            </div>
+          )}
+          {results.map((n,i)=>(
+            <div key={n.id} onClick={()=>onSelect(n.id)}
+              style={{padding:'10px 16px',cursor:'pointer',background:i===eff?'rgba(99,102,241,0.2)':'transparent',display:'flex',alignItems:'center',gap:'8px',borderBottom:'1px solid rgba(255,255,255,0.03)'}} className="hover:bg-white/5">
+              <span style={{fontSize:'0.85rem',flexShrink:0}}>{n.icon||'&#128196;'}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:'0.82rem',fontWeight:500,color:i===eff?'#a5b4fc':'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{n.title||'Untitled'}</div>
+              </div>
+              {n.favorite && <span style={{color:'#fbbf24',fontSize:'10px'}}>★</span>}
+            </div>
+          ))}
+        </div>
+        <div style={{padding:'8px 16px',borderTop:'1px solid rgba(255,255,255,0.05)',display:'flex',gap:'16px'}}>
+          {[['&#8593;&#8595;','navigate'],['&#9166;','open'],['Esc','close']].map(([k,l])=>(
+            <span key={l} style={{fontSize:'0.65rem',color:'#334155',display:'flex',gap:'4px',alignItems:'center'}}>
+              <kbd style={{background:'rgba(255,255,255,0.05)',borderRadius:'4px',padding:'1px 4px',fontFamily:'monospace',fontSize:'0.65rem',color:'#64748b'}} dangerouslySetInnerHTML={{__html:k}}/>{l}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
 function NotesSubtab({data, setData, toasts}){
   const rawNotes = data.notes || [];
-  const [activeId, setActiveId] = useState(rawNotes.length>0 ? rawNotes[rawNotes.length-1].id : null);
-  const [search, setSearch] = useState('');
+  const [activeId, setActiveId] = useState(()=>{
+    const live=rawNotes.filter(n=>!n.trashed);
+    return live.length>0?live[live.length-1].id:null;
+  });
+  const [showTrash, setShowTrash] = useState(false);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
 
-  const activeNote = rawNotes.find(n=>n.id===activeId) || null;
+  const allLive = rawNotes.filter(n=>!n.trashed);
+  const allTrashed = rawNotes.filter(n=>n.trashed);
+  const favorites = allLive.filter(n=>n.favorite).sort((a,b)=>new Date(b.updatedAt||b.createdAt)-new Date(a.updatedAt||a.createdAt));
+  const others = allLive.filter(n=>!n.favorite).sort((a,b)=>new Date(b.updatedAt||b.createdAt)-new Date(a.updatedAt||a.createdAt));
 
-  function newNote(){
-    const n={id:uid('nt'),title:'',blocks:[{id:uid('bl'),type:'text',content:'',checked:false}],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+  const activeNote = rawNotes.find(n=>n.id===activeId)||null;
+
+  useEffect(()=>{
+    function onKey(e){
+      if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();setCmdkOpen(p=>!p);}
+    }
+    window.addEventListener('keydown',onKey);
+    return ()=>window.removeEventListener('keydown',onKey);
+  },[]);
+
+  function newNote(titleSeed){
+    const n={id:uid('nt'),title:titleSeed||'',icon:'',blocks:[{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}],favorite:false,trashed:false,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
     setData(d=>({...d,notes:[...(d.notes||[]),n]}));
-    setActiveId(n.id);
+    setActiveId(n.id); setShowTrash(false);
   }
 
-  function deleteNote(id){
-    const remaining = rawNotes.filter(n=>n.id!==id);
-    setData(d=>({...d,notes:remaining}));
-    if(activeId===id) setActiveId(remaining.length>0?remaining[remaining.length-1].id:null);
-    toasts.push('Note deleted');
+  function newDailyNote(){
+    const today=new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+    const existing=allLive.find(n=>n.title===today);
+    if(existing){setActiveId(existing.id);return;}
+    newNote(today);
+  }
+
+  function trashNote(id){
+    setData(d=>({...d,notes:(d.notes||[]).map(n=>n.id===id?{...n,trashed:true,trashedAt:new Date().toISOString()}:n)}));
+    if(activeId===id){ const rest=allLive.filter(n=>n.id!==id); setActiveId(rest.length>0?rest[rest.length-1].id:null); }
+    toasts.push('Moved to trash');
+  }
+
+  function restoreNote(id){
+    setData(d=>({...d,notes:(d.notes||[]).map(n=>n.id===id?{...n,trashed:false,trashedAt:null}:n)}));
+    setActiveId(id); setShowTrash(false);
+  }
+
+  function permanentDelete(id){
+    setData(d=>({...d,notes:(d.notes||[]).filter(n=>n.id!==id)}));
+    toasts.push('Note permanently deleted');
+  }
+
+  function toggleFav(id){
+    setData(d=>({...d,notes:(d.notes||[]).map(n=>n.id===id?{...n,favorite:!n.favorite}:n)}));
   }
 
   function handleChange(updatedNote){
     setData(d=>({...d,notes:(d.notes||[]).map(n=>n.id===updatedNote.id?updatedNote:n)}));
   }
 
-  const filtered = search
-    ? rawNotes.filter(n=>(n.title||'').toLowerCase().includes(search.toLowerCase()) ||
-        (n.blocks||[]).some(b=>b.content&&b.content.toLowerCase().includes(search.toLowerCase())) ||
-        (n.body||'').toLowerCase().includes(search.toLowerCase()))
-    : rawNotes;
+  function openNote(id){ setActiveId(id); setShowTrash(false); setCmdkOpen(false); }
 
-  const sortedFiltered = filtered.slice().sort((a,b)=>new Date(b.updatedAt||b.createdAt)-new Date(a.updatedAt||a.createdAt));
-
-  function getNotePreview(n){
-    if(n.blocks) return n.blocks.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,55)||'';
-    return (n.body||'').slice(0,55);
-  }
+  const sidebarList = showTrash ? allTrashed : null;
 
   return (
     <div style={{display:'flex',height:'calc(100vh - 140px)',gap:0,margin:'-8px -16px'}}>
       {/* Sidebar */}
-      <div style={{width:'224px',flexShrink:0,borderRight:'1px solid rgba(255,255,255,0.06)',display:'flex',flexDirection:'column',background:'rgba(255,255,255,0.01)'}}>
-        <div style={{padding:'12px 10px 8px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-          <button onClick={newNote} className="w-full py-1.5 rounded-lg text-sm font-medium"
-            style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>
-            + New Note
+      <div style={{width:'220px',flexShrink:0,borderRight:'1px solid rgba(255,255,255,0.06)',display:'flex',flexDirection:'column',background:'rgba(255,255,255,0.01)'}}>
+        {/* Top actions */}
+        <div style={{padding:'10px 10px 6px',borderBottom:'1px solid rgba(255,255,255,0.04)',display:'flex',gap:'5px'}}>
+          <button onClick={()=>newNote()} style={{flex:1,padding:'5px 0',borderRadius:'7px',background:'rgba(99,102,241,0.2)',color:'#818cf8',fontSize:'0.75rem',fontWeight:600,border:'none',cursor:'pointer'}}>
+            + New
+          </button>
+          <button onClick={newDailyNote} title="Open or create today's daily note"
+            style={{padding:'5px 8px',borderRadius:'7px',background:'rgba(255,255,255,0.04)',color:'#64748b',fontSize:'0.75rem',border:'none',cursor:'pointer'}}>
+            &#128197;
+          </button>
+          <button onClick={()=>setCmdkOpen(true)} title="Search (Ctrl+K)"
+            style={{padding:'5px 8px',borderRadius:'7px',background:'rgba(255,255,255,0.04)',color:'#64748b',fontSize:'0.75rem',border:'none',cursor:'pointer'}}>
+            &#128269;
           </button>
         </div>
-        <div style={{padding:'8px 10px',borderBottom:'1px solid rgba(255,255,255,0.04)'}}>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..."
-            className="w-full bg-transparent text-xs outline-none"
-            style={{color:'#94a3b8',padding:'3px 0'}}/>
-        </div>
+
+        {/* List */}
         <div style={{flex:1,overflowY:'auto'}}>
-          {sortedFiltered.length===0 && (
-            <div className="text-xs text-center" style={{color:'#334155',padding:'20px 10px'}}>
-              {search?'No matches':'No notes yet'}
+          {showTrash ? (<>
+            <div style={{padding:'6px 12px 2px',fontSize:'0.6rem',fontWeight:700,color:'#334155',letterSpacing:'0.08em',textTransform:'uppercase',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              Trash
+              <button onClick={()=>setShowTrash(false)} style={{background:'none',border:'none',color:'#475569',cursor:'pointer',fontSize:'10px'}}>&#8592; Back</button>
             </div>
-          )}
-          {sortedFiltered.map(n=>(
-            <div key={n.id} onClick={()=>setActiveId(n.id)} className="group cursor-pointer"
-              style={{padding:'10px 12px',background:activeId===n.id?'rgba(99,102,241,0.15)':'transparent',
-                borderBottom:'1px solid rgba(255,255,255,0.03)',position:'relative'}}>
-              <div className="text-xs font-medium truncate" style={{color:activeId===n.id?'#a5b4fc':'#cbd5e1'}}>
-                {n.title||'Untitled'}
+            {allTrashed.length===0&&<div style={{fontSize:'0.72rem',color:'#1e293b',padding:'12px',textAlign:'center'}}>Trash is empty</div>}
+            {allTrashed.map(n=>(
+              <div key={n.id} style={{padding:'8px 12px',borderBottom:'1px solid rgba(255,255,255,0.03)',display:'flex',alignItems:'center',gap:'4px'}}>
+                <div style={{flex:1,fontSize:'0.78rem',color:'#475569',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{n.title||'Untitled'}</div>
+                <button onClick={()=>restoreNote(n.id)} title="Restore" style={{background:'none',border:'none',cursor:'pointer',color:'#22c55e',fontSize:'10px',padding:'1px 2px'}}>&#8617;</button>
+                <button onClick={()=>permanentDelete(n.id)} title="Delete forever" style={{background:'none',border:'none',cursor:'pointer',color:'#f87171',fontSize:'10px',padding:'1px 2px'}}>&#128465;</button>
               </div>
-              {getNotePreview(n) && (
-                <div className="text-xs truncate mt-0.5" style={{color:'#3f4d5f'}}>{getNotePreview(n)}</div>
-              )}
-              <div className="flex items-center justify-between mt-1">
-                <div className="text-xs" style={{color:'#1e293b',fontSize:'0.65rem'}}>
-                  {new Date(n.updatedAt||n.createdAt).toLocaleDateString()}
-                </div>
-                <button onClick={e=>{e.stopPropagation();deleteNote(n.id);}}
-                  className="text-xs opacity-0 group-hover:opacity-100"
-                  style={{color:'#f87171',lineHeight:1,padding:'0 2px'}}>x</button>
+            ))}
+          </>) : (<>
+            {favorites.length>0&&(
+              <div>
+                <div style={{padding:'6px 12px 2px',fontSize:'0.6rem',fontWeight:700,color:'#334155',letterSpacing:'0.08em',textTransform:'uppercase'}}>Favorites</div>
+                {favorites.map(n=>(
+                  <NoteListItem key={n.id} note={n} active={activeId===n.id} onSelect={()=>openNote(n.id)} onTrash={()=>trashNote(n.id)} onToggleFav={()=>toggleFav(n.id)}/>
+                ))}
               </div>
-            </div>
-          ))}
+            )}
+            {others.length>0&&(
+              <div>
+                {favorites.length>0&&<div style={{padding:'6px 12px 2px',fontSize:'0.6rem',fontWeight:700,color:'#334155',letterSpacing:'0.08em',textTransform:'uppercase'}}>Notes</div>}
+                {others.map(n=>(
+                  <NoteListItem key={n.id} note={n} active={activeId===n.id} onSelect={()=>openNote(n.id)} onTrash={()=>trashNote(n.id)} onToggleFav={()=>toggleFav(n.id)}/>
+                ))}
+              </div>
+            )}
+            {allLive.length===0&&(
+              <div style={{fontSize:'0.72rem',color:'#1e293b',padding:'20px 10px',textAlign:'center'}}>No notes yet</div>
+            )}
+          </>)}
+        </div>
+
+        {/* Trash button */}
+        <div style={{borderTop:'1px solid rgba(255,255,255,0.04)',padding:'6px 10px'}}>
+          <button onClick={()=>setShowTrash(p=>!p)}
+            style={{width:'100%',padding:'4px 0',borderRadius:'6px',background:'transparent',color:showTrash?'#f87171':'#334155',fontSize:'0.72rem',border:'none',cursor:'pointer',textAlign:'left',paddingLeft:'4px'}}>
+            &#128465; Trash {allTrashed.length>0&&'('+allTrashed.length+')'}
+          </button>
         </div>
       </div>
 
       {/* Editor */}
-      {activeNote ? (
-        <NoteEditor key={activeNote.id} note={migrateNote(activeNote)} onChange={handleChange}/>
+      {activeNote&&!showTrash ? (
+        <NoteEditor key={activeNote.id} note={migrateNote(activeNote)} onChange={handleChange} allNotes={allLive} onOpenNote={openNote}/>
       ) : (
-        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{textAlign:'center'}}>
-            <div className="text-sm mb-3" style={{color:'#475569'}}>
-              {rawNotes.length===0?'No notes yet':'Select a note or create one'}
+        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:'12px'}}>
+          {showTrash ? (
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:'2rem',marginBottom:'8px'}}>&#128465;</div>
+              <div style={{fontSize:'0.82rem',color:'#334155'}}>Trash</div>
             </div>
-            <button onClick={newNote} className="text-sm px-4 py-2 rounded-lg"
-              style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>
-              + New Note
-            </button>
-          </div>
+          ) : (
+            <>
+              <div style={{fontSize:'0.85rem',color:'#334155'}}>{allLive.length===0?'No notes yet':'Select a note'}</div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <button onClick={()=>newNote()} style={{padding:'6px 14px',borderRadius:'8px',background:'rgba(99,102,241,0.2)',color:'#818cf8',fontSize:'0.8rem',border:'none',cursor:'pointer'}}>+ New Note</button>
+                <button onClick={newDailyNote} style={{padding:'6px 14px',borderRadius:'8px',background:'rgba(255,255,255,0.04)',color:'#64748b',fontSize:'0.8rem',border:'none',cursor:'pointer'}}>&#128197; Daily Note</button>
+              </div>
+            </>
+          )}
         </div>
       )}
+
+      {cmdkOpen&&<NotesCmdK notes={allLive} onSelect={openNote} onClose={()=>setCmdkOpen(false)} onNew={t=>{newNote(t);setCmdkOpen(false);}}/>}
     </div>
   );
 }
