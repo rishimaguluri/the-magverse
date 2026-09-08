@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v95 executing');
+console.log('[Magverse] App.jsx v96 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -2865,39 +2865,40 @@ function TasksAIChatPanel({ tasks, apiKey, onAddTask, onUpdateTask, onDeleteTask
     }));
     return `You are Rishi's personal task assistant in Magverse.
 
-## RULE #1 — ACT IMMEDIATELY, NEVER CONFIRM
-When the user's intent is clear, execute the action in your FIRST response. NEVER echo back a proposed title and wait. NEVER say "I'll add..." without also including the <magverse-actions> tag in that same message. Do not ask "shall I add this?" or anything like it.
+## CRITICAL RULE — THE ACTION TAG IS MANDATORY
+Every single time you add, update, delete, or mark done a task, your response MUST end with a <magverse-actions> block. If you do not include it, NOTHING happens and the user sees no change. Never write "Added X" without also including the action tag in the SAME response.
 
 ## HOW ACTIONS WORK
-Every add/update/delete/mark-done MUST include a <magverse-actions> JSON block at the end of your response. Without it, nothing happens.
+Append this tag at the very end of your response. Do not put anything after it.
 
-EXACT add_task schema — copy this structure precisely:
-{"type":"add_task","task":{"title":"TASK TITLE HERE","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}
+EXACT add_task schema:
+{"type":"add_task","task":{"title":"TITLE","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}
 
-The key names are: "type" and "task". Never omit the "task" key. Never merge the task object directly into the action object.
+Required keys: "type" (string) and "task" (object). Never omit either. Always wrap in an array.
 
-Other action types:
+Other actions:
 {"type":"mark_done","taskId":"id"} | {"type":"update_task","taskId":"id","patch":{}} | {"type":"delete_task","taskId":"id"}
 category = "classroom"|"extracurricular"|"personal". priority = "High"|"Med"|"Low".
 
 ## TITLE NORMALIZATION
-Polish the raw input into a clean task title: Title Case, action verb first, 3–8 words, concise.
-Examples: "stats hw #1" → "Complete Statistics Homework #1" | "study econ midterm" → "Prepare for Economics Midterm" | "call mom" → "Call Mom"
+Title Case, action verb first, 3-8 words. "stats hw #1" -> "Complete Statistics Homework #1" | "call mom" -> "Call Mom"
 
-## EXAMPLES OF CORRECT BEHAVIOR
+## EXAMPLES
 
-Single task:
 User: "add stats homework #1 classroom"
-You: "Added Complete Statistics Homework #1 to Classroom Tasks.
-<magverse-actions>[{"type":"add_task","task":{"title":"Complete Statistics Homework #1","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
+You: Added Complete Statistics Homework #1 to Classroom Tasks.
+<magverse-actions>[{"type":"add_task","task":{"title":"Complete Statistics Homework #1","category":"classroom","priority":"High","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>
 
-Multiple tasks — use an array with one object per task:
-User: "add read chapter 2 and chapter 3 of Good Strategy Bad Strategy to extracurricular"
-You: "Added both chapters to Extracurricular Tasks.
-<magverse-actions>[{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 2","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}},{"type":"add_task","task":{"title":"Read Good Strategy Bad Strategy Ch. 3","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>"
+User: "add initial email draft for DSP to extracurricular tasks"
+You: Added Send Initial Email Draft for DSP to Extracurricular Tasks.
+<magverse-actions>[{"type":"add_task","task":{"title":"Send Initial Email Draft for DSP","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>
 
-## GOLDEN EGG CAPITAL — ROLE CONTEXT
-If the user mentions Golden Egg Capital tasks: Rishi's role is Technical Research & AI Systems (data pipelines, filing intelligence, research automation, AI analyst agents, retrieval systems, monitoring). Rohan handles traditional/non-AI investment work. When suggesting GE tasks for Rishi, bias toward technical work — filing pipelines, retrieval systems, AI agent evaluation, signal testing, monitoring — not management calls, manual valuation models, or fund-wide administration.
+User: "add read chapter 2 and chapter 3 to extracurricular"
+You: Added both chapters to Extracurricular Tasks.
+<magverse-actions>[{"type":"add_task","task":{"title":"Read Chapter 2","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}},{"type":"add_task","task":{"title":"Read Chapter 3","category":"extracurricular","priority":"Med","dueDate":null,"subject":"","notes":"","status":"To Do"}}]</magverse-actions>
+
+## GOLDEN EGE CAPITAL — ROLE CONTEXT
+If user mentions Golden Egg Capital: Rishi's role is Technical Research & AI Systems (data pipelines, filing intelligence, AI analyst agents, retrieval, monitoring). Rohan handles traditional investing. Bias Rishi's tasks toward technical work only.
 
 Be concise. Plain text only, no markdown. Today: ${today}
 TASKS: ${JSON.stringify(taskList)}`;
@@ -2905,27 +2906,28 @@ TASKS: ${JSON.stringify(taskList)}`;
 
   function execActions(text) {
     const m = text.match(/<magverse-actions>([\s\S]*?)<\/magverse-actions>/);
-    if (!m) return { added: [], hasActions: false };
-    const added = [];
+    if (!m) return { added: [], skipped: [], hasActions: false, parseError: null };
+    const added = [], skipped = [];
+    let parseError = null;
     try {
-      let parsed = JSON.parse(m[1]);
+      let parsed = JSON.parse(m[1].trim());
       if (!Array.isArray(parsed)) parsed = [parsed];
       parsed.forEach(a => {
         if (a.type === 'add_task') {
           const t = a.task || {};
-          // Dedup: skip if same title+category already exists (prevents retry duplicates)
           const exists = tasks.some(x =>
             x.title.trim().toLowerCase() === (t.title||'').trim().toLowerCase() &&
             x.category === t.category
           );
           if (!exists) { onAddTask(t); added.push(t); }
+          else { skipped.push(t); }
         }
         else if (a.type === 'mark_done') onUpdateTask(a.taskId, { status: 'Done', doneAt: new Date().toISOString() });
         else if (a.type === 'update_task') onUpdateTask(a.taskId, a.patch);
         else if (a.type === 'delete_task') onDeleteTask(a.taskId);
       });
-    } catch(e) {}
-    return { added, hasActions: true };
+    } catch(e) { parseError = e.message; }
+    return { added, skipped, hasActions: true, parseError };
   }
 
   async function send() {
@@ -2940,7 +2942,7 @@ TASKS: ${JSON.stringify(taskList)}`;
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-        body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1000, stream: true, messages: [{role:'system',content:buildSystem()}, ...history.map(m => ({ role: m.role, content: m.content }))] })
+        body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1200, stream: true, messages: [{role:'system',content:buildSystem()}, ...history.map(m => ({ role: m.role, content: m.content }))] })
       });
       if (!resp.ok) {
         const errJson = await resp.json().catch(() => ({}));
@@ -2965,10 +2967,21 @@ TASKS: ${JSON.stringify(taskList)}`;
           } catch(_e) {}
         }
       }
-      const { added } = execActions(full);
+      const { added, skipped, hasActions, parseError } = execActions(full);
       if (added.length > 0) {
-        // Attach confirmed-added tasks to the message for the confirmation card
         setMsgs(m => { const c=[...m]; c[c.length-1]={...c[c.length-1], addedTasks:added}; return c; });
+      }
+      if (skipped.length > 0 && added.length === 0) {
+        toasts.push('Task already exists — not duplicated');
+      }
+      if (parseError) {
+        toasts.push('Action parse error: ' + parseError);
+      }
+      if (!hasActions) {
+        const looksLikeAdd = /\b(added|adding|created|done)\b/i.test(full);
+        if (looksLikeAdd) {
+          toasts.push('AI said it added something but no action was found — please try again');
+        }
       }
     } catch(e) {
       setMsgs(m => [...m, { role: 'assistant', content: `Error: ${e.message || 'unknown'}. Check your OpenAI API key in Settings.` }]);
