@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v93 executing');
+console.log('[Magverse] App.jsx v94 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -1127,6 +1127,109 @@ function heuristicParse(text, _depth=0){
   return actions.length ? actions : [{type:'event',payload:{title:cleanTitle(norm)||text,type:'Manual',notes:text,when:{day:globalDay}}}];
 }
 
+// ---- LLM-powered voice schedule parsing ----
+
+async function parseTranscriptLLM(transcript, existingEvents, apiKey, now){
+  const todayISO = now.toISOString().slice(0,10);
+  const tomorrow = new Date(now); tomorrow.setDate(now.getDate()+1);
+  const tomorrowISO = tomorrow.toISOString().slice(0,10);
+  const DOW_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const todayName = DOW_NAMES[now.getDay()];
+  const timeStr = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  const nowDow = (now.getDay()+6)%7;
+  const weekMon = new Date(now); weekMon.setDate(now.getDate()-nowDow);
+  const fmtFrac = x => { const wh=Math.floor(x), m=Math.round((x-wh)*60); return String(wh).padStart(2,'0')+':'+String(m).padStart(2,'0'); };
+  const existingCtx = existingEvents
+    .filter(ev => ev.when?.hour !== undefined)
+    .slice(0,20)
+    .map(ev => {
+      let ds;
+      if(ev.when?.exactDate) ds=ev.when.exactDate;
+      else if(ev.when?.day!==undefined){ const d=new Date(weekMon); d.setDate(weekMon.getDate()+ev.when.day); ds=d.toISOString().slice(0,10); }
+      else ds=todayISO;
+      return ds+' '+fmtFrac(ev.when.hour)+'-'+fmtFrac(ev.when.endHour||ev.when.hour+1)+' '+(ev.title||'Event');
+    }).join('\n')||'(none)';
+  const sysPrompt =
+    'You are a scheduling assistant that extracts calendar events from natural speech.\n\n' +
+    'Today: '+todayISO+' ('+todayName+'), current time: '+timeStr+'\n' +
+    'today='+todayISO+', tomorrow='+tomorrowISO+'\n\n' +
+    'Existing calendar (for conflict awareness):\n'+existingCtx+'\n\n' +
+    'RULES:\n' +
+    '1. Resolve ALL date references to YYYY-MM-DD. Never output "today" or "tomorrow" as the date value.\n' +
+    '2. All times in 24-hour HH:MM format.\n' +
+    '3. AM/PM inference: morning/class/gym/workout/wake/study -> AM. dinner/evening/tonight/bar -> PM. noon=12:00. midnight=00:00.\n' +
+    '4. Sequential speech: "then gym for an hour" after an event ending at 10:15 means gym starts at 10:15.\n' +
+    '5. "for N hours/minutes" -> end_time = start_time + duration.\n' +
+    '6. "from X to Y" -> start_time=X, end_time=Y (both 24h HH:MM).\n' +
+    '7. "around X" or "about X" -> flexibility="semi-flexible". "sometime tonight" -> flexibility="flexible", estimate 19:00.\n' +
+    '8. If AM/PM genuinely ambiguous with no context clues, set needs_clarification=true.\n' +
+    '9. Include ALL mentioned activities. Minimum event duration: 15 minutes.\n' +
+    '10. Default meal: 45 min. Default study/work block: stated duration or 60 min.\n\n' +
+    'Return ONLY valid JSON, no other text:\n' +
+    '{"events":[{"title":"string","date":"YYYY-MM-DD","start_time":"HH:MM","end_time":"HH:MM","flexibility":"fixed","source_text":"string","confidence":0.9,"needs_clarification":false,"clarification_question":null}]}';
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
+    body:JSON.stringify({
+      model:'gpt-4o-mini',
+      response_format:{type:'json_object'},
+      max_tokens:1200,
+      temperature:0,
+      messages:[
+        {role:'system', content:sysPrompt},
+        {role:'user', content:'Schedule: "'+transcript+'"'}
+      ]
+    })
+  });
+  if(!resp.ok){ const j=await resp.json(); throw new Error(j.error?.message||'API error '+resp.status); }
+  const j=await resp.json();
+  const parsed=JSON.parse(j.choices[0].message.content);
+  return Array.isArray(parsed.events)?parsed.events:[];
+}
+
+function resolveVoiceConflicts(parsedItems, existingEvents){
+  const parseHHMM = t => { const [h,m]=(t||'00:00').split(':').map(Number); return h+(m||0)/60; };
+  return parsedItems.map(item => {
+    const iStart=parseHHMM(item.start_time), iEnd=parseHHMM(item.end_time);
+    const conflicts=existingEvents.filter(ev => {
+      if(!ev.when?.exactDate || ev.when.exactDate!==item.date) return false;
+      const eS=ev.when.hour||0, eE=ev.when.endHour||eS+1;
+      return iStart<eE && iEnd>eS;
+    });
+    return {...item, _conflict:conflicts.length>0, _conflictTitles:conflicts.map(c=>c.title)};
+  });
+}
+
+function convertParsedToMvEvent(item){
+  const parseHHMM = t => { const [h,m]=(t||'00:00').split(':').map(Number); return h+(m||0)/60; };
+  const startH=parseHHMM(item.start_time), endH=parseHHMM(item.end_time);
+  const dt=new Date((item.date||new Date().toISOString().slice(0,10))+'T12:00:00');
+  const dow=(dt.getDay()+6)%7;
+  return {
+    id:uid(), title:item.title||'Event',
+    type:detectType((item.title||'')+' '+(item.source_text||'')),
+    when:{exactDate:item.date, hour:startH, endHour:endH, day:dow},
+    notes:item.source_text||''
+  };
+}
+
+function fmtParsedDate(dateStr){
+  if(!dateStr) return '';
+  const todayISO=new Date().toISOString().slice(0,10);
+  const tomorrowISO=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  if(dateStr===todayISO) return 'Today';
+  if(dateStr===tomorrowISO) return 'Tomorrow';
+  return new Date(dateStr+'T12:00:00').toLocaleDateString('en',{weekday:'short',month:'short',day:'numeric'});
+}
+
+function fmtHHMMDisplay(t){
+  if(!t) return '';
+  const [h,m]=(t||'00:00').split(':').map(Number);
+  const ap=h>=12?'PM':'AM';
+  const d=h>12?h-12:(h===0?12:h);
+  return (m>0?d+':'+String(m).padStart(2,'0'):String(d))+' '+ap;
+}
+
 function useIsMobile(){
   const [m, setM] = useState(()=>window.innerWidth<768);
   useEffect(()=>{
@@ -1565,13 +1668,17 @@ function SchedulePanel({data, setData, toasts, isMobile}){
   const [expandedEvent, setExpandedEvent] = useState(null);
   const [removingIds, setRemovingIds] = useState([]);
   const [scheduleSubtab, setScheduleSubtab] = useState('calendar');
-  // Voice bar state machine: idle | listening | reviewing
+  // Voice bar state machine: idle | listening | parsing | reviewing
   const [dayVoicePhase, setDayVoicePhase] = useState('idle');
   const [dayTranscript, setDayTranscript] = useState('');
-  const [reviewItems, setReviewItems] = useState([]); // parsed actions with preview ids
+  const [reviewItems, setReviewItems] = useState([]);
+  const [editingRid, setEditingRid] = useState(null);
+  const [editDraft, setEditDraft] = useState({start_time:'', end_time:''});
   const dayRecogRef = useRef(null);
+  const parseAbortRef = useRef(false);
   const pendingRef = useRef({});
   const events = data.events || [];
+  const apiKey = data.settings?.apiKey || '';
 
   const switchView = (v) => { setView(v); setOffset(0); };
 
@@ -1639,9 +1746,24 @@ function SchedulePanel({data, setData, toasts, isMobile}){
   }
   const TYPE_EMOJI = {Gym:'🏋️', Assignments:'📚', Social:'🍽️', Manual:'📅'};
 
+  const pickReviewEmoji = item => {
+    const t = ((item.title||'')+(item.source_text||'')).toLowerCase();
+    if(/gym|workout|lift|run|exercise|swim/.test(t)) return '🏋️';
+    if(/class|lecture|study|homework|exam|stats|econ/.test(t)) return '📚';
+    if(/lunch|dinner|breakfast|coffee|eat|food|dining/.test(t)) return '🍽️';
+    if(/meeting|appointment|call|zoom|interview/.test(t)) return '📋';
+    if(/case|prep|practice/.test(t)) return '💼';
+    return '📅';
+  };
+
   function toggleDayMic(){
     if(dayVoicePhase === 'listening'){
       dayRecogRef.current && dayRecogRef.current.stop();
+      setDayVoicePhase('idle');
+      return;
+    }
+    if(dayVoicePhase === 'parsing'){
+      parseAbortRef.current = true;
       setDayVoicePhase('idle');
       return;
     }
@@ -1649,6 +1771,7 @@ function SchedulePanel({data, setData, toasts, isMobile}){
       setDayVoicePhase('idle');
       setDayTranscript('');
       setReviewItems([]);
+      setEditingRid(null);
       return;
     }
     const R = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1671,13 +1794,36 @@ function SchedulePanel({data, setData, toasts, isMobile}){
     };
     r.onend = () => {
       const full = finalAccum.trim();
+      setDayTranscript(full);
       if(!full){ setDayVoicePhase('idle'); return; }
-      const acts = heuristicParse(full);
-      const eventActs = acts.filter(a => a.type === 'event');
-      if(!eventActs.length){ toasts.push('No events recognized — try again'); setDayVoicePhase('idle'); return; }
-      // Attach a review-id to each for individual removal
-      setReviewItems(eventActs.map((a,i) => ({...a, _rid: `r${i}`})));
-      setDayVoicePhase('reviewing');
+      if(apiKey){
+        parseAbortRef.current = false;
+        setDayVoicePhase('parsing');
+        parseTranscriptLLM(full, events, apiKey, new Date())
+          .then(parsed => {
+            if(parseAbortRef.current) return;
+            if(!parsed.length){ toasts.push('No events found — try again'); setDayVoicePhase('idle'); return; }
+            const withConflicts = resolveVoiceConflicts(parsed, events);
+            setReviewItems(withConflicts.map((e,i) => ({...e, _rid:'r'+i, _format:'structured'})));
+            setDayVoicePhase('reviewing');
+          })
+          .catch(err => {
+            if(parseAbortRef.current) return;
+            console.warn('[Voice] LLM failed, falling back:', err.message);
+            const acts = heuristicParse(full);
+            const eventActs = acts.filter(a => a.type==='event');
+            if(!eventActs.length){ toasts.push('No events recognized — try again'); setDayVoicePhase('idle'); return; }
+            setReviewItems(eventActs.map((a,i) => ({...a, _rid:'r'+i, _format:'heuristic'})));
+            setDayVoicePhase('reviewing');
+            toasts.push('Using basic parsing (AI unavailable)');
+          });
+      } else {
+        const acts = heuristicParse(full);
+        const eventActs = acts.filter(a => a.type==='event');
+        if(!eventActs.length){ toasts.push('No events recognized — try again'); setDayVoicePhase('idle'); return; }
+        setReviewItems(eventActs.map((a,i) => ({...a, _rid:'r'+i, _format:'heuristic'})));
+        setDayVoicePhase('reviewing');
+      }
     };
     r.onerror = () => { setDayVoicePhase('idle'); };
     r.start();
@@ -1689,10 +1835,26 @@ function SchedulePanel({data, setData, toasts, isMobile}){
 
   function confirmReview(){
     if(!reviewItems.length) return;
-    applyActions(reviewItems, setData, toasts);
+    const structured = reviewItems.filter(i => i._format==='structured');
+    const heuristic  = reviewItems.filter(i => i._format==='heuristic');
+    if(structured.length){
+      const parseHHMM = t => { const [h,m]=(t||'00:00').split(':').map(Number); return h+(m||0)/60; };
+      const notDupe = structured.filter(item => !events.some(ev =>
+        ev.when?.exactDate === item.date &&
+        Math.abs((ev.when?.hour||0) - parseHHMM(item.start_time)) < 0.25 &&
+        (ev.title||'').toLowerCase() === (item.title||'').toLowerCase()
+      ));
+      const dupeCount = structured.length - notDupe.length;
+      const newEvts = notDupe.map(convertParsedToMvEvent);
+      if(newEvts.length) setData(d => ({...d, events:[...(d.events||[]), ...newEvts]}));
+      if(newEvts.length) toasts.push('Added '+newEvts.length+' event'+(newEvts.length>1?'s':'')+': '+newEvts.map(e=>e.title).join(', '));
+      if(dupeCount) toasts.push(dupeCount+' duplicate'+(dupeCount>1?'s':'')+' skipped');
+    }
+    if(heuristic.length) applyActions(heuristic, setData, toasts);
     setDayVoicePhase('idle');
     setDayTranscript('');
     setReviewItems([]);
+    setEditingRid(null);
   }
 
   return (
@@ -1750,14 +1912,13 @@ function SchedulePanel({data, setData, toasts, isMobile}){
         </div>
       </div>
 
-      {/* ── Voice Day Bar ── */}
+      {/* Voice Day Bar */}
       <div className="mb-5 rounded-2xl overflow-hidden" style={{
-        border:`1px solid ${dayVoicePhase==='listening'?'rgba(99,102,241,0.45)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.35)':'rgba(255,255,255,0.06)'}`,
-        background:dayVoicePhase==='listening'?'rgba(99,102,241,0.05)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.03)':'rgba(255,255,255,0.01)',
+        border:'1px solid '+(dayVoicePhase==='listening'?'rgba(99,102,241,0.45)':dayVoicePhase==='parsing'?'rgba(245,158,11,0.35)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.35)':'rgba(255,255,255,0.06)'),
+        background:dayVoicePhase==='listening'?'rgba(99,102,241,0.05)':dayVoicePhase==='parsing'?'rgba(245,158,11,0.03)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.03)':'rgba(255,255,255,0.01)',
         transition:'all 0.25s ease'
       }}>
-
-        {/* Top row: mic + transcript / idle hint */}
+        {/* Top row */}
         <div className="flex items-center gap-3 px-4 py-3">
           <div style={{position:'relative',flexShrink:0}}>
             {dayVoicePhase==='listening' && (
@@ -1766,33 +1927,36 @@ function SchedulePanel({data, setData, toasts, isMobile}){
             <button onClick={toggleDayMic}
               className="w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all"
               style={{
-                background:dayVoicePhase==='listening'?'rgba(99,102,241,0.35)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.05)',
-                border:dayVoicePhase==='listening'?'1px solid rgba(99,102,241,0.5)':dayVoicePhase==='reviewing'?'1px solid rgba(16,185,129,0.35)':'1px solid rgba(255,255,255,0.1)',
-                color:dayVoicePhase==='listening'?'#a5b4fc':dayVoicePhase==='reviewing'?'#34d399':'#475569',
+                background:dayVoicePhase==='listening'?'rgba(99,102,241,0.35)':dayVoicePhase==='parsing'?'rgba(245,158,11,0.15)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.2)':'rgba(255,255,255,0.05)',
+                border:'1px solid '+(dayVoicePhase==='listening'?'rgba(99,102,241,0.5)':dayVoicePhase==='parsing'?'rgba(245,158,11,0.4)':dayVoicePhase==='reviewing'?'rgba(16,185,129,0.35)':'rgba(255,255,255,0.1)'),
+                color:dayVoicePhase==='listening'?'#a5b4fc':dayVoicePhase==='parsing'?'#fbbf24':dayVoicePhase==='reviewing'?'#34d399':'#475569',
                 position:'relative',zIndex:1
               }}>
-              {dayVoicePhase==='listening' ? '◉' : dayVoicePhase==='reviewing' ? '✓' : '🎤'}
+              {dayVoicePhase==='listening'?'&#9711;':dayVoicePhase==='parsing'?'...':dayVoicePhase==='reviewing'?'&#10003;':'🎤'}
             </button>
           </div>
-
           <div className="flex-1 min-w-0">
             {dayVoicePhase==='listening' ? (
               dayTranscript
                 ? <div className="text-sm leading-relaxed" style={{color:'#c7d2fe'}}>{dayTranscript}<span style={{display:'inline-block',width:'2px',height:'13px',background:'#818cf8',marginLeft:'3px',verticalAlign:'middle',animation:'pulse 0.7s ease-in-out infinite'}}/></div>
                 : <div className="text-sm italic animate-item" style={{color:'#6366f1'}}>Listening — speak your full day…</div>
+            ) : dayVoicePhase==='parsing' ? (
+              <div>
+                <div className="text-sm font-semibold" style={{color:'#f59e0b'}}>Understanding your schedule...</div>
+                <div className="text-xs mt-0.5" style={{color:'#78716c'}}>{apiKey ? 'AI is interpreting what you said' : 'Processing...'}</div>
+              </div>
             ) : dayVoicePhase==='reviewing' ? (
               <div>
                 <div className="text-sm font-semibold" style={{color:'#34d399'}}>Review before adding</div>
-                <div className="text-xs mt-0.5" style={{color:'#475569'}}>Remove anything wrong, then confirm.</div>
+                <div className="text-xs mt-0.5" style={{color:'#475569'}}>Edit times or remove events, then confirm.</div>
               </div>
             ) : (
               <div>
                 <div className="text-sm font-medium" style={{color:'#64748b'}}>Plan your day by voice</div>
-                <div className="text-xs mt-0.5" style={{color:'#334155'}}>Speak naturally — <span style={{color:'#818cf8'}}>"gym at 7, class at 10, lunch at noon, study from 2 to 5, dinner at 6"</span></div>
+                <div className="text-xs mt-0.5" style={{color:'#334155'}}>Speak naturally — <span style={{color:'#818cf8'}}>"tomorrow class 9 to 10:15, then gym for an hour, lunch at 12:30, study from 2 to 5"</span></div>
               </div>
             )}
           </div>
-
           {dayVoicePhase==='idle' && dayTranscript && (
             <button onClick={()=>setDayTranscript('')} className="flex-shrink-0 text-xs px-2 py-1 rounded" style={{color:'#334155',border:'1px solid rgba(255,255,255,0.06)'}}>Clear</button>
           )}
@@ -1801,22 +1965,90 @@ function SchedulePanel({data, setData, toasts, isMobile}){
         {/* Review cards */}
         {dayVoicePhase==='reviewing' && (
           <div style={{borderTop:'1px solid rgba(255,255,255,0.05)'}}>
-            {/* Event chips */}
-            <div className="px-4 pt-3 pb-2 space-y-2">
+            {dayTranscript && (
+              <div className="px-4 pt-2 pb-1">
+                <div className="text-xs italic" style={{color:'#334155'}}>"{dayTranscript}"</div>
+              </div>
+            )}
+            <div className="px-4 pt-2 pb-2 space-y-2">
               {reviewItems.map(item => {
+                if(item._format === 'structured'){
+                  const dateLabel = fmtParsedDate(item.date);
+                  const timeLabel = fmtHHMMDisplay(item.start_time)+(item.end_time?' - '+fmtHHMMDisplay(item.end_time):'');
+                  const isLowConf = (item.confidence||1) < 0.75;
+                  const isEditing = editingRid === item._rid;
+                  const emoji = pickReviewEmoji(item);
+                  return (
+                    <div key={item._rid} className="rounded-xl animate-item"
+                      style={{background:'rgba(255,255,255,0.03)',border:'1px solid '+(item._conflict?'rgba(248,113,113,0.35)':item.needs_clarification||isLowConf?'rgba(245,158,11,0.3)':'rgba(255,255,255,0.06)')}}>
+                      <div className="flex items-center gap-2 p-2.5">
+                        <span style={{fontSize:'15px',flexShrink:0}}>{emoji}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate" style={{color:'#e2e8f0'}}>{item.title}</div>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-xs" style={{color:'#475569'}}>{dateLabel} · {timeLabel}</span>
+                            {item.flexibility && item.flexibility!=='fixed' && (
+                              <span className="text-xs px-1 rounded-full" style={{background:'rgba(99,102,241,0.12)',color:'#818cf8',fontSize:'0.65rem'}}>{item.flexibility}</span>
+                            )}
+                            {item._conflict && (
+                              <span className="text-xs" style={{color:'#f87171'}}>conflict: {(item._conflictTitles||[]).join(', ')}</span>
+                            )}
+                            {item.needs_clarification && !item._conflict && (
+                              <span className="text-xs" style={{color:'#f59e0b'}}>{item.clarification_question||'Needs clarification'}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex gap-1 flex-shrink-0">
+                          <button onClick={()=>{ if(isEditing){setEditingRid(null);}else{setEditingRid(item._rid);setEditDraft({start_time:item.start_time||'',end_time:item.end_time||''});} }}
+                            className="text-xs px-2 py-1 rounded-lg"
+                            style={{color:'#818cf8',background:isEditing?'rgba(99,102,241,0.2)':'rgba(99,102,241,0.1)'}}>
+                            {isEditing?'Done':'Edit'}
+                          </button>
+                          <button onClick={()=>{ setReviewItems(prev=>prev.filter(x=>x._rid!==item._rid)); if(editingRid===item._rid)setEditingRid(null); }}
+                            className="w-6 h-6 rounded-full flex items-center justify-center text-sm transition-all hover:bg-white/10"
+                            style={{color:'#475569'}}>×</button>
+                        </div>
+                      </div>
+                      {isEditing && (
+                        <div className="px-3 pb-3 flex gap-2 items-end flex-wrap">
+                          <div>
+                            <div className="text-xs mb-1" style={{color:'#64748b'}}>Start</div>
+                            <input type="time" value={editDraft.start_time}
+                              onChange={e=>setEditDraft(d=>({...d,start_time:e.target.value}))}
+                              className="px-2 py-1 rounded-lg text-xs"
+                              style={{border:'1px solid rgba(255,255,255,0.12)',color:'#e2e8f0',background:'rgba(255,255,255,0.05)'}}/>
+                          </div>
+                          <div>
+                            <div className="text-xs mb-1" style={{color:'#64748b'}}>End</div>
+                            <input type="time" value={editDraft.end_time}
+                              onChange={e=>setEditDraft(d=>({...d,end_time:e.target.value}))}
+                              className="px-2 py-1 rounded-lg text-xs"
+                              style={{border:'1px solid rgba(255,255,255,0.12)',color:'#e2e8f0',background:'rgba(255,255,255,0.05)'}}/>
+                          </div>
+                          <button onClick={()=>{
+                            setReviewItems(prev=>prev.map(x=>x._rid===item._rid?{...x,start_time:editDraft.start_time,end_time:editDraft.end_time,_conflict:false,_conflictTitles:[]}:x));
+                            setEditingRid(null);
+                          }} className="text-xs px-3 py-1 rounded-lg"
+                          style={{background:'rgba(16,185,129,0.15)',color:'#34d399',border:'1px solid rgba(16,185,129,0.25)'}}>Save</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                // Legacy heuristic fallback
                 const p = item.payload;
-                const emoji = TYPE_EMOJI[p.type] || '📅';
-                const timeStr = fmtReviewTime(p.when?.hour, p.when?.endHour);
-                const dayStr  = fmtReviewDay(p.when?.day);
-                const noTime  = p.when?.hour === undefined;
+                const emoji = TYPE_EMOJI[p?.type] || '📅';
+                const timeStr = fmtReviewTime(p?.when?.hour, p?.when?.endHour);
+                const dayStr  = fmtReviewDay(p?.when?.day);
+                const noTime  = p?.when?.hour === undefined;
                 return (
                   <div key={item._rid} className="flex items-center gap-2 p-2.5 rounded-xl animate-item"
-                    style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${noTime?'rgba(245,158,11,0.25)':'rgba(255,255,255,0.06)'}`}}>
+                    style={{background:'rgba(255,255,255,0.03)',border:'1px solid '+(noTime?'rgba(245,158,11,0.25)':'rgba(255,255,255,0.06)')}}>
                     <span style={{fontSize:'15px',flexShrink:0}}>{emoji}</span>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate" style={{color:'#e2e8f0'}}>{p.title || '(untitled)'}</div>
+                      <div className="text-sm font-medium truncate" style={{color:'#e2e8f0'}}>{p?.title||'(untitled)'}</div>
                       <div className="text-xs mt-0.5" style={{color:noTime?'#f59e0b':'#475569'}}>
-                        {noTime ? '⚠ No time detected' : `${timeStr} · ${dayStr}`}
+                        {noTime ? 'No time detected' : timeStr+' - '+dayStr}
                       </div>
                     </div>
                     <button onClick={()=>setReviewItems(prev=>prev.filter(x=>x._rid!==item._rid))}
@@ -1826,17 +2058,16 @@ function SchedulePanel({data, setData, toasts, isMobile}){
                 );
               })}
               {!reviewItems.length && (
-                <div className="text-sm text-center py-2" style={{color:'#334155'}}>All events removed — dismiss or try again.</div>
+                <div className="text-sm text-center py-2" style={{color:'#334155'}}>All events removed.</div>
               )}
             </div>
-            {/* Confirm row */}
             <div className="flex gap-2 px-4 pb-3">
               <button onClick={confirmReview} disabled={!reviewItems.length}
                 className="flex-1 py-2 rounded-xl text-sm font-bold transition-all"
                 style={{background:reviewItems.length?'rgba(16,185,129,0.15)':'rgba(255,255,255,0.04)',color:reviewItems.length?'#10b981':'#334155',border:reviewItems.length?'1px solid rgba(16,185,129,0.3)':'1px solid rgba(255,255,255,0.06)'}}>
-                {reviewItems.length ? `✓ Add ${reviewItems.length} event${reviewItems.length>1?'s':''}` : 'Nothing to add'}
+                {reviewItems.length ? 'Add '+reviewItems.length+' event'+(reviewItems.length>1?'s':'') : 'Nothing to add'}
               </button>
-              <button onClick={()=>{ setDayVoicePhase('idle'); setDayTranscript(''); setReviewItems([]); }}
+              <button onClick={()=>{ setDayVoicePhase('idle'); setDayTranscript(''); setReviewItems([]); setEditingRid(null); }}
                 className="px-4 py-2 rounded-xl text-sm font-medium transition-all"
                 style={{color:'#475569',border:'1px solid rgba(255,255,255,0.06)'}}>
                 Dismiss
