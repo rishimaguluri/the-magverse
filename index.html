@@ -81,6 +81,24 @@
 
       /* Safe area padding for mobile notch/home bar */
       .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+      /* Notes redesign — Notion-quality UI */
+      .nb-wrap .nb-ctl{opacity:0;pointer-events:none;transition:opacity .12s}
+      .nb-wrap:hover .nb-ctl{opacity:1;pointer-events:auto}
+      .nb-wrap{border-radius:4px;transition:background .1s}
+      .ns-row{border-radius:5px;cursor:pointer;transition:background .1s;display:flex;align-items:center;gap:6px;padding:3px 8px;user-select:none}
+      .ns-row:hover{background:rgba(255,255,255,0.05)}
+      .ns-row.ns-act{background:rgba(255,255,255,0.07)}
+      .nt-title{background:transparent;border:none;outline:none;resize:none;display:block;width:100%;font-family:inherit}
+      .nb-ta{background:transparent;border:none;outline:none;resize:none;display:block;width:100%;font-family:inherit}
+      .ns-sidebar{overflow:hidden;flex-shrink:0;transition:width .18s ease}
+      .nb-insert-line{height:2px;background:rgba(99,102,241,0.6);border-radius:1px;margin:0 0 2px;transition:opacity .1s}
+      .nb-toggle-arrow{transition:transform .15s ease;display:inline-block;font-size:9px;color:#64748b}
+      .nb-toggle-open .nb-toggle-arrow{transform:rotate(90deg)}
+      @keyframes nbSlideIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+      .nb-new-block{animation:nbSlideIn .12s ease}
+      .float-fmt{animation:fadeInUp .08s ease;box-shadow:0 4px 20px rgba(0,0,0,.7)}
+      @media(prefers-reduced-motion:reduce){.nb-wrap,.ns-row,.nb-toggle-arrow,.ns-sidebar{transition:none!important}}
     </style>
   </head>
   <body>
@@ -114,7 +132,7 @@
     <script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-    <script type="text/babel" data-presets="react" src="./App.jsx?v=97"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=98"></script>
     <script>
       // Catch and display JS errors visually so we can diagnose blank-screen issues
       function showErr(msg) {
