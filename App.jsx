@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v98 executing');
+console.log('[Magverse] App.jsx v99 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -3820,6 +3820,45 @@ function migrateNote(note){
   };
 }
 
+function migrateNoteContent(note){
+  if(note.content!==undefined&&note.content!==null) return note.content;
+  if(!note.blocks||!note.blocks.length) return '';
+  function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  return note.blocks.map(b=>{
+    const c=esc(b.content||'');
+    switch(b.type){
+      case 'h1': return '<h1>'+c+'</h1>';
+      case 'h2': return '<h2>'+c+'</h2>';
+      case 'h3': return '<h3>'+c+'</h3>';
+      case 'bullet': return '<ul><li>'+c+'</li></ul>';
+      case 'numbered': return '<ol><li>'+c+'</li></ol>';
+      case 'todo': return '<ul><li data-list="'+(b.checked?'check':'unchecked')+'">'+c+'</li></ul>';
+      case 'quote': return '<blockquote>'+c+'</blockquote>';
+      case 'code': return '<pre class="ql-syntax">'+c+'</pre>';
+      case 'divider': return '<hr>';
+      default: return c?'<p>'+c+'</p>':'<p><br></p>';
+    }
+  }).join('');
+}
+
+const QUILL_CMDS=[
+  {type:'text',     label:'Text',          icon:'T',    grp:'Basic'},
+  {type:'h1',       label:'Heading 1',     icon:'H1',   grp:'Basic'},
+  {type:'h2',       label:'Heading 2',     icon:'H2',   grp:'Basic'},
+  {type:'h3',       label:'Heading 3',     icon:'H3',   grp:'Basic'},
+  {type:'bullet',   label:'Bullet list',   icon:'•', grp:'Basic'},
+  {type:'numbered', label:'Numbered list', icon:'1.',   grp:'Basic'},
+  {type:'todo',     label:'To-do',         icon:'☐', grp:'Basic'},
+  {type:'quote',    label:'Quote',         icon:'"',    grp:'Basic'},
+  {type:'code',     label:'Code block',    icon:'</>',  grp:'Advanced'},
+  {type:'divider',  label:'Divider',       icon:'—', grp:'Advanced'},
+];
+function filterQCmds(q){
+  if(!q) return QUILL_CMDS;
+  const ql=q.toLowerCase();
+  return QUILL_CMDS.filter(c=>c.type.startsWith(ql)||c.label.toLowerCase().includes(ql));
+}
+
 function getVisibleBlocks(blocks, openToggles){
   const visible = [];
   let collapsedAt = -1;
@@ -3919,259 +3958,239 @@ function NoteColorMenu({block, onColor, onBgColor, onClose}){
 }
 
 function NoteEditor({note, onChange, allNotes, onOpenNote}){
-  const [title,setTitle] = useState(note.title||'');
-  const [icon,setIcon] = useState(note.icon||'');
-  const [blocks,setBlocks] = useState(()=>{
-    const m=migrateNote(note);
-    return (m.blocks&&m.blocks.length>0)?m.blocks:[{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}];
-  });
-  const [slashMenu,setSlashMenu] = useState(null);
-  const [slashIdx,setSlashIdx] = useState(0);
-  const [linkMenu,setLinkMenu] = useState(null);
-  const [linkIdx,setLinkIdx] = useState(0);
-  const [blockMenu,setBlockMenu] = useState(null); // {blockId, x, y, sub:null|'color'|'turn'}
-  const [openToggles,setOpenToggles] = useState(new Set());
-  const [iconPickerOpen,setIconPickerOpen] = useState(false);
-  const [floatBar,setFloatBar] = useState(null); // {blockId, x, y}
-  const [dragId,setDragId] = useState(null);
-  const [dragOverId,setDragOverId] = useState(null);
-  const taRefs = useRef({});
-  const saveTimer = useRef(null);
-  const titleRef = useRef(null);
-  const activeBlockRef = useRef(null);
+  const [title,setTitle]=useState(note.title||'');
+  const [icon,setIcon]=useState(note.icon||'');
+  const [iconPickerOpen,setIconPickerOpen]=useState(false);
+  const [saveState,setSaveState]=useState('saved');
+  const [floatFmt,setFloatFmt]=useState(null);
+  const [slashMenu,setSlashMenu]=useState(null);
+  const [linkMenu,setLinkMenu]=useState(null);
 
-  useEffect(()=>{
-    const m=migrateNote(note);
-    setTitle(note.title||''); setIcon(note.icon||'');
-    setBlocks((m.blocks&&m.blocks.length>0)?m.blocks:[{id:uid('bl'),type:'text',content:'',checked:false,indent:0,color:null,bgColor:null}]);
-    setSlashMenu(null); setLinkMenu(null); setBlockMenu(null); setOpenToggles(new Set()); setFloatBar(null);
-  },[note.id]); // eslint-disable-line
+  const editorDivRef=useRef(null);
+  const quillRef=useRef(null);
+  const titleRef=useRef(null);
+  const saveTimer=useRef(null);
+  // mutable refs — always current, safe to read from Quill event handlers
+  const noteRef=useRef(note);       noteRef.current=note;
+  const onChangeRef=useRef(onChange); onChangeRef.current=onChange;
+  const iconRef=useRef(icon);       iconRef.current=icon;
+  const titleR=useRef(title);       titleR.current=title;
+  const allNotesRef=useRef(allNotes); allNotesRef.current=allNotes;
+  const slashRef=useRef(null);      slashRef.current=slashMenu;
+  const linkRef=useRef(null);       linkRef.current=linkMenu;
+  const actionsRef=useRef({});
 
-  // Auto-resize textareas
-  useEffect(()=>{
-    Object.values(taRefs.current).forEach(el=>{ if(el){el.style.height='auto';el.style.height=el.scrollHeight+'px';} });
-    if(titleRef.current){titleRef.current.style.height='auto';titleRef.current.style.height=titleRef.current.scrollHeight+'px';}
-  });
-
-  // Close block menu on outside click
-  useEffect(()=>{
-    const h=e=>{ if(blockMenu) setBlockMenu(null); if(iconPickerOpen) setIconPickerOpen(false); };
-    document.addEventListener('mousedown',h);
-    return ()=>document.removeEventListener('mousedown',h);
-  },[blockMenu,iconPickerOpen]);
-
-  // Selection-based floating toolbar
-  useEffect(()=>{
-    function onUp(){
-      const bid = activeBlockRef.current;
-      if(!bid) return;
-      const ta = taRefs.current[bid];
-      if(!ta) return;
-      const s = ta.selectionStart, e2 = ta.selectionEnd;
-      if(s===e2){setFloatBar(null);return;}
-      const rect = ta.getBoundingClientRect();
-      setFloatBar({blockId:bid, x:rect.left + rect.width/2, y:rect.top - 4});
-    }
-    document.addEventListener('mouseup', onUp);
-    return ()=>document.removeEventListener('mouseup', onUp);
-  },[]);
-
-  function save(t,bl,ic){
-    const auto = t.trim()||(bl.find(b=>b.content&&b.content.trim())?.content.trim().slice(0,60))||'Untitled';
-    onChange({...note, title:auto, icon:ic!==undefined?ic:icon, blocks:bl, updatedAt:new Date().toISOString()});
-  }
-  function scheduleSave(t,bl,ic){
+  function scheduleSave(html){
+    setSaveState('saving');
     if(saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(()=>save(t,bl,ic),350);
+    saveTimer.current=setTimeout(()=>{
+      const t=titleR.current; const ic=iconRef.current; const n=noteRef.current;
+      onChangeRef.current({...n, title:t||n.title||'Untitled', icon:ic, content:html, updatedAt:new Date().toISOString()});
+      setSaveState('saved');
+    },400);
   }
 
-  function updateBlock(id,patch){ const nb=blocks.map(b=>b.id===id?{...b,...patch}:b); setBlocks(nb); scheduleSave(title,nb,icon); }
-  function addBlockAfter(afterId,type,extra){
-    const newId=uid('bl'); const idx=blocks.findIndex(b=>b.id===afterId);
-    const parentIndent=blocks[idx]?.indent||0;
-    const nb=[...blocks.slice(0,idx+1),{id:newId,type:type||'text',content:'',checked:false,indent:parentIndent,color:null,bgColor:null,...(extra||{})},...blocks.slice(idx+1)];
-    setBlocks(nb); scheduleSave(title,nb,icon);
-    setTimeout(()=>{ const el=taRefs.current[newId]; if(el){el.className+=' nb-new-block';el.focus();} },0);
-  }
-  function deleteBlock(id){
-    if(blocks.length<=1){updateBlock(id,{content:'',type:'text'});return;}
-    const idx=blocks.findIndex(b=>b.id===id); const prev=blocks[idx-1];
-    const nb=blocks.filter(b=>b.id!==id); setBlocks(nb); scheduleSave(title,nb,icon);
-    if(prev) setTimeout(()=>{ const el=taRefs.current[prev.id]; if(el){el.focus();el.selectionStart=el.selectionEnd=el.value.length;} },0);
-  }
-  function duplicateBlock(id){ const idx=blocks.findIndex(b=>b.id===id); const nb=[...blocks.slice(0,idx+1),{...blocks[idx],id:uid('bl')},...blocks.slice(idx+1)]; setBlocks(nb); scheduleSave(title,nb,icon); }
-  function moveBlock(id,dir){ const idx=blocks.findIndex(b=>b.id===id); if(dir==='up'&&idx<=0||dir==='down'&&idx>=blocks.length-1) return; const nb=[...blocks]; const si=dir==='up'?idx-1:idx+1; [nb[idx],nb[si]]=[nb[si],nb[idx]]; setBlocks(nb); scheduleSave(title,nb,icon); }
-
-  function handleDragStart(e,id){e.stopPropagation();setDragId(id);e.dataTransfer.effectAllowed='move';}
-  function handleDragOver(e,id){e.preventDefault();e.dataTransfer.dropEffect='move';if(id!==dragOverId)setDragOverId(id);}
-  function handleDrop(e,targetId){e.preventDefault();if(!dragId||dragId===targetId){setDragId(null);setDragOverId(null);return;}const fi=blocks.findIndex(b=>b.id===dragId);const ti=blocks.findIndex(b=>b.id===targetId);const nb=[...blocks];const[moved]=nb.splice(fi,1);nb.splice(ti>fi?ti:ti,0,moved);setBlocks(nb);scheduleSave(title,nb,icon);setDragId(null);setDragOverId(null);}
-  function handleDragEnd(){setDragId(null);setDragOverId(null);}
-
-  const slashFilter=slashMenu?slashMenu.filter:'';
-  const filteredCmds=NOTE_BLOCK_TYPES.filter(c=>matchesSlashFilter(c,slashFilter));
-  const slashEff=Math.min(slashIdx,Math.max(0,filteredCmds.length-1));
-
-  function applySlashCmd(type,blockId){
-    const extra=type==='callout'?{calloutIcon:'💡',bgColor:'blue-bg'}:{};
-    const nb=blocks.map(b=>b.id===blockId?{...b,type,content:'',...extra}:b);
-    setBlocks(nb); setSlashMenu(null); scheduleSave(title,nb,icon);
-    setTimeout(()=>{ const el=taRefs.current[blockId]; if(el) el.focus(); },0);
+  function applySlash(){
+    const sm=slashRef.current; const q=quillRef.current;
+    if(!sm||!q) return;
+    const cmds=filterQCmds(sm.query);
+    const eff=Math.min(sm.index,Math.max(0,cmds.length-1));
+    if(!cmds[eff]){setSlashMenu(null);return;}
+    const cmd=cmds[eff];
+    q.deleteText(sm.lineStart,sm.lineLen,'user');
+    q.setSelection(sm.lineStart,0,'user');
+    if(cmd.type==='text'){['header','list','blockquote','code-block'].forEach(f=>q.format(f,false,'user'));}
+    else if(cmd.type==='h1'){q.format('header',1,'user');}
+    else if(cmd.type==='h2'){q.format('header',2,'user');}
+    else if(cmd.type==='h3'){q.format('header',3,'user');}
+    else if(cmd.type==='bullet'){q.format('list','bullet','user');}
+    else if(cmd.type==='numbered'){q.format('list','ordered','user');}
+    else if(cmd.type==='todo'){q.format('list','check','user');}
+    else if(cmd.type==='quote'){q.format('blockquote',true,'user');}
+    else if(cmd.type==='code'){q.format('code-block',true,'user');}
+    else if(cmd.type==='divider'){
+      q.insertEmbed(sm.lineStart,'divider',true,'user');
+      if(q.getLength()<=sm.lineStart+2) q.insertText(sm.lineStart+1,'\n','user');
+      q.setSelection(sm.lineStart+1,0,'user');
+    }
+    setSlashMenu(null);
+    setTimeout(()=>scheduleSave(q.root.innerHTML),10);
   }
 
-  const linkQuery=linkMenu?linkMenu.query.toLowerCase():'';
-  const filteredLinks=(allNotes||[]).filter(n=>n.id!==note.id&&!n.trashed&&(linkQuery?(n.title||'').toLowerCase().includes(linkQuery):true)).slice(0,6);
-
-  function applyLinkCmd(noteTitle,blockId){
-    const b=blocks.find(b=>b.id===blockId); if(!b) return;
-    const pos=b.content.lastIndexOf('[[');
-    const nc=b.content.slice(0,pos)+'[['+noteTitle+']]';
-    updateBlock(blockId,{content:nc}); setLinkMenu(null);
-    setTimeout(()=>{ const el=taRefs.current[blockId]; if(el){el.focus();el.selectionStart=el.selectionEnd=nc.length;} },0);
+  function applyLink(){
+    const lm=linkRef.current; const q=quillRef.current;
+    if(!lm||!q) return;
+    const an=allNotesRef.current||[]; const n=noteRef.current;
+    const links=an.filter(x=>x.id!==n.id&&!x.trashed&&(!lm.query||(x.title||'').toLowerCase().includes(lm.query.toLowerCase()))).slice(0,6);
+    const eff=Math.min(lm.index,Math.max(0,links.length-1));
+    if(!links[eff]){setLinkMenu(null);return;}
+    const rep='[['+( links[eff].title||'Untitled')+']]';
+    q.deleteText(lm.insertAt,lm.insertLen,'user');
+    q.insertText(lm.insertAt,rep,'user');
+    q.setSelection(lm.insertAt+rep.length,0,'user');
+    setLinkMenu(null);
+    setTimeout(()=>scheduleSave(q.root.innerHTML),10);
   }
 
   function applyFmt(fmt){
-    const bid=floatBar?.blockId; if(!bid) return;
-    const b=blocks.find(b=>b.id===bid); const ta=taRefs.current[bid];
-    if(!b||!ta) return;
-    const s=ta.selectionStart, e2=ta.selectionEnd; if(s===e2) return;
-    const sel=b.content.slice(s,e2);
-    const MAP={bold:'**'+sel+'**',italic:'*'+sel+'*',underline:'__'+sel+'__',strike:'~~'+sel+'~~',code:'`'+sel+'`'};
-    if(!MAP[fmt]) return;
-    const nc=b.content.slice(0,s)+MAP[fmt]+b.content.slice(e2);
-    updateBlock(bid,{content:nc}); setFloatBar(null);
+    const q=quillRef.current; if(!q) return;
+    q.focus();
+    const cur=q.getFormat();
+    q.format(fmt,!cur[fmt],'user');
+    setFloatFmt(null);
   }
 
-  const backlinks=(allNotes||[]).filter(n=>n.id!==note.id&&!n.trashed&&(n.blocks||[]).some(b=>b.content&&b.content.includes('[['+( note.title||'')+']]')));
+  actionsRef.current={scheduleSave,applySlash,applyLink};
 
-  function blockTypography(block){
-    const color=NOTE_COLORS[block.color]||null;
-    const t=block.type;
-    if(t==='h1') return {fontSize:'1.875rem',fontWeight:700,lineHeight:1.15,color:color||'#f1f5f9',letterSpacing:'-0.02em',marginTop:'0.6em',marginBottom:'0.1em'};
-    if(t==='h2') return {fontSize:'1.375rem',fontWeight:600,lineHeight:1.25,color:color||'#e2e8f0',letterSpacing:'-0.01em',marginTop:'0.5em',marginBottom:'0.05em'};
-    if(t==='h3') return {fontSize:'1.1rem',fontWeight:600,lineHeight:1.35,color:color||'#cbd5e1',marginTop:'0.4em',marginBottom:'0.05em'};
-    if(t==='quote') return {fontSize:'0.95rem',lineHeight:1.75,color:color||'#94a3b8',fontStyle:'italic'};
-    if(t==='code') return {fontSize:'0.82rem',lineHeight:1.65,color:color||'#a5b4fc',fontFamily:"'Fira Code','Cascadia Code',Consolas,monospace"};
-    if(t==='callout') return {fontSize:'0.9rem',lineHeight:1.7,color:color||'#e2e8f0'};
-    return {fontSize:'0.9rem',lineHeight:1.7,color:color||'#d1d5db'};
-  }
+  // Mount Quill once
+  useEffect(()=>{
+    if(!window.Quill||!editorDivRef.current) return;
+    if(!window._mgQuillInit){
+      try{
+        const BE=window.Quill.import('blots/block/embed');
+        class Div extends BE{}
+        Div.blotName='divider'; Div.tagName='hr';
+        window.Quill.register(Div);
+      }catch(e){}
+      window._mgQuillInit=true;
+    }
+    const q=new window.Quill(editorDivRef.current,{
+      theme:'snow',
+      modules:{toolbar:false},
+      placeholder:"Write something… type '/' for commands"
+    });
+    quillRef.current=q;
+    const ic=migrateNoteContent(noteRef.current);
+    if(ic) q.root.innerHTML=ic;
 
-  function handleBlockKeyDown(e,block){
-    if(slashMenu&&slashMenu.blockId===block.id){
-      if(e.key==='ArrowDown'){e.preventDefault();setSlashIdx(i=>Math.min(i+1,filteredCmds.length-1));return;}
-      if(e.key==='ArrowUp'){e.preventDefault();setSlashIdx(i=>Math.max(i-1,0));return;}
-      if(e.key==='Enter'){e.preventDefault();if(filteredCmds[slashEff])applySlashCmd(filteredCmds[slashEff].type,block.id);return;}
-      if(e.key==='Escape'){setSlashMenu(null);return;}
-    }
-    if(linkMenu&&linkMenu.blockId===block.id){
-      if(e.key==='ArrowDown'){e.preventDefault();setLinkIdx(i=>Math.min(i+1,filteredLinks.length-1));return;}
-      if(e.key==='ArrowUp'){e.preventDefault();setLinkIdx(i=>Math.max(i-1,0));return;}
-      if(e.key==='Enter'&&filteredLinks.length>0){e.preventDefault();applyLinkCmd(filteredLinks[linkIdx].title||'Untitled',block.id);return;}
-      if(e.key==='Escape'){setLinkMenu(null);return;}
-    }
-    if(e.key==='Tab'){
-      e.preventDefault();
-      const idx=blocks.findIndex(b=>b.id===block.id);
-      const maxI=idx>0?(blocks[idx-1].indent||0)+1:0;
-      if(!e.shiftKey&&(block.indent||0)<4&&(block.indent||0)<=maxI) updateBlock(block.id,{indent:(block.indent||0)+1});
-      else if(e.shiftKey&&(block.indent||0)>0) updateBlock(block.id,{indent:(block.indent||0)-1});
-      return;
-    }
-    if(e.key==='Enter'&&!e.shiftKey&&block.type!=='code'){
-      e.preventDefault();
-      if(block.type==='toggle'){
-        const newId=uid('bl'); const idx=blocks.findIndex(b=>b.id===block.id);
-        const nb=[...blocks.slice(0,idx+1),{id:newId,type:'text',content:'',checked:false,indent:(block.indent||0)+1,color:null,bgColor:null},...blocks.slice(idx+1)];
-        setBlocks(nb); scheduleSave(title,nb,icon);
-        setOpenToggles(s=>{const ns=new Set(s);ns.add(block.id);return ns;});
-        setTimeout(()=>{ const el=taRefs.current[newId]; if(el) el.focus(); },0);
-        return;
+    q.on('text-change',(delta,old,source)=>{
+      if(source!=='user') return;
+      const sel=q.getSelection();
+      if(sel){
+        const text=q.getText();
+        const lineStart=text.lastIndexOf('\n',sel.index-1)+1;
+        const lineText=text.slice(lineStart,sel.index);
+        if(lineText.startsWith('/')&&!lineText.includes(' ')){
+          try{
+            const b=q.getBounds(sel.index);
+            const er=editorDivRef.current.getBoundingClientRect();
+            const sm={x:er.left+b.left,y:er.top+b.top+b.height,query:lineText.slice(1),lineStart,lineLen:lineText.length,index:slashRef.current?slashRef.current.index:0};
+            slashRef.current=sm; setSlashMenu(sm);
+          }catch(e){}
+        }else if(slashRef.current){slashRef.current=null;setSlashMenu(null);}
+        const llPos=lineText.lastIndexOf('[[');
+        if(llPos>=0&&!lineText.slice(llPos).includes(']]')){
+          try{
+            const b=q.getBounds(sel.index);
+            const er=editorDivRef.current.getBoundingClientRect();
+            const lm={x:er.left+b.left,y:er.top+b.top+b.height,query:lineText.slice(llPos+2),index:linkRef.current?linkRef.current.index:0,insertAt:lineStart+llPos,insertLen:sel.index-(lineStart+llPos)};
+            linkRef.current=lm; setLinkMenu(lm);
+          }catch(e){}
+        }else if(linkRef.current){linkRef.current=null;setLinkMenu(null);}
       }
-      const isList=['bullet','numbered','todo'].includes(block.type);
-      const nextType=(isList&&block.content.trim())?block.type:'text';
-      if(isList&&!block.content.trim()) updateBlock(block.id,{type:'text'});
-      else addBlockAfter(block.id,nextType);
-      return;
+      actionsRef.current.scheduleSave(q.root.innerHTML);
+    });
+
+    q.on('selection-change',(range)=>{
+      if(!range||range.length===0){setFloatFmt(null);return;}
+      try{
+        const b=q.getBounds(range.index,range.length);
+        const er=editorDivRef.current.getBoundingClientRect();
+        setFloatFmt({x:er.left+b.left+b.width/2,y:er.top+b.top,range});
+      }catch(e){setFloatFmt(null);}
+    });
+
+    const root=editorDivRef.current;
+    function onKD(e){
+      const sm=slashRef.current; const lm=linkRef.current;
+      if(!sm&&!lm) return;
+      if(e.key==='ArrowUp'){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(sm){const u={...sm,index:Math.max(0,sm.index-1)};slashRef.current=u;setSlashMenu(u);}
+        if(lm){const u={...lm,index:Math.max(0,lm.index-1)};linkRef.current=u;setLinkMenu(u);}
+      }else if(e.key==='ArrowDown'){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(sm){const u={...sm,index:sm.index+1};slashRef.current=u;setSlashMenu(u);}
+        if(lm){const u={...lm,index:lm.index+1};linkRef.current=u;setLinkMenu(u);}
+      }else if(e.key==='Escape'){
+        e.preventDefault();e.stopImmediatePropagation();
+        slashRef.current=null;setSlashMenu(null);linkRef.current=null;setLinkMenu(null);
+      }else if(e.key==='Enter'){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(sm) actionsRef.current.applySlash();
+        else if(lm) actionsRef.current.applyLink();
+      }
     }
-    if(e.key==='Backspace'&&block.content===''&&blocks.length>1){e.preventDefault();deleteBlock(block.id);return;}
-    if(e.key==='ArrowUp'){const el=taRefs.current[block.id];if(el&&el.selectionStart===0){e.preventDefault();const idx=blocks.findIndex(b=>b.id===block.id);if(idx>0){const pEl=taRefs.current[blocks[idx-1].id];if(pEl){pEl.focus();pEl.selectionStart=pEl.selectionEnd=pEl.value.length;}}}}
-    if(e.key==='ArrowDown'){const el=taRefs.current[block.id];if(el&&el.selectionStart===el.value.length){e.preventDefault();const idx=blocks.findIndex(b=>b.id===block.id);if(idx<blocks.length-1){const nEl=taRefs.current[blocks[idx+1].id];if(nEl){nEl.focus();nEl.selectionStart=0;}}}}
-  }
+    root.addEventListener('keydown',onKD,true);
+    return()=>{
+      if(saveTimer.current) clearTimeout(saveTimer.current);
+      root.removeEventListener('keydown',onKD,true);
+      quillRef.current=null;
+    };
+  },[]);// eslint-disable-line
 
-  function handleBlockChange(e,block){
-    const val=e.target.value;
-    if(val.startsWith('/')&&!val.includes(' ')){ setSlashMenu({blockId:block.id,filter:val.slice(1)}); setSlashIdx(0); }
-    else if(slashMenu&&slashMenu.blockId===block.id) setSlashMenu(null);
-    const llPos=val.lastIndexOf('[[');
-    if(llPos>=0&&!val.slice(llPos).includes(']]')){ setLinkMenu({blockId:block.id,query:val.slice(llPos+2)}); setLinkIdx(0); }
-    else if(linkMenu&&linkMenu.blockId===block.id) setLinkMenu(null);
-    // Markdown shortcuts
-    if(!val.startsWith('/')&&val.endsWith(' ')&&block.type==='text'){
-      const tr=val.trimEnd();
-      const MAP={'#':'h1','##':'h2','###':'h3','-':'bullet','*':'bullet','1.':'numbered','>':'quote','[]':'todo','[ ]':'todo','```':'code'};
-      const nt=MAP[tr];
-      if(nt){const nb=blocks.map(b=>b.id===block.id?{...b,type:nt,content:''}:b);setBlocks(nb);scheduleSave(title,nb,icon);return;}
-      if(tr==='---'){const nb=blocks.map(b=>b.id===block.id?{...b,type:'divider',content:''}:b);setBlocks(nb);scheduleSave(title,nb,icon);return;}
-    }
-    updateBlock(block.id,{content:val});
-  }
+  // Swap content when note changes
+  useEffect(()=>{
+    const q=quillRef.current; if(!q) return;
+    setTitle(note.title||''); setIcon(note.icon||'');
+    q.root.innerHTML=migrateNoteContent(note)||'';
+    slashRef.current=null;setSlashMenu(null);
+    linkRef.current=null;setLinkMenu(null);
+    setFloatFmt(null);setSaveState('saved');
+  },[note.id]);// eslint-disable-line
 
-  const visibleBlocks=getVisibleBlocks(blocks,openToggles);
+  // Auto-resize title textarea
+  useEffect(()=>{
+    if(titleRef.current){titleRef.current.style.height='auto';titleRef.current.style.height=titleRef.current.scrollHeight+'px';}
+  });
 
-  function openBlockMenu(e,blockId){
-    e.stopPropagation(); e.preventDefault();
-    const rect=e.currentTarget.getBoundingClientRect();
-    setBlockMenu(p=>p&&p.blockId===blockId?null:{blockId,x:rect.left,y:rect.bottom+4,sub:null});
-  }
+  // Close icon picker on outside click
+  useEffect(()=>{
+    if(!iconPickerOpen) return;
+    const h=()=>setIconPickerOpen(false);
+    document.addEventListener('mousedown',h);
+    return()=>document.removeEventListener('mousedown',h);
+  },[iconPickerOpen]);
 
-  // Render a block's textarea/content
-  function renderBlockContent(block, bIdx, extraStyle){
-    const isDiv = block.type==='divider';
-    if(isDiv) return <div style={{borderTop:'1px solid rgba(255,255,255,0.09)',margin:'8px 0',pointerEvents:'none'}}/>;
-    return (
-      <textarea
-        ref={el=>{taRefs.current[block.id]=el;}}
-        value={block.content}
-        onChange={e=>handleBlockChange(e,block)}
-        onKeyDown={e=>handleBlockKeyDown(e,block)}
-        onFocus={()=>{ activeBlockRef.current=block.id; }}
-        onBlur={()=>{ if(activeBlockRef.current===block.id) activeBlockRef.current=null; setFloatBar(null); }}
-        placeholder={bIdx===0&&blocks.length===1&&!block.content?("Type '/' for commands, '[[' to link..."):''}
-        className="nb-ta"
-        style={{...blockTypography(block), ...extraStyle, padding:'1px 0', minHeight:'1.5em',
-          textDecoration:(block.type==='todo'&&block.checked)?'line-through':'none',
-          opacity:(block.type==='todo'&&block.checked)?0.4:1,
-        }}
-        rows={1}/>
-    );
-  }
+  const backlinks=(allNotes||[]).filter(n=>{
+    if(n.id===note.id||n.trashed) return false;
+    const m='[['+( note.title||'')+']]';
+    if(!note.title) return false;
+    return(n.content||'').includes(m)||(n.blocks||[]).some(b=>(b.content||'').includes(m));
+  });
 
   return (
-    <div style={{flex:1,overflowY:'auto',position:'relative'}} onClick={()=>{if(blockMenu)setBlockMenu(null);}}>
-      {/* Document */}
-      <div style={{maxWidth:'680px',margin:'0 auto',padding:'72px 48px 180px',position:'relative'}}>
+    <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+      {/* Top bar */}
+      <div style={{flexShrink:0,padding:'0 20px',height:'40px',display:'flex',alignItems:'center',gap:'8px',borderBottom:'1px solid rgba(255,255,255,0.04)',background:'rgba(0,0,0,0.2)'}}>
+        <span style={{flex:1,fontSize:'0.75rem',color:'#334155',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+          Notes &rsaquo; {title||'Untitled'}
+        </span>
+        <span style={{fontSize:'0.68rem',color:'#1e293b',flexShrink:0,transition:'opacity .3s',opacity:saveState==='saving'?1:0}}>Saving&#8230;</span>
+      </div>
 
-        {/* Icon + Title */}
-        <div style={{marginBottom:'32px'}}>
-          {/* Icon row */}
-          <div style={{position:'relative',marginBottom:'8px'}}>
-            <div onClick={e=>{e.stopPropagation();setIconPickerOpen(p=>!p);}} title={icon?'Change icon':'Add icon'}
-              style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'40px',height:'40px',fontSize:'1.6rem',cursor:'pointer',userSelect:'none',lineHeight:1,borderRadius:'6px',opacity:icon?1:0,transition:'opacity .15s'}}>
-              {icon||'📝'}
-            </div>
-            {!icon && (
-              <div onClick={e=>{e.stopPropagation();setIconPickerOpen(p=>!p);}}
-                style={{display:'inline-flex',alignItems:'center',gap:'4px',padding:'3px 8px',borderRadius:'5px',cursor:'pointer',color:'#334155',fontSize:'0.72rem',opacity:0,transition:'opacity .15s'}}
-                className="group-hover:opacity-100 hover:!opacity-100 hover:bg-white/5">
-                + Add icon
-              </div>
+      {/* Scrollable document */}
+      <div style={{flex:1,overflowY:'auto',position:'relative'}}>
+        <div style={{maxWidth:'720px',margin:'0 auto',padding:'52px 48px 180px',position:'relative'}}>
+
+          {/* Icon */}
+          <div style={{marginBottom:'4px',position:'relative',minHeight:'40px'}}>
+            {icon?(
+              <span onClick={e=>{e.stopPropagation();setIconPickerOpen(p=>!p);}}
+                style={{fontSize:'2.4rem',cursor:'pointer',lineHeight:1,display:'inline-block',borderRadius:'6px',padding:'2px'}}
+                className="hover:bg-white/5">{icon}</span>
+            ):(
+              <button onClick={e=>{e.stopPropagation();setIconPickerOpen(p=>!p);}}
+                style={{padding:'3px 8px',borderRadius:'5px',background:'none',border:'none',cursor:'pointer',color:'#334155',fontSize:'0.72rem',opacity:0,transition:'opacity .15s'}}
+                className="hover:!opacity-100 hover:bg-white/5 hover:!text-slate-400">+ Add icon</button>
             )}
-            {iconPickerOpen && (
+            {iconPickerOpen&&(
               <div onMouseDown={e=>e.stopPropagation()}
                 style={{position:'absolute',top:'44px',left:0,zIndex:80,background:'#111118',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'12px',padding:'10px',display:'flex',flexWrap:'wrap',gap:'5px',boxShadow:'0 12px 40px rgba(0,0,0,.85)',width:'216px'}}>
-                <div onMouseDown={e=>{e.stopPropagation();setIcon('');setIconPickerOpen(false);scheduleSave(title,blocks,'');}}
+                <div onMouseDown={e=>{e.stopPropagation();setIcon('');setIconPickerOpen(false);scheduleSave(quillRef.current?quillRef.current.root.innerHTML:'');}}
                   style={{padding:'3px 8px',borderRadius:'5px',fontSize:'0.7rem',color:'#475569',cursor:'pointer',background:'rgba(255,255,255,0.05)'}}>None</div>
                 {NOTE_ICONS.map(em=>(
-                  <div key={em} onMouseDown={e=>{e.stopPropagation();setIcon(em);setIconPickerOpen(false);scheduleSave(title,blocks,em);}}
+                  <div key={em} onMouseDown={e=>{e.stopPropagation();setIcon(em);setIconPickerOpen(false);scheduleSave(quillRef.current?quillRef.current.root.innerHTML:'');}}
                     style={{fontSize:'1.2rem',cursor:'pointer',padding:'4px',borderRadius:'4px',lineHeight:1,transition:'background .1s'}} className="hover:bg-white/10">{em}</div>
                 ))}
               </div>
@@ -4180,223 +4199,91 @@ function NoteEditor({note, onChange, allNotes, onOpenNote}){
 
           {/* Title */}
           <textarea ref={titleRef} value={title}
-            onChange={e=>{setTitle(e.target.value);scheduleSave(e.target.value,blocks,icon);}}
+            onChange={e=>{const t=e.target.value;setTitle(t);scheduleSave(quillRef.current?quillRef.current.root.innerHTML:'');}}
+            onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();quillRef.current&&quillRef.current.focus();}}}
             placeholder="Untitled"
             className="nt-title"
-            style={{fontSize:'2.5rem',fontWeight:700,lineHeight:1.1,color:'#f1f5f9',letterSpacing:'-0.03em',marginBottom:0,
-              '::placeholder':{color:'rgba(241,245,249,0.2)'}}}
+            style={{fontSize:'2.5rem',fontWeight:700,lineHeight:1.1,color:'#f1f5f9',letterSpacing:'-0.03em',marginBottom:'16px',padding:0}}
             rows={1}/>
-        </div>
 
-        {/* Blocks */}
-        <div>
-          {visibleBlocks.map((block,bIdx)=>{
-            const indentPx=(block.indent||0)*24;
-            const bgColor=NOTE_BG_COLORS[block.bgColor]||null;
-            const isDragOver=dragOverId===block.id;
-            const isDragging=dragId===block.id;
-            const isToggle=block.type==='toggle';
-            const isCallout=block.type==='callout';
-            const isQuote=block.type==='quote';
-            const isTodo=block.type==='todo';
-            const isDivider=block.type==='divider';
-            const isOpen=openToggles.has(block.id);
-            const typStyle=blockTypography(block);
+          {/* Quill editor */}
+          <div ref={editorDivRef} style={{fontSize:'0.9375rem',lineHeight:1.7,color:'#d1d5db',minHeight:'300px',position:'relative'}}/>
 
-            return (
-              <div key={block.id} className="nb-wrap"
-                onDragOver={e=>handleDragOver(e,block.id)}
-                onDrop={e=>handleDrop(e,block.id)}
-                style={{position:'relative',paddingLeft:indentPx,opacity:isDragging?0.3:1,
-                  borderTop:isDragOver?'2px solid rgba(99,102,241,0.7)':'2px solid transparent',
-                  borderRadius:'4px',marginBottom:'1px'}}>
-
-                {/* Left controls — insert + drag handle */}
-                <div className="nb-ctl" style={{position:'absolute',left:indentPx-36,top:'50%',transform:'translateY(-50%)',display:'flex',gap:'1px',alignItems:'center'}}>
-                  <button
-                    onMouseDown={e=>{e.preventDefault();e.stopPropagation();addBlockAfter(block.id,'text');}}
-                    title="Add block"
-                    style={{width:'18px',height:'18px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'4px',color:'#475569',background:'none',border:'none',cursor:'pointer',fontSize:'14px',lineHeight:1,flexShrink:0}}
-                    className="hover:bg-white/5 hover:text-slate-300">+</button>
-                  <div
-                    draggable
-                    onDragStart={e=>handleDragStart(e,block.id)}
-                    onDragEnd={handleDragEnd}
-                    onMouseDown={e=>{e.stopPropagation();openBlockMenu(e,block.id);}}
-                    title="Drag or click for options"
-                    style={{width:'18px',height:'18px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'4px',color:'#334155',cursor:'grab',fontSize:'10px',lineHeight:1,userSelect:'none',flexShrink:0}}
-                    className="hover:bg-white/5 hover:!text-slate-500">
-                    &#8942;&#8942;
-                  </div>
+          {/* Backlinks */}
+          {backlinks.length>0&&(
+            <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',paddingTop:'20px',marginTop:'32px'}}>
+              <div style={{fontSize:'0.65rem',color:'#1e293b',marginBottom:'8px',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase'}}>
+                Linked from {backlinks.length} {backlinks.length===1?'note':'notes'}
+              </div>
+              {backlinks.map(n=>(
+                <div key={n.id} onClick={()=>onOpenNote&&onOpenNote(n.id)}
+                  style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'3px 8px',marginRight:'6px',marginBottom:'4px',borderRadius:'5px',cursor:'pointer',color:'#818cf8',fontSize:'0.8rem',background:'rgba(99,102,241,0.08)'}} className="hover:bg-indigo-500/15">
+                  {n.icon&&<span style={{fontSize:'0.85rem'}}>{n.icon}</span>}
+                  {n.title||'Untitled'}
                 </div>
-
-                {/* Block inner */}
-                {isDivider ? (
-                  renderBlockContent(block, bIdx, {})
-                ) : isCallout ? (
-                  <div style={{background:bgColor||'rgba(99,102,241,0.08)',borderRadius:'8px',padding:'10px 14px',display:'flex',gap:'10px',alignItems:'flex-start',margin:'2px 0'}}>
-                    <span style={{fontSize:'1.1rem',flexShrink:0,cursor:'pointer',lineHeight:'1.7'}}
-                      onClick={()=>{ const icons=CALLOUT_ICONS; const cur=block.calloutIcon||'💡'; const ni=icons[(icons.indexOf(cur)+1)%icons.length]; updateBlock(block.id,{calloutIcon:ni}); }}>
-                      {block.calloutIcon||'💡'}
-                    </span>
-                    {renderBlockContent(block, bIdx, {flex:1})}
-                  </div>
-                ) : isToggle ? (
-                  <div className={isOpen?'nb-toggle-open':''} style={{display:'flex',alignItems:'flex-start',gap:'4px'}}>
-                    <span className="nb-toggle-arrow" onClick={()=>setOpenToggles(s=>{const ns=new Set(s);ns.has(block.id)?ns.delete(block.id):ns.add(block.id);return ns;})}
-                      style={{cursor:'pointer',flexShrink:0,marginTop:'7px',userSelect:'none',padding:'2px',borderRadius:'3px'}} className="hover:bg-white/5">
-                      &#9654;
-                    </span>
-                    {renderBlockContent(block, bIdx, {fontWeight:500,flex:1})}
-                  </div>
-                ) : isQuote ? (
-                  <div style={{display:'flex',gap:0,borderLeft:'3px solid rgba(99,102,241,0.5)',paddingLeft:'14px',margin:'2px 0'}}>
-                    {renderBlockContent(block, bIdx, {})}
-                  </div>
-                ) : isTodo ? (
-                  <div style={{display:'flex',alignItems:'flex-start',gap:'8px'}}>
-                    <div style={{flexShrink:0,marginTop:'4px',width:'16px',height:'16px',borderRadius:'4px',border:'2px solid rgba(99,102,241,'+(block.checked?'0.8)':'0.3)'),background:block.checked?'rgba(99,102,241,0.7)':'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',transition:'all .12s'}}
-                      onClick={()=>updateBlock(block.id,{checked:!block.checked})}>
-                      {block.checked && <span style={{color:'white',fontSize:'9px',fontWeight:700,lineHeight:1}}>&#10003;</span>}
-                    </div>
-                    {renderBlockContent(block, bIdx, {flex:1})}
-                  </div>
-                ) : block.type==='bullet' ? (
-                  <div style={{display:'flex',gap:'8px',alignItems:'flex-start'}}>
-                    <span style={{color:'rgba(99,102,241,0.6)',flexShrink:0,lineHeight:'1.7',fontSize:'1rem',marginTop:'1px'}}>&#x2022;</span>
-                    {renderBlockContent(block, bIdx, {flex:1})}
-                  </div>
-                ) : block.type==='numbered' ? (
-                  <div style={{display:'flex',gap:'8px',alignItems:'flex-start'}}>
-                    <span style={{color:'rgba(99,102,241,0.6)',flexShrink:0,lineHeight:'1.7',fontSize:'0.9rem',minWidth:'18px',textAlign:'right'}}>
-                      {visibleBlocks.slice(0,bIdx+1).filter(b=>b.type==='numbered').length}.
-                    </span>
-                    {renderBlockContent(block, bIdx, {flex:1})}
-                  </div>
-                ) : block.type==='code' ? (
-                  <div style={{background:'rgba(0,0,0,0.35)',borderRadius:'8px',padding:'2px 0',border:'1px solid rgba(255,255,255,0.06)',margin:'4px 0',overflow:'hidden'}}>
-                    {renderBlockContent(block, bIdx, {padding:'10px 16px',display:'block'})}
-                  </div>
-                ) : (
-                  renderBlockContent(block, bIdx, bgColor?{background:bgColor,borderRadius:'4px',padding:'2px 6px'}:{})
-                )}
-
-                {/* Slash menu */}
-                {slashMenu&&slashMenu.blockId===block.id&&filteredCmds.length>0&&(
-                  <SlashMenu cmds={filteredCmds} eff={slashEff} onApply={t=>applySlashCmd(t,block.id)}/>
-                )}
-
-                {/* Link menu */}
-                {linkMenu&&linkMenu.blockId===block.id&&filteredLinks.length>0&&(
-                  <div style={{position:'absolute',zIndex:70,top:'calc(100% + 4px)',left:indentPx,width:'220px',background:'#111118',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'10px',boxShadow:'0 8px 32px rgba(0,0,0,.8)',overflow:'hidden'}}>
-                    {filteredLinks.map((n,li)=>(
-                      <div key={n.id} onMouseDown={e=>{e.preventDefault();applyLinkCmd(n.title||'Untitled',block.id);}}
-                        style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'8px',cursor:'pointer',background:li===linkIdx?'rgba(99,102,241,0.2)':'transparent'}} className="hover:bg-white/5">
-                        <span style={{fontSize:'0.85rem',flexShrink:0}}>{n.icon||'📝'}</span>
-                        <span style={{fontSize:'0.8rem',color:'#e2e8f0'}}>{n.title||'Untitled'}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Click-to-add */}
-        <div style={{minHeight:'100px',cursor:'text'}} onClick={()=>{
-          const last=blocks[blocks.length-1];
-          if(!last) return;
-          if(last.content!==''||last.type==='divider') addBlockAfter(last.id,'text');
-          else { setTimeout(()=>{ const el=taRefs.current[last.id]; if(el) el.focus(); },0); }
-        }}/>
-
-        {/* Backlinks */}
-        {backlinks.length>0&&(
-          <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',paddingTop:'20px',marginTop:'24px'}}>
-            <div style={{fontSize:'0.65rem',color:'#1e293b',marginBottom:'8px',fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase'}}>
-              Linked from {backlinks.length} {backlinks.length===1?'note':'notes'}
+              ))}
             </div>
-            {backlinks.map(n=>(
-              <div key={n.id} onClick={()=>onOpenNote&&onOpenNote(n.id)}
-                style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'3px 8px',marginRight:'6px',marginBottom:'4px',borderRadius:'5px',cursor:'pointer',color:'#818cf8',fontSize:'0.8rem',background:'rgba(99,102,241,0.08)'}} className="hover:bg-indigo-500/15">
-                {n.icon&&<span style={{fontSize:'0.85rem'}}>{n.icon}</span>}
-                {n.title||'Untitled'}
-              </div>
-            ))}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Floating formatting toolbar */}
-      {floatBar&&(
+      {/* Floating toolbar */}
+      {floatFmt&&(
         <div className="float-fmt" onMouseDown={e=>e.preventDefault()}
-          style={{position:'fixed',zIndex:100,left:floatBar.x,top:floatBar.y,transform:'translate(-50%,-100%)',
+          style={{position:'fixed',zIndex:100,left:floatFmt.x,top:floatFmt.y,transform:'translate(-50%,-100%) translateY(-6px)',
             background:'#0f0f18',border:'1px solid rgba(255,255,255,0.12)',borderRadius:'8px',
             display:'flex',gap:'1px',padding:'3px',boxShadow:'0 4px 20px rgba(0,0,0,.7)'}}>
-          {[['B','bold','font-bold'],['I','italic','italic'],['U','underline','underline'],['S','strike','line-through'],['`','code','font-mono']].map(([lbl,fmt,cls])=>(
+          {[['B','bold'],['I','italic'],['U','underline'],['S','strike'],['`','code']].map(([lbl,fmt])=>(
             <button key={fmt} onMouseDown={e=>{e.preventDefault();applyFmt(fmt);}}
               style={{width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'5px',background:'none',border:'none',cursor:'pointer',fontSize:'0.78rem',fontWeight:700,color:'#94a3b8'}}
               className="hover:bg-white/10 hover:text-white">{lbl}</button>
           ))}
-          <div style={{width:'1px',background:'rgba(255,255,255,0.08)',margin:'3px 1px'}}/>
-          <button onMouseDown={e=>{e.preventDefault();setBlockMenu(prev=>{const b=blocks.find(b=>b.id===floatBar.blockId);if(!b) return prev;return{blockId:b.id,x:floatBar.x,y:floatBar.y,sub:'color'};});setFloatBar(null);}}
-            style={{width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'5px',background:'none',border:'none',cursor:'pointer',fontSize:'0.72rem',fontWeight:700,color:'#818cf8'}}
-            className="hover:bg-white/10" title="Color">A</button>
         </div>
       )}
 
-      {/* Block context menu */}
-      {blockMenu&&(()=>{
-        const bm=blocks.find(b=>b.id===blockMenu.blockId); if(!bm) return null;
-        return (
-          <div onMouseDown={e=>e.stopPropagation()}
-            style={{position:'fixed',top:blockMenu.y,left:blockMenu.x,zIndex:90,background:'#0f0f18',border:'1px solid rgba(255,255,255,0.09)',borderRadius:'10px',boxShadow:'0 8px 32px rgba(0,0,0,.85)',minWidth:'190px',paddingTop:'4px',paddingBottom:'4px',overflow:'visible'}}>
-            {blockMenu.sub==='color' ? (
-              <NoteColorMenu block={bm}
-                onColor={k=>{updateBlock(bm.id,{color:k});setBlockMenu(null);}}
-                onBgColor={k=>{updateBlock(bm.id,{bgColor:k});setBlockMenu(null);}}
-                onClose={()=>setBlockMenu(null)}/>
-            ) : blockMenu.sub==='turn' ? (
-              <div style={{padding:'6px 8px'}}>
-                <div style={{fontSize:'0.62rem',fontWeight:700,color:'#334155',letterSpacing:'0.08em',padding:'2px 4px 5px',textTransform:'uppercase'}}>Turn into</div>
-                <div style={{display:'flex',flexWrap:'wrap',gap:'4px'}}>
-                  {NOTE_BLOCK_TYPES.filter(c=>c.type!=='divider').map(cmd=>(
-                    <div key={cmd.type} onMouseDown={e=>{e.preventDefault();updateBlock(bm.id,{type:cmd.type});setBlockMenu(null);}} title={cmd.label}
-                      style={{padding:'4px 7px',borderRadius:'6px',cursor:'pointer',fontSize:'0.68rem',color:'#818cf8',background:'rgba(99,102,241,0.1)',fontFamily:'monospace',fontWeight:700}} className="hover:bg-indigo-500/20">
-                      {cmd.icon}
-                    </div>
-                  ))}
-                </div>
+      {/* Slash menu */}
+      {slashMenu&&(()=>{
+        const cmds=filterQCmds(slashMenu.query);
+        const eff=Math.min(slashMenu.index,Math.max(0,cmds.length-1));
+        if(!cmds.length) return null;
+        return(
+          <div style={{position:'fixed',zIndex:90,top:slashMenu.y+4,left:slashMenu.x,
+            background:'#0f0f18',border:'1px solid rgba(255,255,255,0.09)',borderRadius:'10px',
+            boxShadow:'0 8px 32px rgba(0,0,0,.85)',minWidth:'200px',maxHeight:'260px',overflowY:'auto',padding:'4px 0'}}>
+            {cmds.map((cmd,i)=>(
+              <div key={cmd.type}
+                onMouseDown={e=>{e.preventDefault();const u={...slashMenu,index:i};slashRef.current=u;actionsRef.current.applySlash();}}
+                style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer',
+                  background:i===eff?'rgba(99,102,241,0.2)':'transparent',borderRadius:'6px',margin:'0 4px'}}
+                className="hover:bg-white/5">
+                <span style={{width:'24px',fontSize:'0.75rem',fontWeight:700,color:'#818cf8',fontFamily:'monospace',flexShrink:0,textAlign:'center'}}>{cmd.icon}</span>
+                <span style={{fontSize:'0.82rem',color:'#cbd5e1'}}>{cmd.label}</span>
               </div>
-            ) : (
-              <>
-                {[
-                  ['Move up',   ()=>moveBlock(bm.id,'up')],
-                  ['Move down', ()=>moveBlock(bm.id,'down')],
-                  ['Duplicate', ()=>duplicateBlock(bm.id)],
-                ].map(([lbl,fn])=>(
-                  <div key={lbl} onClick={()=>{fn();setBlockMenu(null);}}
-                    style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1'}} className="hover:bg-white/5">
-                    {lbl}
-                  </div>
-                ))}
-                <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',margin:'3px 0'}}/>
-                <div onClick={()=>setBlockMenu(p=>({...p,sub:'turn'}))}
-                  style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1',display:'flex',justifyContent:'space-between'}} className="hover:bg-white/5">
-                  <span>Turn into</span><span style={{color:'#475569',fontSize:'9px'}}>&#9654;</span>
-                </div>
-                <div onClick={()=>setBlockMenu(p=>({...p,sub:'color'}))}
-                  style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#cbd5e1',display:'flex',justifyContent:'space-between'}} className="hover:bg-white/5">
-                  <span>Color</span><span style={{color:'#475569',fontSize:'9px'}}>&#9654;</span>
-                </div>
-                <div style={{borderTop:'1px solid rgba(255,255,255,0.05)',margin:'3px 0'}}/>
-                <div onClick={()=>{deleteBlock(bm.id);setBlockMenu(null);}}
-                  style={{padding:'7px 14px',fontSize:'0.82rem',cursor:'pointer',color:'#f87171'}} className="hover:bg-red-500/10">
-                  Delete
-                </div>
-              </>
-            )}
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Link menu */}
+      {linkMenu&&(()=>{
+        const an=allNotes||[]; const n=note;
+        const links=an.filter(x=>x.id!==n.id&&!x.trashed&&(!linkMenu.query||(x.title||'').toLowerCase().includes(linkMenu.query.toLowerCase()))).slice(0,6);
+        const eff=Math.min(linkMenu.index,Math.max(0,links.length-1));
+        if(!links.length) return null;
+        return(
+          <div style={{position:'fixed',zIndex:90,top:linkMenu.y+4,left:linkMenu.x,
+            background:'#111118',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'10px',
+            boxShadow:'0 8px 32px rgba(0,0,0,.8)',overflow:'hidden',width:'220px'}}>
+            {links.map((x,i)=>(
+              <div key={x.id}
+                onMouseDown={e=>{e.preventDefault();const u={...linkMenu,index:i};linkRef.current=u;actionsRef.current.applyLink();}}
+                style={{padding:'7px 12px',display:'flex',alignItems:'center',gap:'8px',cursor:'pointer',
+                  background:i===eff?'rgba(99,102,241,0.2)':'transparent'}}
+                className="hover:bg-white/5">
+                <span style={{fontSize:'0.85rem',flexShrink:0}}>{x.icon||'📝'}</span>
+                <span style={{fontSize:'0.8rem',color:'#e2e8f0'}}>{x.title||'Untitled'}</span>
+              </div>
+            ))}
           </div>
         );
       })()}
