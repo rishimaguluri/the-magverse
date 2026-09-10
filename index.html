@@ -101,6 +101,10 @@
       .float-fmt{animation:fadeInUp .08s ease;box-shadow:0 4px 20px rgba(0,0,0,.7)}
       @media(prefers-reduced-motion:reduce){.nb-wrap,.ns-row,.nb-toggle-arrow,.ns-sidebar{transition:none!important}}
 
+      /* Suppress button lift inside Notes/Deep Work areas */
+      .nb-nolift button:hover,.nb-nolift button:active{transform:none!important;}
+      .nb-nolift button:active{transform:scale(.97)!important;}
+
       /* Quill snow dark theme overrides */
       .ql-container.ql-snow{border:none;font-family:inherit;}
       .ql-editor{color:#d1d5db;font-size:0.9375rem;line-height:1.7;min-height:300px;padding:0;}
@@ -153,7 +157,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-    <script type="text/babel" data-presets="react" src="./App.jsx?v=99"></script>
+    <script type="text/babel" data-presets="react" src="./App.jsx?v=100"></script>
     <script>
       // Catch and display JS errors visually so we can diagnose blank-screen issues
       function showErr(msg) {
