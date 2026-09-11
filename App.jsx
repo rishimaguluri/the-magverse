@@ -4006,7 +4006,7 @@ function NoteEditor({note, onChange, allNotes, onOpenNote}){
     else if(cmd.type==='h3'){q.format('header',3,'user');}
     else if(cmd.type==='bullet'){q.format('list','bullet','user');}
     else if(cmd.type==='numbered'){q.format('list','ordered','user');}
-    else if(cmd.type==='todo'){q.format('list','check','user');}
+    else if(cmd.type==='todo'){q.format('list','unchecked','user');}
     else if(cmd.type==='quote'){q.format('blockquote',true,'user');}
     else if(cmd.type==='code'){q.format('code-block',true,'user');}
     else if(cmd.type==='divider'){

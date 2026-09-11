@@ -121,8 +121,10 @@
       .ql-editor .ql-indent-1:not(.ql-direction-rtl){padding-left:2em;}
       .ql-editor .ql-indent-2:not(.ql-direction-rtl){padding-left:4em;}
       .ql-editor .ql-indent-3:not(.ql-direction-rtl){padding-left:6em;}
-      .ql-editor li[data-list=check]>span{text-decoration:none;}
-      .ql-editor li[data-list=check].ql-checked>span{text-decoration:line-through;opacity:0.5;}
+      .ql-editor li[data-list=unchecked],.ql-editor li[data-list=checked]{list-style:none;padding-left:4px;}
+      .ql-editor li[data-list=unchecked]>.ql-ui:before{content:'\2610';cursor:pointer;color:#475569;margin-right:6px;font-size:1rem;}
+      .ql-editor li[data-list=checked]>.ql-ui:before{content:'\2611';cursor:pointer;color:#6366f1;margin-right:6px;font-size:1rem;}
+      .ql-editor li[data-list=checked]{opacity:0.5;text-decoration:line-through;}
     </style>
   </head>
   <body>
