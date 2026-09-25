@@ -1,0 +1,33 @@
+// consultingContent/ideation.js — Track: Ideation / Brainstorming (2 modules)
+CONSULTING_MODULES.push(
+{
+  id:'structured-brainstorming', trackId:'ideation', title:'Structured Brainstorming', estimatedMinutes:7,
+  primaryCompetency:'ideation', secondaryCompetencies:['structuring'],
+  prerequisites:[], concepts:['categories before ideas','breadth then depth'],
+  thinkFirst:{prompt:'"Give me 6 ways this coffee chain could grow revenue." Before listing any ideas, what CATEGORIES would you organize them into?'},
+  coreIdea:'Weak brainstorming is a flat list of ideas in whatever order they come to mind. Strong brainstorming builds 3-4 CATEGORIES first (e.g., new customers, existing customers, new products, new channels), then generates ideas within each — producing breadth across genuinely different levers instead of five variations on the same idea.',
+  badExample:{text:'"They could add a loyalty program, do more promotions, add a rewards app, offer discounts for referrals, and run more ads."', why:'All five ideas are variations on the SAME lever — discounting/promotion to existing-style customers. No breadth across genuinely different growth levers (new products, new channels, new customer segments).'},
+  strongExample:{text:'"I\'ll organize by category: new customers (partnerships, new locations, delivery), existing customers (loyalty, upsell, frequency), new products (food, merchandise), and new channels (retail bagged coffee, e-commerce). Within new customers, I\'d consider..."', why:'Establishes real breadth across distinct levers before generating specific ideas — each category is a genuinely different way to grow, not a rephrasing of the same idea.'},
+  explanation:'A simple category scaffold that works for most growth brainstorms: new customers / existing customers / new products or services / new channels or geographies. Build the categories out loud FIRST, then populate 1-2 ideas per category.',
+  exercise:{type:'text', prompt:'"Brainstorm ways a regional gym chain could increase revenue." Name 3 categories (not ideas yet) you\'d organize your brainstorm around.',
+    modelAnswer:'Categories: (1) new members (referral programs, corporate partnerships, new locations), (2) existing members (higher-tier memberships, personal training upsell, retention/reduced churn), (3) new revenue streams (merchandise, nutrition/supplements, virtual/at-home classes).'},
+  commonMistakes:['Listing ideas in a flat, unorganized stream.','Generating many ideas that are really the same lever restated.','Skipping categories and going straight to specifics, producing narrow rather than broad coverage.'],
+  reusableRule:'Build categories first, out loud, then generate ideas within each — breadth across levers beats a long list within one lever.',
+  nextDrillId:'brainstorm', relatedCaseIds:['growth'], relatedFrameworkIds:[],
+},
+{
+  id:'prioritizing-ideas', trackId:'ideation', title:'Prioritizing Ideas', estimatedMinutes:6,
+  primaryCompetency:'ideation', secondaryCompetencies:['prioritization'],
+  prerequisites:['structured-brainstorming'], concepts:['impact vs feasibility','prioritizing brainstorms'],
+  thinkFirst:{prompt:'You\'ve brainstormed 8 growth ideas. The interviewer asks: "which would you pursue first?" What TWO criteria would you use to decide?'},
+  coreIdea:'Generating a long list of ideas is only half the exercise — the differentiating skill is prioritizing them using explicit criteria (typically impact and feasibility/speed), and being able to defend the ranking, not just picking the one that sounds most exciting.',
+  badExample:{text:'"I\'d probably start with the loyalty app since that seems like a good idea."', why:'"Seems like a good idea" isn\'t a criterion — it gives the interviewer no basis to evaluate whether the prioritization logic is sound.'},
+  strongExample:{text:'"I\'d rank by impact and speed of implementation. The referral program is lower impact but can launch in weeks with no capex — I\'d start there for a quick win. The new-location expansion is highest impact but takes 12+ months and real capital, so it\'s a parallel long-term track, not a first move."', why:'Names explicit criteria (impact, speed/feasibility), applies them to specific ideas, and distinguishes between quick wins and long-term bets rather than treating all ideas as equally "next."'},
+  explanation:'A simple 2x2 works well out loud: impact (high/low) and feasibility or speed (high/low). Quick wins (high impact, high feasibility) go first; big bets (high impact, low feasibility) run in parallel as longer-term tracks; low-impact ideas regardless of feasibility get deprioritized or dropped.',
+  exercise:{type:'text', prompt:'From this list — (1) add a loyalty app (medium impact, medium effort), (2) open 3 new locations (high impact, high effort/capital), (3) raise prices 5% (high impact, low effort) — which would you prioritize first and why?',
+    modelAnswer:'Prioritize the price increase first — high impact and low effort/risk to implement (a "quick win"), while the loyalty app and new locations proceed in parallel as medium- and long-term tracks respectively, given their higher implementation cost/time.'},
+  commonMistakes:['Picking a "favorite" idea without stated criteria.','Treating all brainstormed ideas as equally actionable regardless of feasibility.','Not distinguishing quick wins from long-term bets.'],
+  reusableRule:'Rank brainstormed ideas by impact and feasibility/speed — quick wins first, big bets in parallel.',
+  nextDrillId:'issue-rank', relatedCaseIds:['growth'], relatedFrameworkIds:[],
+},
+);
