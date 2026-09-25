@@ -1,5 +1,5 @@
 // Magverse Service Worker — caches app shell only, never API responses or personal data
-const CACHE_VERSION = 'magverse-v11';
+const CACHE_VERSION = 'magverse-v12';
 // App.jsx is NOT cached here — the ?v=XX query param in index.html + browser HTTP cache handles it.
 // Only cache the minimal shell needed for offline load.
 const SHELL_URLS = [

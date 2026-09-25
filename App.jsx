@@ -350,6 +350,21 @@ const defaultState = () => ({
       courseVersion: 2,
     },
   },
+  // §10 — Strategy tab: long-term strategy-mastery workspace.
+  // Holds ONLY user progress/user-authored entries — curriculum, frameworks, sources, and the
+  // seeded case live in STRATEGY_CONTENT (strategyContent.js), never here.
+  strategy: {
+    currentWeekId: 'p1w1',
+    streak: { count: 0, lastActiveDate: null },
+    weekProgress: {},
+    frameworksLearned: [],
+    sourceNotes: {},
+    cases: [],
+    companies: [],
+    decisions: [],
+    journal: [],
+    playbook: [],
+  },
   planner: {
     areas:[
       {id:'pa1',name:'Startups',color:'#6366f1',description:'Entrepreneurial projects and ideas'},
@@ -385,17 +400,21 @@ function useToasts(){
 const HAS_SPEECH_API = (typeof window !== 'undefined') && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 function useDictation(onResult){
   const recogRef = useRef(null);
+  const [listening, setListening] = useState(false);
   useEffect(()=>{
     if(!HAS_SPEECH_API) return;
     const R = window.SpeechRecognition || window.webkitSpeechRecognition;
     const r = new R(); r.lang='en-US'; r.interimResults=false; r.maxAlternatives=1;
     r.onresult = (e)=>{ const t = e.results[0][0].transcript; onResult && onResult(t); };
-    r.onerror = ()=>{};
+    r.onerror = ()=>{ setListening(false); };
+    r.onend = ()=>{ setListening(false); };
     recogRef.current = r;
   },[onResult]);
-  const start = ()=>{ if(recogRef.current) try{ recogRef.current.start(); }catch(e){} };
+  const start = ()=>{ if(recogRef.current) try{ recogRef.current.start(); setListening(true); }catch(e){} };
   const stop  = ()=>{ if(recogRef.current) try{ recogRef.current.stop();  }catch(e){} };
-  return { start, stop, hasSpeech: HAS_SPEECH_API };
+  const abort = ()=>{ if(recogRef.current) try{ recogRef.current.abort(); }catch(e){} setListening(false); };
+  const toggle = ()=>{ listening ? stop() : start(); };
+  return { start, stop, abort, toggle, listening, hasSpeech: HAS_SPEECH_API };
 }
 
 /* ── IndexedDB auto-backup (§2) ────────────────────────────────────────────
@@ -540,6 +559,7 @@ function App(){
             {active==='mental-models' && <MentalModelsPanel data={data} setData={setData} toasts={toasts} />}
             {active==='ramp'          && <DeepWorkRampPanel data={data} setData={setData} toasts={toasts} />}
             {active==='review'        && <ReviewPanel       data={data} toasts={toasts} />}
+            {active==='strategy'      && <StrategyPanel     data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
           </div>
         </main>
       </div>
@@ -1248,6 +1268,7 @@ function BottomNav({active, setActive, inboxCount=0}){
     {id:'consulting',   label:'Consulting',  icon:IconConsulting},
     {id:'chathubs',     label:'Learn',       icon:IconChat},
     {id:'golden-egg',   label:'Fund',        icon:IconEgg},
+    {id:'strategy',     label:'Strategy',    icon:IconStrategy},
     {id:'research',     label:'Research',    icon:IconResearch},
     {id:'ramp',         label:'Ramp',        icon:IconRamp},
     {id:'review',       label:'Review',      icon:IconReview},
@@ -1280,6 +1301,7 @@ function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
     {id:'career',      label:'Career',       icon:IconBriefcase},
     {id:'consulting',  label:'Consulting',   icon:IconConsulting},
     {id:'golden-egg',  label:'Golden Egg',   icon:IconEgg},
+    {id:'strategy',    label:'Strategy',     icon:IconStrategy},
     {id:'research',    label:'Research',     icon:IconResearch},
     {id:'mental-models',label:'Models',      icon:IconBrain},
     {id:'ramp',        label:'Deep Work',    icon:IconRamp},
@@ -6135,15 +6157,16 @@ function ReflectTalk({msgs,setMsgs,mode,reflect,journals,apiKey,toasts,userName,
     let consultingCtx='';
     if(consulting&&planScore>=2){
       const drills=consulting.drills||[];
-      const C_DIMS_R=['Structuring','Ideation','Quant','Charts','BusinessJudgment','Hypothesis','Prioritization','Synthesis','Communication'];
-      const dimLines=C_DIMS_R.map(d=>{
-        const recent=drills.filter(x=>x.dimension===d).slice(-5);
+      // Derived from the canonical competency model (consultingCompetencies.js) — was a hand-
+      // duplicated, drifted subset (missing caseManagement) before the Consulting Pass-1 rebuild.
+      const dimLines=PRIMARY_COMPETENCY_IDS.map(d=>{
+        const recent=drills.filter(x=>migrateConsultingDimension(x.dimension)===d).slice(-5);
         if(!recent.length)return null;
         const avg=(recent.reduce((s,x)=>s+x.score,0)/recent.length).toFixed(1);
-        return `${d}: ${avg}/10`;
+        return `${PRIMARY_COMPETENCY_LABELS[d]}: ${avg}/10`;
       }).filter(Boolean);
       if(dimLines.length) consultingCtx=dimLines.join(' | ');
-      const errors=(consulting.errorLog||[]).filter(e=>!e.resolved).slice(0,3).map(e=>e.dimension);
+      const errors=(consulting.errorLog||[]).filter(e=>!e.resolved).slice(0,3).map(e=>PRIMARY_COMPETENCY_LABELS[migrateConsultingDimension(e.dimension)]||e.dimension);
       if(errors.length) consultingCtx+=(consultingCtx?'\nOpen weaknesses: ':'')+errors.join(', ');
     }
 
@@ -8077,6 +8100,7 @@ function OnboardModal({onClose, open, setActive}){
 
 /* -------------------- Icons -------------------- */
 function IconCalendar(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg> }
+function IconStrategy(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></svg> }
 function IconKanban(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="4" /><rect x="14" y="11" width="7" height="10" /><rect x="3" y="11" width="7" height="10" /></svg> }
 function IconDumbbell(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 12h3m14 0h3M7 12h10" /><rect x="1" y="9" width="3" height="6" rx="1" /><rect x="20" y="9" width="3" height="6" rx="1" /></svg> }
 function IconUsers(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg> }
@@ -8124,7 +8148,7 @@ function followUpStatus(lastContacted, followUpDays=14){
 
 // ---- Consulting ----
 function getDefaultConsulting(){
-  return {drills:[],cases:[],caseLog:[],errorLog:[],practiceplan:null,consultingVoiceEnabled:false};
+  return {drills:[],cases:[],caseLog:[],errorLog:[],unpromptedLog:[],practiceplan:null,consultingVoiceEnabled:false,learnProgress:{},evidenceLog:[]};
 }
 
 // ---- Resume Editor ----
@@ -12485,33 +12509,40 @@ function ReviewPanel({data, toasts}){
 
 /* ================== CONSULTING PANEL ================== */
 
-const C_DIMS = ['Structuring','Ideation','Quant','Charts','BusinessJudgment','Hypothesis','Prioritization','Synthesis','Communication','CaseManagement'];
-const C_DIM_LABELS = {Structuring:'Structuring',Ideation:'Ideation',Quant:'Quant',Charts:'Charts',BusinessJudgment:'Business Judgment',Hypothesis:'Hypothesis',Prioritization:'Prioritization',Synthesis:'Synthesis',Communication:'Communication',CaseManagement:'Case Mgmt'};
+// Canonical competency model lives in consultingCompetencies.js (loaded before this file).
+// C_DIMS/C_DIM_LABELS are derived from it — never hand-duplicated — so Home/Drills/Review/
+// Tracker/Cases all read from the same one source of truth. migrateConsultingDimension()
+// keeps any historically-persisted record (old string ids) reading correctly with no migration.
+const C_DIMS = PRIMARY_COMPETENCY_IDS;
+const C_DIM_LABELS = PRIMARY_COMPETENCY_LABELS;
 
 const DRILL_CATALOG = [
-  {dimension:'Structuring',type:'framework-gen',label:'Framework Generation',timeLimit:120,
+  {dimension:'structuring',type:'framework-gen',label:'Framework Generation',timeLimit:120,
     prompts:['A mid-size retailer\'s profits fell 15% over two years while revenue held flat. Walk through how you\'d structure this problem.','A SaaS company\'s churn rate doubled last quarter. How would you structure diagnosing and fixing this?','A regional hospital network wants to grow revenue 20% in three years. Outline your structure.']},
-  {dimension:'Structuring',type:'framework-critique',label:'Framework Critique',timeLimit:90,
+  {dimension:'structuring',type:'framework-critique',label:'Framework Critique',timeLimit:90,
     prompts:['A consultant proposes diagnosing a profit decline using only the income statement. What is wrong with this approach and what would you add?','A team plans to analyze market entry by only looking at market size and competition. What critical dimensions are missing?','An analyst breaks down a cost problem as fixed vs. variable. What\'s missing from this structure?']},
-  {dimension:'Quant',type:'estimation',label:'Market Estimation',timeLimit:180,
+  {dimension:'quantitativeReasoning',type:'estimation',label:'Market Estimation',timeLimit:180,
     prompts:['Estimate the annual revenue of all coffee shops in New York City.','Estimate the US market size for electric vehicle charging stations.','How many commercial flights take off from US airports on an average day?']},
-  {dimension:'Quant',type:'mental-math',label:'Mental Math',timeLimit:60,
+  {dimension:'quantitativeReasoning',type:'mental-math',label:'Mental Math',timeLimit:60,
     prompts:['A factory produces 850 units/day and operates 5.5 days/week. What is the annual output (52 weeks)?','Revenue is $240M and growing 15% per year. What will revenue be in 3 years?','A company has 12,000 employees: 60% full-time at $85K, 40% contractors at $70K. What is the annual wage bill?']},
-  {dimension:'Ideation',type:'brainstorm',label:'Brainstorm Sprint',timeLimit:60,
+  {dimension:'ideation',type:'brainstorm',label:'Brainstorm Sprint',timeLimit:60,
     prompts:['List as many ways as possible that a grocery chain could increase revenue.','What are all the reasons a customer might stop using a streaming service?','List every possible growth lever for a mid-market hotel chain.']},
-  {dimension:'Charts',type:'chart-read',label:'Chart Interpretation',timeLimit:90,
-    prompts:['Q1–Q4 revenue: Product A: $4M, $4.5M, $4.8M, $3.9M. Product B: $2M, $2.8M, $3.9M, $5.2M. What is the headline insight and what two questions would you ask the CEO?','COGS margin went from 42% to 51% over 8 quarters while gross revenue grew 18%. What does this tell you and what would you investigate first?','Customer acquisition cost rose steadily for 6 quarters (+60% total) while new customer volume fell 20%. Headline insight and your first hypothesis?']},
-  {dimension:'BusinessJudgment',type:'profit-decline',label:'Profit Decline Diagnosis',timeLimit:150,
+  {dimension:'exhibitInterpretation',type:'chart-read',label:'Chart Interpretation',timeLimit:90,
+    // Real exhibits (consultingExhibits.js DRILL_EXHIBITS), not text-described charts — question
+    // text and chart data are separate; exhibitIds[i] pairs with prompts[i].
+    exhibitIds:['drill-chart-1','drill-chart-2','drill-chart-3'],
+    prompts:['What is the headline insight and what two questions would you ask the CEO?','What does this tell you and what would you investigate first?','What is the headline insight and your first hypothesis?']},
+  {dimension:'businessJudgment',type:'profit-decline',label:'Profit Decline Diagnosis',timeLimit:150,
     prompts:['A convenience store chain\'s operating margin fell from 8% to 4% in 18 months while revenue grew 5%. What is your leading hypothesis?','A software company\'s net income fell 25% while revenue rose 12%. What are the three most likely causes?','A retailer\'s gross margin expanded but EBIT fell. What structure would you use to find the cause?']},
-  {dimension:'Hypothesis',type:'hyp-gen',label:'Hypothesis Generation',timeLimit:90,
+  {dimension:'hypothesisDriven',type:'hyp-gen',label:'Hypothesis Generation',timeLimit:90,
     prompts:['A restaurant chain\'s same-store sales fell 8% in Q2. State your leading hypothesis specifically, and explain why it leads.','A B2B SaaS company\'s trial-to-paid conversion dropped from 40% to 22% in one quarter. What is your leading hypothesis?','A manufacturer\'s defect rate doubled in 60 days. State your most specific hypothesis and the first thing you would check.']},
-  {dimension:'Prioritization',type:'issue-rank',label:'Issue Prioritization',timeLimit:120,
+  {dimension:'prioritization',type:'issue-rank',label:'Issue Prioritization',timeLimit:120,
     prompts:['For diagnosing a B2B SaaS company\'s 30% decline in new logos, rank from most to least likely and explain: (1) product-market fit degraded, (2) sales underperformance, (3) competitive pressure, (4) pricing issues, (5) marketing funnel problems.','A restaurant chain is losing money. Rank these workstreams by urgency: (1) menu pricing, (2) labor cost, (3) food waste, (4) traffic decline, (5) lease costs.','A hospital system wants to cut costs. Rank from highest to lowest expected impact: (1) staffing, (2) supply chain, (3) facility utilization, (4) billing efficiency, (5) IT systems.']},
-  {dimension:'Synthesis',type:'conclusion',label:'Conclusion Writing',timeLimit:90,
+  {dimension:'synthesis',type:'conclusion',label:'Conclusion Writing',timeLimit:90,
     prompts:['Revenue is up 8% but net income fell 12%. COGS increased 20% driven by raw material costs. Write a one-sentence synthesis of the situation.','Customer acquisition cost doubled while LTV held flat and churn is stable at 5%. Write a one-sentence synthesis of the key issue.','Market share fell from 32% to 28% while the industry grew 10% and the company\'s revenue is flat. Write a one-sentence competitive diagnosis.']},
-  {dimension:'Communication',type:'verbal-answer',label:'Structured Response',timeLimit:120,
+  {dimension:'communication',type:'verbal-answer',label:'Structured Response',timeLimit:120,
     prompts:['Answer as you would in a case interview: "How would you think about whether our client should enter the electric vehicle charging market?"','Structure a response to: "Our largest customer asked for a 15% price reduction. Should we agree? Walk me through your thinking."','Answer concisely and top-down: "What factors would you weigh in deciding whether to acquire a competitor?"']},
-  {dimension:'CaseManagement',type:'client-question',label:'Client Question Handling',timeLimit:120,
+  {dimension:'caseManagement',type:'client-question',label:'Client Question Handling',timeLimit:120,
     prompts:['Your client interrupts your structure: "We already know costs are fine — can\'t we just focus on revenue?" How do you respond?','The CEO says: "I don\'t need a full analysis. Just tell me right now: should we cut headcount?" How do you handle this?','A client asks mid-case: "Your framework seems generic. How is this specific to our situation?" How do you respond?']},
 ];
 
@@ -12520,11 +12551,16 @@ function getActiveDrill(dim,type){
 }
 function getDrillPrompt(drill){
   const arr=drill.prompts;
-  return arr[Math.floor(Math.random()*arr.length)];
+  const i=Math.floor(Math.random()*arr.length);
+  const exhibit = drill.exhibitIds ? DRILL_EXHIBITS[drill.exhibitIds[i]] : null;
+  return {text:arr[i], exhibit};
 }
 
-async function streamFeedback(apiKey,system,userMsg,onChunk){
-  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:600,messages:[{role:'system',content:system},{role:'user',content:userMsg}]})});
+// userMsgOrHistory: a plain string (single-turn) OR a {role,content}[] array (multi-turn history) —
+// widened so CasesSubtab.sendMessage can call this instead of re-implementing the SSE loop inline.
+async function streamFeedback(apiKey,system,userMsgOrHistory,onChunk,maxTokens=600){
+  const history=Array.isArray(userMsgOrHistory)?userMsgOrHistory:[{role:'user',content:userMsgOrHistory}];
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:maxTokens,messages:[{role:'system',content:system},...history]})});
   if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
   const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
   while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;onChunk(out);}}catch{}}}
@@ -12719,15 +12755,15 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDril
   const errorLog=consulting.errorLog||[];
 
   const dimScores=C_DIMS.reduce((acc,d)=>{
-    const dimDrills=drills.filter(x=>x.dimension===d).slice(-5);
-    const dimCases=cases.flatMap(c=>c.competencyScores?Object.entries(c.competencyScores).filter(([k])=>k===d).map(([,v])=>v):[]).slice(-5);
+    const dimDrills=drills.filter(x=>migrateConsultingDimension(x.dimension)===d).slice(-5);
+    const dimCases=cases.flatMap(c=>c.competencyScores?Object.entries(c.competencyScores).filter(([k])=>migrateConsultingDimension(k)===d).map(([,v])=>v):[]).slice(-5);
     const all=[...dimDrills.map(x=>x.score),...dimCases];
     acc[d]=all.length?Math.round(all.reduce((s,v)=>s+v,0)/all.length*10)/10:null;
     return acc;
   },{});
 
   const openErrors=errorLog.filter(e=>!e.resolved).slice(0,10);
-  const recommended=[...new Set(openErrors.map(e=>e.dimension))].slice(0,3);
+  const recommended=[...new Set(openErrors.map(e=>migrateConsultingDimension(e.dimension)))].slice(0,3);
   const recentDrills=drills.slice(-5).reverse();
   const toDateStr=v=>{if(!v)return'';if(typeof v==='string')return v.slice(0,10);return new Date(v).toISOString().slice(0,10);};
   const streak=(()=>{let s=0;const today=new Date().toISOString().slice(0,10);const dates=[...new Set([...drills,...cases.filter(c=>c.finishedAt)].map(x=>toDateStr(x.at||x.finishedAt)).filter(Boolean).sort().reverse())];for(let i=0;i<dates.length;i++){const d=new Date(today);d.setDate(d.getDate()-i);if(dates[i]===d.toISOString().slice(0,10))s++;else break;}return s;})();
@@ -12799,7 +12835,7 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDril
           <div className="space-y-2">
             {recentDrills.map(d=>(
               <div key={d.id} className="flex items-center justify-between text-sm">
-                <div><span style={{color:'#94a3b8'}}>{C_DIM_LABELS[d.dimension]}</span><span className="mx-2" style={{color:'#334155'}}>·</span><span style={{color:'#64748b'}}>{d.drillType}</span></div>
+                <div><span style={{color:'#94a3b8'}}>{C_DIM_LABELS[migrateConsultingDimension(d.dimension)]}</span><span className="mx-2" style={{color:'#334155'}}>·</span><span style={{color:'#64748b'}}>{d.drillType}</span></div>
                 <span className="font-semibold" style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171'}}>{d.score}/10</span>
               </div>
             ))}
@@ -12822,15 +12858,15 @@ function ConsultingHome({consulting,setConsulting,apiKey,toasts,setSubtab,onDril
 const SUBSCORE_LABEL_COLOR={STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
 const OVERALL_SCORE_COLOR={EXCELLENT:'#34d399',STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
 
-function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initType='',voiceEnabled,setVoiceEnabled}){
+function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initType='',voiceEnabled,setVoiceEnabled,onGoToLearn}){
   const [phase,setPhase]=useState('pick'); // pick | focus | drill | grading | result
   const [selDim,setSelDim]=useState(initDim);
   const [selType,setSelType]=useState(initType);
   const [activeDrill,setActiveDrill]=useState(null);
   const [prompt,setPrompt]=useState('');
+  const [activeExhibit,setActiveExhibit]=useState(null);
   const [response,setResponse]=useState('');
   const [answerSource,setAnswerSource]=useState('text'); // 'text' | 'voice'
-  const [isRecording,setIsRecording]=useState(false);
   const [selectedFocus,setSelectedFocus]=useState([]);
   const [timeLeft,setTimeLeft]=useState(0);
   const [timerActive,setTimerActive]=useState(false);
@@ -12838,7 +12874,15 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
   const [grading,setGrading]=useState(false);
   const [expandSection,setExpandSection]=useState({heard:false,worked:true,held:true,depth:false,upgrade:false});
 
-  const recogRef=useRef(null);
+  // Routed through the shared useDictation hook (was 2 separate hand-rolled SpeechRecognition
+  // instantiations before the Consulting Pass-1 rebuild — one here, a second inline duplicate
+  // in the "Dictate" button below).
+  const dict=useDictation(t=>{setResponse(p=>p?p+' '+t:t);setAnswerSource('voice');});
+  const isRecording=dict.listening;
+  const startVoiceRecord=()=>{
+    if(!dict.hasSpeech){toasts.push('Speech recognition not supported in this browser');return;}
+    dict.toggle();
+  };
 
   useEffect(()=>{
     if(!timerActive)return;
@@ -12848,23 +12892,12 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
   },[timerActive,timeLeft]);
 
   // Clean up any open mic on unmount
-  useEffect(()=>()=>{recogRef.current&&recogRef.current.abort();},[]);
-
-  function startVoiceRecord(){
-    const R=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!R){toasts.push('Speech recognition not supported in this browser');return;}
-    if(isRecording&&recogRef.current){recogRef.current.stop();return;}
-    const r=new R();r.lang='en-US';r.interimResults=false;r.maxAlternatives=1;
-    r.onresult=e=>{const t=e.results[0][0].transcript;setResponse(p=>p?p+' '+t:t);setAnswerSource('voice');};
-    r.onend=()=>{setIsRecording(false);recogRef.current=null;};
-    r.onerror=()=>{setIsRecording(false);recogRef.current=null;};
-    r.start();recogRef.current=r;setIsRecording(true);
-  }
+  useEffect(()=>()=>{dict.abort();},[]);
 
   const startDrill=()=>{
     const drill=getActiveDrill(selDim,selType)||DRILL_CATALOG[0];
     const p=getDrillPrompt(drill);
-    setActiveDrill(drill);setPrompt(p);setResponse('');setScoreData(null);setAnswerSource('text');setIsRecording(false);
+    setActiveDrill(drill);setPrompt(p.text);setActiveExhibit(p.exhibit||null);setResponse('');setScoreData(null);setAnswerSource('text');dict.abort();
     setTimeLeft(drill.timeLimit);setTimerActive(true);
     setExpandSection({heard:false,worked:true,held:true,depth:false,upgrade:false});
     setPhase('drill');
@@ -12878,14 +12911,19 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
   const submitDrill=async()=>{
     if(!response.trim()){toasts.push('Enter a response first');return;}
     if(!apiKey){toasts.push('Add API key in Settings');return;}
-    setTimerActive(false);if(recogRef.current)recogRef.current.abort();setIsRecording(false);
+    setTimerActive(false);dict.abort();
     setGrading(true);setPhase('grading');
     try{
-      const recentSameDim=(consulting.drills||[]).filter(d=>d.dimension===activeDrill.dimension).slice(-3);
-      const sd=await getStructuredFeedback(apiKey,activeDrill,prompt,response,answerSource,recentSameDim);
+      const recentSameDim=(consulting.drills||[]).filter(d=>migrateConsultingDimension(d.dimension)===activeDrill.dimension).slice(-3);
+      // Ground grading in the real exhibit data (not just the question text) when one is attached.
+      const gradingPrompt = activeExhibit ? `${prompt}\n\n${describeExhibitForPrompt(activeExhibit)}` : prompt;
+      const sd=await getStructuredFeedback(apiKey,activeDrill,gradingPrompt,response,answerSource,recentSameDim);
       setScoreData(sd);
       const attempt={id:uid('dr'),dimension:activeDrill.dimension,drillType:activeDrill.type,prompt,response,answerSource,selectedFocus,score:sd.score,overallLabel:sd.overallLabel,subScores:sd.subScores||{},headline:sd.headline||'',improvements:sd.whatHeldItBack||[],errorPattern:sd.errorLogEntry?.pattern||'',at:Date.now()};
       setConsulting(c=>({...c,drills:[...(c.drills||[]),attempt]}));
+      // Additive — feeds the shared evidence model alongside the existing drills[] write above,
+      // which stays the source of truth for this feature's own display/history.
+      recordConsultingEvidence({sourceType:'drill', sourceId:attempt.id, competency:activeDrill.dimension, score:sd.score, observation:sd.headline||''}, setConsulting);
       if(sd.score<7&&sd.errorLogEntry){
         const errEntry={id:uid('er'),dimension:activeDrill.dimension,drillId:attempt.id,caseId:null,description:sd.errorLogEntry.pattern,feedback:sd.errorLogEntry.fix,createdAt:Date.now(),resolved:false};
         setConsulting(c=>({...c,errorLog:[...(c.errorLog||[]),errEntry]}));
@@ -12895,13 +12933,13 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
   };
 
   const retrySame=()=>{
-    setResponse('');setScoreData(null);setAnswerSource('text');setIsRecording(false);
+    setResponse('');setScoreData(null);setAnswerSource('text');dict.abort();
     setTimeLeft(activeDrill.timeLimit);setTimerActive(true);
     setExpandSection({heard:false,worked:true,held:true,depth:false,upgrade:false});
     setPhase('drill');
   };
   const nextDrill=()=>{startDrill();};
-  const backToPick=()=>{setPhase('pick');setActiveDrill(null);setPrompt('');setResponse('');setScoreData(null);if(recogRef.current)recogRef.current.abort();setIsRecording(false);};
+  const backToPick=()=>{setPhase('pick');setActiveDrill(null);setPrompt('');setActiveExhibit(null);setResponse('');setScoreData(null);dict.abort();};
 
   const dimOptions=[{value:'',label:'Any dimension'},...C_DIMS.map(d=>({value:d,label:C_DIM_LABELS[d]}))];
   const typeOptions=selDim?[{value:'',label:'Any type'},...DRILL_CATALOG.filter(d=>d.dimension===selDim).map(d=>({value:d.type,label:d.label}))]:[{value:'',label:'Pick a dimension first'}];
@@ -12949,7 +12987,7 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
           {(consulting.drills||[]).slice(-5).reverse().map(d=>(
             <div key={d.id} className="flex justify-between items-center text-sm py-1.5 border-b border-white/3 last:border-0">
               <div className="flex items-center gap-2 min-w-0">
-                <span style={{color:'#94a3b8'}} className="truncate">{C_DIM_LABELS[d.dimension]} · {d.drillType}</span>
+                <span style={{color:'#94a3b8'}} className="truncate">{C_DIM_LABELS[migrateConsultingDimension(d.dimension)]} · {d.drillType}</span>
                 {d.answerSource==='voice'&&<span className="text-xs" style={{color:'#6366f1'}}>🎙</span>}
               </div>
               <span style={{color:d.score>=7?'#34d399':d.score>=5?'#f59e0b':'#f87171',fontWeight:600,flexShrink:0}}>{d.score}/10</span>
@@ -13019,6 +13057,7 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
           <button onClick={backToPick} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>✕ Exit</button>
         </div>
       </div>
+      {activeExhibit && <div className="mb-4"><ExhibitViewer exhibit={activeExhibit} mode="panel"/></div>}
       <div className="glass rounded-xl p-5 border-subtle mb-4">
         <div className="text-xs font-semibold mb-2" style={{color:'#475569'}}>PROMPT</div>
         <div className="text-sm leading-relaxed">{prompt}</div>
@@ -13036,8 +13075,8 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
               {isRecording?'⏹ Stop recording':'🎙 Record answer'}
             </button>
           ):(
-            <button onClick={()=>{const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R){toasts.push('Speech not supported');return;}const r=new R();r.lang='en-US';r.interimResults=false;r.onresult=e=>{const t=e.results[0][0].transcript;setResponse(p=>p?p+' '+t:t);setAnswerSource('voice');};r.start();}}
-              className="text-xs px-2 py-1 rounded" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>🎙 Dictate</button>
+            <button onClick={startVoiceRecord}
+              className="text-xs px-2 py-1 rounded" style={{color:isRecording?'#f87171':'#818cf8',background:isRecording?'rgba(248,113,113,0.12)':'rgba(99,102,241,0.1)'}}>{isRecording?'⏹ Stop':'🎙 Dictate'}</button>
           )}
         </div>
         {voiceEnabled&&!response&&(
@@ -13205,6 +13244,10 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
           <button onClick={nextDrill} className="px-5 py-2.5 rounded-lg text-sm font-semibold" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>Next Drill →</button>
           <button onClick={backToPick} className="px-5 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#64748b'}}>← Change Drill</button>
         </div>
+        {sd.score<7 && onGoToLearn && (()=>{
+          const mod=findModuleForCompetency(activeDrill.dimension, consulting.learnProgress||{});
+          return mod ? <button onClick={()=>onGoToLearn(mod.id)} className="mt-2 text-xs px-3 py-1.5 rounded-lg" style={{color:'#818cf8',background:'rgba(99,102,241,0.1)'}}>Learn: {mod.title} →</button> : null;
+        })()}
       </div>
     );
   }
@@ -13212,539 +13255,22 @@ function DrillsSubtab({consulting,setConsulting,apiKey,toasts,initDim='',initTyp
   return null;
 }
 
-/* ----------- Cases ----------- */
-const CASE_STATES=['opening','clarify','objective','structure','exploration','synthesis','recommendation','debrief','done'];
-const CASE_STATE_LABELS={opening:'Opening',clarify:'Clarification',objective:'Objective',structure:'Structure',exploration:'Analysis',synthesis:'Synthesis',recommendation:'Recommendation',debrief:'Debrief',done:'Complete'};
-
-const CASES_CATALOG=[
-  {id:'profitability',label:'Profitability',difficulty:'Intermediate',estimatedMin:20,
-    title:'Specialty Retail Profitability',industry:'Retail',
-    description:'A specialty retailer\'s margin fell from 8% to 3%. Revenue held flat at $800M. Find the root cause and a fix.',
-    setup:'Our client is a mid-size specialty retail chain with 200 stores across the US. Their net profit margin has declined from 8% to 3% over the past two years, despite revenue holding flat at approximately $800M. The CEO wants to understand why margins fell and what they should do about it.',
-    explorationData:'COGS margin expanded 6pp due to raw material cost increases and supplier pricing changes. Labor costs rose 2pp from wage inflation and increased overtime. Rent and D&A are flat. Revenue is flat in aggregate, but transaction volume fell 12% — offset by an 8% price increase. The online channel grew 40% but carries a 3pp lower gross margin than stores.',
-    objectiveComponents:['diagnose the root causes of the margin decline','recommend actions to restore profitability'],
-    constraints:['US market','200-store retail chain','revenue has held flat at $800M'],
-    successCriteria:'restore net profit margin toward historical 8% level',
-  },
-  {id:'market-entry',label:'Market Entry',difficulty:'Intermediate',estimatedMin:25,
-    title:'EV Charging Market Entry',industry:'Energy & Transportation',
-    description:'A major oil company with 4,000 gas stations considers entering EV charging. Should they, and how?',
-    setup:'Our client is one of the largest petroleum companies in the US with $12B in annual revenue and a network of approximately 4,000 owned and operated gas stations. They are evaluating whether to enter the electric vehicle (EV) charging market. They want to know: should they enter, and if so, how and where?',
-    explorationData:'US EV charging market: $5B today, projected $40B by 2030 (35% CAGR). The leading network holds 35% share. DC fast chargers cost $50K–$200K per station; Level 2 chargers $5K–$20K. Average public fast-charger utilization is currently 28%. The client\'s highway and high-traffic suburban locations are ideal for fast charging. Competitors (BP Pulse, EVgo) are already spending aggressively. The client has no EV charging technology or brand today.',
-    objectiveComponents:['determine whether to enter the EV charging market','if entering, recommend how and where to enter'],
-    constraints:['US market','existing 4,000-station network as a potential asset'],
-    successCriteria:'a clear go/no-go decision with a viable entry approach if yes',
-  },
-  {id:'growth',label:'Growth Strategy',difficulty:'Advanced',estimatedMin:30,
-    title:'Regional Bank Revenue Growth',industry:'Financial Services',
-    description:'A regional bank growing at 2% needs a path to 7% revenue growth in 3 years.',
-    setup:'Our client is a regional bank headquartered in Atlanta with $20B in assets and operations across six states in the Southeast US. They have grown revenue at approximately 2% per year, well below the regional banking industry average of 5% and their own target of 7%. The new CEO has engaged us to identify the best path to 7% revenue growth within three years.',
-    explorationData:'Revenue mix: retail banking 60% ($480M), growing 1% YoY; commercial banking 30% ($240M), declining 3% YoY; wealth management 10% ($80M), growing 15% YoY. Digital banking adoption is 40% vs. industry average of 68% — the gap drives higher branch servicing costs. Net interest margin compressed 30bps from deposit repricing. The client has not entered the mortgage market (a gap vs. peers). Geographic footprint is concentrated in metro areas while peer banks expanded into fast-growing secondary cities.',
-    objectiveComponents:['identify the best path to 7% annual revenue growth','deliver growth within three years'],
-    constraints:['Southeast US six-state footprint','three-year timeframe','7% revenue growth target'],
-    successCriteria:'achieve 7% annual revenue growth within three years',
-  },
-  {id:'ma',label:'M&A',difficulty:'Advanced',estimatedMin:30,
-    title:'Software Acquisition Decision',industry:'Technology',
-    description:'An enterprise software firm considers acquiring a B2B SaaS startup at $800M. Worth it?',
-    setup:'Our client is a large enterprise software company with $5B in revenue serving Fortune 1000 firms. They are considering acquiring a B2B SaaS startup called Flowdesk, which provides project management and workflow automation tools. Flowdesk is privately held and asking $800M. The client needs to decide: should they acquire Flowdesk at this valuation, and if so, how should they integrate it?',
-    explorationData:'Flowdesk: $50M ARR, growing 60% YoY, 120% net revenue retention (excellent), -15% EBITDA margin. Average contract $62K; 800 customers. Our client\'s current PM module generates $120M in revenue growing only 5% and has been losing deals to Flowdesk. Our client has 3,000 enterprise customers with no Flowdesk overlap — significant cross-sell potential, estimated $30–50M ARR within 2 years. At $800M, the acquisition is priced at 16x ARR. Integration risk: Flowdesk\'s team is 120 people, engineering-heavy, and culture is startup-oriented.',
-    objectiveComponents:['determine whether to acquire Flowdesk at $800M','if acquiring, recommend an integration approach'],
-    constraints:['$800M asking price','Flowdesk is privately held'],
-    successCriteria:'a clear acquire/pass decision with strategic and financial justification',
-  },
-  {id:'operations',label:'Operations',difficulty:'Intermediate',estimatedMin:25,
-    title:'Manufacturing Plant Efficiency',industry:'Consumer Goods',
-    description:'A production plant at 68% utilization with 4.2% defects needs to hit 90% / 1.5% in 18 months.',
-    setup:'Our client is a consumer goods manufacturer with $1.2B in annual revenue. Their flagship plant, responsible for 40% of total output, is running at 68% capacity utilization with a 4.2% defect rate. The industry best-in-class benchmark is 90% utilization and 1.5% defects. The COO has given the plant manager 18 months to reach those benchmarks or the plant faces downsizing.',
-    explorationData:'Three production lines: Line A (85% utilization, 1.8% defects — best performer), Line B (65% utilization, 4.5% defects — HVAC failure causing temperature variance on heat-sensitive components), Line C (55% utilization, 6.5% defects — 2005-vintage equipment, unplanned downtime averaging 18 hours/month). Changeover time averages 4.2 hours across all lines vs. the benchmark of 1.8 hours — root cause is manual calibration procedures not yet digitized. No predictive maintenance system in place.',
-    objectiveComponents:['identify the root causes of low utilization and high defect rates','recommend specific actions to reach 90% utilization and 1.5% defects within 18 months'],
-    constraints:['18-month deadline','flagship plant cannot be shut down','benchmark targets: 90% utilization, 1.5% defect rate'],
-    successCriteria:'reach 90% utilization and 1.5% defect rate within 18 months',
-  },
-];
-
-function getCaseConfig(type){return CASES_CATALOG.find(c=>c.id===type)||CASES_CATALOG[0];}
-
-function buildCaseSystemPrompt(caseConfig,caseState,userObjective=''){
-  const objCtx=userObjective?`\n\nCandidate's stated case objective: "${userObjective}"`:''
-  const stateGuide={
-    opening:'Introduce the case naturally as a real McKinsey interviewer would — name the client, industry, and central question. Do not volunteer any data yet.',
-    clarify:'Answer clarifying questions with concise specific answers. Reveal only what is directly asked. Typical questions: timeframe, client description, geography, competitive context.',
-    objective:'The candidate is about to state their understanding of the case objective. Do not prompt them yet — this is handled separately in the UI.',
-    structure:`The candidate will present their structure. Give honest brief feedback on whether it is MECE and complete.${userObjective?' Explicitly assess whether the structure would actually answer the stated objective: "'+userObjective+'". If the structure drifts from the objective, name the gap.':''} Then move into exploration.`,
-    exploration:`Provide data from the exploration dataset only when directly asked. Guide toward the key insight without giving it away. If they pursue an unproductive branch, let them spend 1-2 turns before redirecting.${userObjective?' Occasionally check that analysis stays relevant to the stated objective.':''}`,
-    synthesis:`Ask the candidate to summarize findings in 2-3 sentences. Push back if they are vague or missing a key driver.${userObjective?' Verify that the synthesis addresses the original objective: "'+userObjective+'"':''}`,
-    recommendation:`Ask for a clear actionable recommendation with quantitative rationale. Push back if it is too generic or ignores risk.${userObjective?' Critically: ensure the recommendation directly answers the stated objective ("'+userObjective+'"). If it does not, flag the gap explicitly.':''}`,
-    debrief:'Give specific coaching: what they did well, where they lost time or missed key issues, and one concrete thing to practice next.',
-  };
-  return `You are a professional case interview coach playing the role of a McKinsey senior interviewer. You are conducting a ${caseConfig.label} case interview. Be realistic but instructive. Stay in character throughout. Give information only when directly asked — never volunteer data. When the candidate makes a sound move, acknowledge briefly and continue. When they struggle, ask a guiding question. Keep responses concise (2–4 sentences typically).
-
-Case: "${caseConfig.setup}"
-
-Exploration data (reveal only when asked): ${caseConfig.explorationData}${objCtx}
-
-Current phase: ${CASE_STATE_LABELS[caseState]||caseState}. Your role now: ${stateGuide[caseState]||'Continue the interview naturally.'}`;
-}
-
-function CasesSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoiceEnabled}){
-  const [view,setView]=useState('lobby'); // lobby | active | debrief
-  const [activeCase,setActiveCase]=useState(null);
-  const [input,setInput]=useState('');
-  const [streaming,setStreaming]=useState(false);
-  const [streamText,setStreamText]=useState('');
-  const [objInput,setObjInput]=useState('');
-  const [objFeedback,setObjFeedback]=useState(null);
-  const [objSubmitting,setObjSubmitting]=useState(false);
-  const [showObjTips,setShowObjTips]=useState(false);
-  const [objBannerOpen,setObjBannerOpen]=useState(true);
-  const [caseRecording,setCaseRecording]=useState(false);
-  const caseRecogRef=useRef(null);
-  const scrollRef=useRef(null);
-  const dict=useDictation(t=>{setInput(p=>p?p+' '+t:t);});
-
-  const loggedMagverseIds = new Set((consulting.caseLog||[]).filter(cl=>cl.magverseCaseId).map(cl=>cl.magverseCaseId));
-
-  function quickLogCase(ac){
-    if(loggedMagverseIds.has(ac.id)){toasts.push('Already in Tracker');return;}
-    const scores=Object.values(ac.competencyScores||{});
-    const rating=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length):5;
-    setConsulting(c=>({...c,caseLog:[...(c.caseLog||[]),{
-      id:uid('cl'),date:new Date().toISOString().slice(0,10),
-      caseName:ac.title,source:'Magverse',caseType:ac.type,
-      industry:ac.industry||'',mainFeedback:ac.debriefInsight||'',
-      wellTags:[],struggleTags:[],rating,takeaway:'',
-      magverseCaseId:ac.id,createdAt:Date.now()
-    }]}));
-    toasts.push('Logged to Tracker');
-  }
-
-  function startCaseVoice(){
-    const R=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if(!R){toasts.push('Speech recognition not supported');return;}
-    if(caseRecording&&caseRecogRef.current){caseRecogRef.current.stop();return;}
-    const r=new R();r.lang='en-US';r.interimResults=false;r.maxAlternatives=1;
-    r.onresult=e=>{setInput(p=>p?p+' '+e.results[0][0].transcript:e.results[0][0].transcript);};
-    r.onend=()=>{setCaseRecording(false);caseRecogRef.current=null;};
-    r.onerror=()=>{setCaseRecording(false);caseRecogRef.current=null;};
-    r.start();caseRecogRef.current=r;setCaseRecording(true);
-  }
-
-  useEffect(()=>{if(scrollRef.current)scrollRef.current.scrollTop=scrollRef.current.scrollHeight;},[activeCase?.sessionLog,streamText]);
-
-  const startCase=(cfg)=>{
-    const nc={id:uid('cs'),title:cfg.title,industry:cfg.industry,type:cfg.id,state:'opening',sessionLog:[],competencyScores:{},weaknesses:[],userObjective:'',objectiveFeedback:null,objectiveScore:null,startedAt:Date.now(),finishedAt:null};
-    setConsulting(c=>({...c,cases:[...(c.cases||[]),nc]}));
-    setActiveCase(nc);setView('active');setStreamText('');setObjInput('');setObjFeedback(null);
-    sendInterviewerOpener(nc,cfg);
-  };
-
-  const resumeCase=(c)=>{
-    setActiveCase(c);setView('active');
-    if(c.state==='objective'){setObjInput(c.userObjective||'');setObjFeedback(c.objectiveFeedback||null);}
-    else{setObjInput('');setObjFeedback(null);}
-  };
-
-  const evaluateObjective=async()=>{
-    const text=objInput.trim();
-    if(!text||objSubmitting||!apiKey)return;
-    setObjSubmitting(true);
-    try{
-      const cfg=getCaseConfig(activeCase.type);
-      const comps=(cfg.objectiveComponents||[]).join('; ');
-      const cons=(cfg.constraints||[]).join('; ')||'none stated';
-      const sc=cfg.successCriteria||'not specified';
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:500,messages:[
-        {role:'system',content:`You are a case interview coach evaluating a candidate's case objective statement.\n\nCase prompt: "${cfg.setup}"\nRequired components a strong objective must cover: ${comps}\nKey constraints (if any): ${cons}\nSuccess criteria: ${sc}\n\nEvaluate the candidate's statement on these dimensions:\n- clientCentered: reflects what the client actually cares about\n- decisionOriented: identifies a clear decision or outcome\n- specific: captures the actual problem, not a generic restatement\n- complete: covers ALL required components\n- notOverSpecified: does not assume or prescribe the solution prematurely\n- concise: 1-2 sentences, not a paragraph\n\nReturn JSON only: {"rating":"STRONG|SOLID|DEVELOPING|WEAK","assessment":"2-3 sentence assessment, be specific","whatsMissing":null or "what is missing","strongVersion":"one strong version in 1-2 sentences","dimensions":{"clientCentered":true,"decisionOriented":true,"specific":true,"complete":true,"notOverSpecified":true,"concise":true}}\n\nScore MEANING not wording. Many phrasings can be STRONG. STRONG=captures decision and all components concisely. SOLID=good but slightly incomplete or imprecise. DEVELOPING=shows understanding but misses something important. WEAK=misses the core decision or too generic.`},
-        {role:'user',content:`My case objective: "${text}"`}
-      ]})});
-      const j=await resp.json();
-      const parsed=JSON.parse(j.choices[0].message.content);
-      setObjFeedback(parsed);
-      const uc={...activeCase,userObjective:text,objectiveFeedback:parsed,objectiveScore:parsed.rating};
-      setActiveCase(uc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===uc.id?uc:x)}));
-    }catch(e){toasts.push('Error: '+e.message);}
-    setObjSubmitting(false);
-  };
-
-  const confirmObjective=()=>{
-    const next='structure';
-    const nc={...activeCase,state:next};
-    setActiveCase(nc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===nc.id?nc:x)}));
-    setObjFeedback(null);setObjInput('');setObjBannerOpen(true);
-  };
-
-  const sendInterviewerOpener=async(nc,cfg)=>{
-    const caseConfig=cfg||getCaseConfig(nc.type);
-    if(!apiKey){const updated={...nc,sessionLog:[{role:'interviewer',content:'Add your OpenAI API key in Settings to start.',at:Date.now()}]};setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));return;}
-    setStreaming(true);
-    try{
-      const opener=await streamFeedback(apiKey,buildCaseSystemPrompt(caseConfig,'opening'),'Introduce the case to the candidate now.',t=>setStreamText(t));
-      const updated={...nc,sessionLog:[{role:'interviewer',content:opener,at:Date.now()}]};
-      setActiveCase(updated);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===updated.id?updated:x)}));
-      setStreamText('');
-    }catch(e){toasts.push('Error: '+e.message);}
-    setStreaming(false);
-  };
-
-  const sendMessage=async()=>{
-    if(!input.trim()||streaming||!activeCase)return;
-    if(!apiKey){toasts.push('Add API key in Settings');return;}
-    const caseConfig=getCaseConfig(activeCase.type);
-    const userMsg={role:'candidate',content:input.trim(),at:Date.now()};
-    const updatedLog=[...activeCase.sessionLog,userMsg];
-    const uc={...activeCase,sessionLog:updatedLog};
-    setActiveCase(uc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===uc.id?uc:x)}));
-    setInput('');setStreaming(true);setStreamText('');
-    try{
-      const history=updatedLog.slice(-14).map(m=>({role:m.role==='interviewer'?'assistant':'user',content:m.content}));
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o',stream:true,max_tokens:400,messages:[{role:'system',content:buildCaseSystemPrompt(caseConfig,uc.state,uc.userObjective||'')},...history]})});
-      if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error');}
-      const reader=resp.body.getReader(),dec=new TextDecoder();let buf='',out='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.startsWith('data:'))continue;const d=line.slice(5).trim();if(d==='[DONE]')break;try{const j=JSON.parse(d);if(j.choices?.[0]?.delta?.content){out+=j.choices[0].delta.content;setStreamText(out);}}catch{}}}
-      const aiMsg={role:'interviewer',content:out,at:Date.now()};
-      const fc={...uc,sessionLog:[...updatedLog,aiMsg]};
-      setActiveCase(fc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===fc.id?fc:x)}));
-      setStreamText('');
-    }catch(e){toasts.push('Error: '+e.message);}
-    setStreaming(false);
-  };
-
-  const advanceState=()=>{
-    const cur=CASE_STATES.indexOf(activeCase.state);
-    if(cur<0||cur>=CASE_STATES.length-2)return;
-    const next=CASE_STATES[cur+1];
-    const nc={...activeCase,state:next};
-    setActiveCase(nc);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===nc.id?nc:x)}));
-    if(next==='debrief')runDebrief(nc);
-  };
-
-  const runDebrief=async(nc)=>{
-    if(!apiKey)return;
-    setStreaming(true);
-    try{
-      const transcript=nc.sessionLog.map(m=>`${m.role==='interviewer'?'Interviewer':'Candidate'}: ${m.content}`).join('\n\n');
-      const objLine=nc.userObjective?`\nCandidate's stated case objective: "${nc.userObjective}"`:'\nCandidate did not state a case objective.';
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:800,messages:[
-        {role:'system',content:'You are a case coach. Score the candidate 1-10 on each dimension based on the transcript. For ObjectiveDiscipline: did they understand the objective, did their structure address it, did their analysis stay relevant to it, did their recommendation resolve it? Return JSON: {"competencyScores":{"Structuring":0,"Quant":0,"Hypothesis":0,"Synthesis":0,"Communication":0,"BusinessJudgment":0,"CaseManagement":0,"ObjectiveDiscipline":0},"objectiveDisciplineAssessment":"1-2 sentences on objective discipline","weaknesses":["specific weakness 1","specific weakness 2"],"strengths":["strength 1"],"insight":"1 sentence overall summary"}'},
-        {role:'user',content:`Case type: ${nc.type}${objLine}\n\nTranscript:\n${transcript}`}
-      ]})});
-      const j=await resp.json();
-      const parsed=JSON.parse(j.choices[0].message.content);
-      const weak=Object.entries(parsed.competencyScores||{}).filter(([,v])=>v<6).map(([k])=>k);
-      const finished={...nc,state:'done',competencyScores:parsed.competencyScores||{},objectiveDisciplineAssessment:parsed.objectiveDisciplineAssessment||'',weaknesses:parsed.weaknesses||weak,strengths:parsed.strengths||[],debriefInsight:parsed.insight||'',finishedAt:Date.now()};
-      setActiveCase(finished);setConsulting(c=>({...c,cases:(c.cases||[]).map(x=>x.id===finished.id?finished:x)}));
-      for(const dim of weak){
-        const errEntry={id:uid('er'),dimension:dim,drillId:null,caseId:nc.id,description:(parsed.weaknesses||[]).find(w=>w.toLowerCase().includes(dim.toLowerCase()))||'Below threshold in '+dim,feedback:parsed.insight||'',createdAt:Date.now(),resolved:false};
-        setConsulting(cc=>({...cc,errorLog:[...(cc.errorLog||[]),errEntry]}));
-      }
-      setView('debrief');
-    }catch(e){toasts.push('Debrief error: '+e.message);}
-    setStreaming(false);
-  };
-
-  const DIFF_COLORS={Intermediate:'#f59e0b',Advanced:'#f87171'};
-
-  if(view==='lobby'){
-    const inProgress=(consulting.cases||[]).filter(c=>c.state!=='done'&&c.state!=='debrief');
-    const pastDone=(consulting.cases||[]).filter(c=>c.state==='done').slice(-5).reverse();
-    return (
-      <div style={{maxWidth:'800px'}}>
-        {inProgress.length>0&&(
-          <div className="glass rounded-xl p-4 border-subtle mb-5" style={{borderLeft:'3px solid #f59e0b'}}>
-            <div className="text-xs font-semibold mb-3" style={{color:'#f59e0b'}}>IN PROGRESS</div>
-            {inProgress.map(c=>(
-              <div key={c.id} className="flex items-center justify-between py-2">
-                <div>
-                  <span className="text-sm font-medium">{c.title}</span>
-                  <span className="text-xs ml-2 px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{CASE_STATE_LABELS[c.state]||c.state}</span>
-                </div>
-                <button onClick={()=>resumeCase(c)} className="text-xs px-3 py-1 rounded-lg font-semibold" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b'}}>Resume →</button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="text-sm font-semibold mb-3">Choose a case</div>
-        <div className="grid gap-3 mb-6" style={{gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))'}}>
-          {CASES_CATALOG.map(cfg=>(
-            <div key={cfg.id} className="glass rounded-xl p-5 border-subtle flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{cfg.label}</span>
-                    <span className="text-xs" style={{color:DIFF_COLORS[cfg.difficulty]||'#64748b'}}>{cfg.difficulty}</span>
-                    <span className="text-xs" style={{color:'#475569'}}>~{cfg.estimatedMin}min</span>
-                  </div>
-                  <div className="text-sm font-semibold">{cfg.title}</div>
-                  <div className="text-xs mt-0.5" style={{color:'#64748b'}}>{cfg.industry}</div>
-                </div>
-              </div>
-              <div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{cfg.description}</div>
-              <button onClick={()=>startCase(cfg)} className="py-2 rounded-lg text-sm font-semibold mt-auto" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Start Case</button>
-            </div>
-          ))}
-        </div>
-        {pastDone.length>0&&(
-          <div className="glass rounded-xl p-4 border-subtle">
-            <div className="text-xs font-semibold mb-3" style={{color:'#64748b'}}>RECENT COMPLETIONS</div>
-            {pastDone.map(c=>(
-              <div key={c.id} className="py-2 border-b border-white/3 last:border-0">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm">{c.title}</span>
-                  <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
-                </div>
-                {c.competencyScores&&<div className="flex gap-3 flex-wrap mt-1">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,5)}:{v}</span>)}</div>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if(view==='debrief'&&activeCase){
-    const {ObjectiveDiscipline:objScore,...otherScores}=activeCase.competencyScores||{};
-    const RATING_LABEL={STRONG:'STRONG',SOLID:'SOLID',DEVELOPING:'DEVELOPING',WEAK:'WEAK'};
-    const objRating=activeCase.objectiveScore;
-    return (
-      <div className="max-w-2xl">
-        <div className="glass rounded-xl p-6 border-subtle mb-4">
-          <div className="text-sm font-semibold mb-1">Debrief — {activeCase.title}</div>
-          {activeCase.debriefInsight&&<div className="text-xs mb-4 p-3 rounded-lg" style={{background:'rgba(99,102,241,0.1)',color:'#818cf8'}}>{activeCase.debriefInsight}</div>}
-          {/* Objective Discipline block */}
-          <div className="mb-4 p-4 rounded-xl" style={{background:'rgba(99,102,241,0.06)',border:'1px solid rgba(99,102,241,0.15)'}}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-bold tracking-widest" style={{color:'#818cf8'}}>OBJECTIVE DISCIPLINE</div>
-              {objScore!=null&&<span className="text-sm font-bold" style={{color:objScore>=7?'#34d399':objScore>=5?'#f59e0b':'#f87171'}}>{objScore}/10</span>}
-            </div>
-            {activeCase.userObjective&&<div className="text-xs mb-2 italic" style={{color:'#64748b'}}>Stated objective: "{activeCase.userObjective}"</div>}
-            {objRating&&<div className="text-xs font-semibold mb-1" style={{color:objRating==='STRONG'?'#34d399':objRating==='SOLID'?'#a5b4fc':objRating==='DEVELOPING'?'#f59e0b':'#f87171'}}>{RATING_LABEL[objRating]||objRating}</div>}
-            {activeCase.objectiveDisciplineAssessment&&<div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{activeCase.objectiveDisciplineAssessment}</div>}
-          </div>
-          {/* Core competency scores */}
-          {Object.keys(otherScores).length>0&&(
-            <div className="grid grid-cols-2 gap-2 mb-4">
-              {Object.entries(otherScores).map(([k,v])=>(
-                <div key={k} className="flex items-center justify-between p-2 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
-                  <span className="text-xs" style={{color:'#94a3b8'}}>{C_DIM_LABELS[k]||k}</span>
-                  <span className="text-sm font-bold" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{v}/10</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {activeCase.strengths?.length>0&&<div className="mb-3"><div className="text-xs font-semibold mb-1" style={{color:'#34d399'}}>STRENGTHS</div><ul className="space-y-1">{activeCase.strengths.map((s,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>+ {s}</li>)}</ul></div>}
-          {activeCase.weaknesses?.length>0&&<div><div className="text-xs font-semibold mb-1" style={{color:'#f87171'}}>AREAS TO WORK ON</div><ul className="space-y-1">{activeCase.weaknesses.map((w,i)=><li key={i} className="text-sm" style={{color:'#94a3b8'}}>• {w}</li>)}</ul></div>}
-        </div>
-        <div style={{display:'flex',gap:'10px',alignItems:'center',flexWrap:'wrap'}}>
-          <button onClick={()=>setView('lobby')} className="px-6 py-2.5 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>&#x2190; All Cases</button>
-          {activeCase&&activeCase.state==='done'&&(
-            <button onClick={()=>quickLogCase(activeCase)} className="px-4 py-2.5 rounded-lg text-sm font-medium"
-              style={{background:loggedMagverseIds.has(activeCase.id)?'rgba(255,255,255,0.03)':'rgba(99,102,241,0.15)',
-                color:loggedMagverseIds.has(activeCase.id)?'#475569':'#818cf8',
-                border:'1px solid rgba(99,102,241,0.2)'}}>
-              {loggedMagverseIds.has(activeCase.id)?'Logged to Tracker':'Log to Tracker'}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // active case view
-  const caseStateIdx=CASE_STATES.indexOf(activeCase?.state||'opening');
-  const isObjPhase=activeCase?.state==='objective';
-  const showObjBanner=['structure','exploration','synthesis','recommendation'].includes(activeCase?.state)&&activeCase?.userObjective;
-  const RATING_COLOR_MAP={STRONG:'#34d399',SOLID:'#a5b4fc',DEVELOPING:'#f59e0b',WEAK:'#f87171'};
-
-  // ── Objective step — dedicated UI ──────────────────────────────────────
-  if(isObjPhase&&activeCase) return (
-    <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
-      {/* header */}
-      <div className="flex items-center justify-between mb-4 flex-shrink-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium">{activeCase.title}</span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>Objective</span>
-          <div className="flex gap-0.5">{CASE_STATES.slice(0,-1).map((s,i)=><div key={s} className="w-2 h-2 rounded-full" style={{background:i<=caseStateIdx?'#6366f1':'rgba(255,255,255,0.1)'}}/>)}</div>
-        </div>
-        <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
-      </div>
-      <div className="flex-1 overflow-y-auto pr-1">
-        {/* heading */}
-        <div className="mb-5">
-          <div className="text-lg font-bold mb-1" style={{color:'#e2e8f0',letterSpacing:'0.02em'}}>WHAT IS THE GOAL OF THIS CASE?</div>
-          <div className="text-sm" style={{color:'#64748b'}}>Before you structure the problem, state the decision the client needs you to resolve.</div>
-        </div>
-        {/* prompt reminder */}
-        <div className="glass rounded-xl p-4 mb-4 text-sm leading-relaxed" style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.06)'}}>
-          <div className="text-xs font-semibold mb-2" style={{color:'#475569'}}>CASE PROMPT</div>
-          {getCaseConfig(activeCase.type).setup}
-        </div>
-        {/* input or feedback */}
-        {!objFeedback?(
-          <div className="flex flex-col gap-3 mb-4">
-            <textarea value={objInput} onChange={e=>setObjInput(e.target.value)} rows={3}
-              placeholder="e.g. Determine the root causes of the margin decline and recommend actions to restore profitability."
-              className="w-full px-4 py-3 rounded-xl text-sm resize-none outline-none"
-              style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}/>
-            <button onClick={evaluateObjective} disabled={objSubmitting||!objInput.trim()||!apiKey}
-              className="self-start px-5 py-2 rounded-lg text-sm font-semibold"
-              style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:objSubmitting||!objInput.trim()||!apiKey?0.4:1}}>
-              {objSubmitting?'Evaluating…':'Submit Objective'}
-            </button>
-          </div>
-        ):(
-          <div className="flex flex-col gap-3 mb-4">
-            {/* submitted objective */}
-            <div className="rounded-xl p-4" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
-              <div className="text-xs font-bold tracking-widest mb-2" style={{color:'#475569'}}>YOUR OBJECTIVE</div>
-              <div className="text-sm italic" style={{color:'#cbd5e1'}}>"{activeCase.userObjective}"</div>
-            </div>
-            {/* rating badge */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-base font-bold" style={{color:RATING_COLOR_MAP[objFeedback.rating]||'#e2e8f0'}}>{objFeedback.rating}</span>
-              <div className="flex gap-2 flex-wrap">
-                {Object.entries(objFeedback.dimensions||{}).map(([k,v])=>(
-                  <span key={k} className="text-xs px-2 py-0.5 rounded-full" style={{background:v?'rgba(52,211,153,0.1)':'rgba(248,113,113,0.1)',color:v?'#34d399':'#f87171',border:`1px solid ${v?'rgba(52,211,153,0.25)':'rgba(248,113,113,0.25)'}`}}>
-                    {v?'✓':''} {k.replace(/([A-Z])/g,' $1').trim()}
-                  </span>
-                ))}
-              </div>
-            </div>
-            {/* assessment */}
-            <div className="text-sm leading-relaxed" style={{color:'#94a3b8'}}>{objFeedback.assessment}</div>
-            {/* what's missing */}
-            {objFeedback.whatsMissing&&<div className="text-xs p-3 rounded-lg" style={{background:'rgba(245,158,11,0.07)',border:'1px solid rgba(245,158,11,0.2)',color:'#fbbf24'}}><span className="font-semibold">Missing: </span>{objFeedback.whatsMissing}</div>}
-            {/* strong version */}
-            {objFeedback.strongVersion&&(
-              <div className="p-4 rounded-xl" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)'}}>
-                <div className="text-xs font-bold tracking-widest mb-2" style={{color:'#818cf8'}}>ONE STRONG VERSION</div>
-                <div className="text-sm italic" style={{color:'#e2e8f0'}}>"{objFeedback.strongVersion}"</div>
-              </div>
-            )}
-            {/* actions */}
-            <div className="flex gap-2 flex-wrap mt-1">
-              <button onClick={confirmObjective} className="px-5 py-2 rounded-lg text-sm font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff'}}>Continue to Structure →</button>
-              <button onClick={()=>{setObjFeedback(null);setObjInput('');}} className="px-4 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)',color:'#94a3b8'}}>Try Again</button>
-            </div>
-          </div>
-        )}
-        {/* tips section */}
-        <div className="mt-2">
-          <button onClick={()=>setShowObjTips(s=>!s)} className="text-xs flex items-center gap-1" style={{color:'#475569'}}>
-            {showObjTips?'▼':'▶'} How to craft a strong case objective
-          </button>
-          {showObjTips&&(
-            <div className="mt-3 glass rounded-xl p-5 text-xs leading-relaxed flex flex-col gap-3" style={{color:'#94a3b8',border:'1px solid rgba(255,255,255,0.06)'}}>
-              <div>
-                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>1. Find the decision</div>
-                <div>Ask: "What does the client actually need to decide?" — enter, acquire, fix, grow, launch, reduce costs?</div>
-              </div>
-              <div>
-                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>2. Identify the success metric</div>
-                <div>If the prompt gives one (profit, revenue growth, ROI), preserve it. Do not invent one the case does not provide.</div>
-              </div>
-              <div>
-                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>3. Capture key constraints</div>
-                <div>Time, geography, budget, profitability requirements — include them when they materially shape the answer.</div>
-              </div>
-              <div>
-                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>4. Don't solve the case yet</div>
-                <div>The objective defines WHAT must be solved. Your framework determines HOW you will solve it. Do not assume the answer.</div>
-              </div>
-              <div>
-                <div className="font-semibold mb-1" style={{color:'#e2e8f0'}}>5. Keep it short</div>
-                <div>A strong case objective can usually be stated in one sentence.</div>
-              </div>
-              <div className="pt-2 border-t border-white/5">
-                <div className="font-semibold mb-2" style={{color:'#818cf8'}}>Mental template (optional)</div>
-                <div className="italic mb-3" style={{color:'#64748b'}}>"Determine [WHAT] so the client can [DECISION / OUTCOME], while considering [CONSTRAINT if relevant]."</div>
-                <div className="grid gap-1.5">
-                  {[['Profitability','Identify the primary causes of the decline and recommend how management can restore sustainable margins.'],['Market entry','Determine whether the client should enter the market and, if so, how.'],['Growth','Determine how the client can achieve its growth target while maintaining acceptable profitability.'],['M&A','Determine whether the acquisition would create sufficient strategic and financial value, and if so, how to integrate.']].map(([t,ex])=>(
-                    <div key={t}><span className="font-medium" style={{color:'#475569'}}>{t}: </span><span className="italic">{ex}</span></div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  // ── Normal chat view ────────────────────────────────────────────────────
-  return (
-    <div className="flex flex-col" style={{height:'calc(100vh - 140px)'}}>
-      <div className="flex items-center justify-between mb-3 flex-shrink-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium">{activeCase?.title}</span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>{CASE_STATE_LABELS[activeCase?.state]||'Active'}</span>
-          <div className="flex gap-0.5">
-            {CASE_STATES.slice(0,-1).map((s,i)=>(
-              <div key={s} className="w-2 h-2 rounded-full" style={{background:i<=caseStateIdx?'#6366f1':'rgba(255,255,255,0.1)'}}/>
-            ))}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {activeCase&&caseStateIdx<CASE_STATES.length-2&&(
-            <button onClick={advanceState} disabled={streaming} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(245,158,11,0.15)',color:'#f59e0b',opacity:streaming?0.4:1}}>Next Phase →</button>
-          )}
-          <button onClick={()=>setView('lobby')} className="text-xs px-2 py-1 rounded" style={{color:'#64748b'}}>Exit</button>
-        </div>
-      </div>
-      {/* sticky objective banner for structure+ phases */}
-      {showObjBanner&&(
-        <div className="flex-shrink-0 mb-3 rounded-xl px-4 py-2.5 flex items-start gap-3" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.18)'}}>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold tracking-widest mb-0.5" style={{color:'#818cf8'}}>CASE OBJECTIVE</div>
-            {objBannerOpen&&<div className="text-xs leading-relaxed" style={{color:'#94a3b8'}}>{activeCase.userObjective}</div>}
-          </div>
-          <button onClick={()=>setObjBannerOpen(o=>!o)} className="text-xs flex-shrink-0 mt-0.5" style={{color:'#475569'}}>{objBannerOpen?'▲ hide':'▼ show'}</button>
-        </div>
-      )}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 mb-3 pr-1">
-        {(activeCase?.sessionLog||[]).map((m,i)=>(
-          <div key={i} className={`flex ${m.role==='candidate'?'justify-end':''}`}>
-            <div className="max-w-lg rounded-xl px-4 py-3 text-sm" style={{background:m.role==='interviewer'?'rgba(255,255,255,0.04)':'rgba(99,102,241,0.15)',color:'#e2e8f0'}}>
-              <div className="text-xs mb-1 font-semibold" style={{color:m.role==='interviewer'?'#64748b':'#818cf8'}}>{m.role==='interviewer'?'Interviewer':'You'}</div>
-              {m.content}
-            </div>
-          </div>
-        ))}
-        {streaming&&streamText&&(
-          <div className="flex">
-            <div className="max-w-lg rounded-xl px-4 py-3 text-sm" style={{background:'rgba(255,255,255,0.04)',color:'#94a3b8'}}>
-              <div className="text-xs mb-1 font-semibold" style={{color:'#64748b'}}>Interviewer</div>
-              {streamText}<span className="animate-pulse">▋</span>
-            </div>
-          </div>
-        )}
-      </div>
-      <div className="flex-shrink-0">
-        <div className="flex gap-2 mb-1.5 items-center">
-          <button onClick={()=>setVoiceEnabled&&setVoiceEnabled(!voiceEnabled)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
-            style={{background:voiceEnabled?'rgba(99,102,241,0.2)':'rgba(255,255,255,0.04)',border:`1px solid ${voiceEnabled?'rgba(99,102,241,0.4)':'rgba(255,255,255,0.08)'}`,color:voiceEnabled?'#818cf8':'#64748b'}}>
-            🎙 Voice {voiceEnabled?'ON':'OFF'}
-          </button>
-          {voiceEnabled&&<span className="text-xs" style={{color:'#475569'}}>Tap mic to record your response</span>}
-        </div>
-        <div className="flex gap-2">
-          <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}} rows={2} placeholder="Your response… (Enter to send, Shift+Enter for newline)" className="flex-1 px-3 py-2 rounded-xl text-sm bg-transparent resize-none outline-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}} />
-          <div className="flex flex-col gap-1">
-            <button onClick={voiceEnabled?startCaseVoice:()=>dict.start()} title="Record"
-              className="px-3 rounded-lg text-xs transition-all"
-              style={{background:caseRecording?'rgba(248,113,113,0.2)':'rgba(99,102,241,0.15)',color:caseRecording?'#f87171':'#818cf8',border:caseRecording?'1px solid rgba(248,113,113,0.4)':'none',height:'50%'}}>
-              {caseRecording?'⏹':'🎙'}
-            </button>
-            <button onClick={sendMessage} disabled={streaming||!input.trim()} className="px-3 rounded-lg text-xs font-semibold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',height:'50%',opacity:streaming||!input.trim()?0.4:1}}>Send</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ----------- Unprompted ----------- */
+// Was missing entirely before the Consulting Pass-1 rebuild (UnpromptedSubtab called an
+// undefined getScoreJson, throwing on every submission — caught silently, score always showed —/10).
+function buildUnpromptedEvalSystem(mode){
+  return `You are a case coach scoring an unprompted business-communication response. Score 1-10 and identify 1-3 specific improvements. Return JSON: {"score":0,"improvements":["specific improvement 1","specific improvement 2"]}. Base the score on: ${mode==='structured'?'top-down structure, MECE categories, synthesis quality':'concision, clarity, and whether the headline insight was stated first'}.`;
+}
+async function getUnpromptedScoreJson(apiKey,mode,situation,response,narrativeFeedback){
+  const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:300,messages:[
+    {role:'system',content:buildUnpromptedEvalSystem(mode)},
+    {role:'user',content:`Situation: ${situation}\nResponse: ${response}\nNarrative feedback already given: ${narrativeFeedback}`}
+  ]})});
+  if(!resp.ok){const j=await resp.json();throw new Error(j.error?.message||'API error '+resp.status);}
+  const j=await resp.json();
+  try{return JSON.parse(j.choices[0].message.content);}catch{return {score:5,improvements:[]};}
+}
+
 function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,setVoiceEnabled}){
   const [mode,setMode]=useState('structured'); // structured | rapid-brief
   const [phase,setPhase]=useState('setup'); // setup | reading | responding | grading | result
@@ -13791,8 +13317,17 @@ function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,s
       :'You are a case coach. Grade this rapid brief on: (1) concision (2) clarity (3) whether the headline insight is stated first. 2-3 sentences. Be blunt.';
     try{
       const fb=await streamFeedback(apiKey,system,`Mode: ${modeLabel}\nSituation: ${situation}\nResponse: ${response||'(no response)'}`,setFeedback);
-      const sd=await getScoreJson(apiKey,situation,response||'(no response)',fb);
+      const sd=await getUnpromptedScoreJson(apiKey,mode,situation,response||'(no response)',fb);
       setScoreData(sd);
+      const dimension=mode==='structured'?'synthesis':'communication';
+      const entry={id:uid('up'),mode,situation,response,score:sd.score,feedback:fb,improvements:sd.improvements||[],at:Date.now()};
+      setConsulting(c=>({...c,unpromptedLog:[...(c.unpromptedLog||[]),entry]}));
+      // Additive — unpromptedLog above stays the source of truth for this feature's own history.
+      recordConsultingEvidence({sourceType:'unprompted', sourceId:entry.id, competency:dimension, score:sd.score, observation:sd.improvements?.[0]||''}, setConsulting);
+      if(sd.score<6){
+        const errEntry={id:uid('er'),dimension,drillId:null,caseId:null,description:(sd.improvements||[])[0]||'Weak unprompted response ('+modeLabel+')',feedback:fb,createdAt:Date.now(),resolved:false};
+        setConsulting(c=>({...c,errorLog:[...(c.errorLog||[]),errEntry]}));
+      }
     }catch(e){toasts.push('Error: '+e.message);}
     setPhase('result');
   };
@@ -13867,68 +13402,15 @@ function UnpromptedSubtab({consulting,setConsulting,apiKey,toasts,voiceEnabled,s
   );
 }
 
-/* ----------- Learn ----------- */
-const LEARN_CARDS=[
-  {id:'mece',title:'MECE',tag:'Foundation',body:'Mutually Exclusive, Collectively Exhaustive. Every good structure covers all relevant space with no overlap. Test: does adding more items change the total, or just move it between buckets?'},
-  {id:'issue-tree',title:'Issue Trees',tag:'Structuring',body:'A top-down decomposition of a problem. The root is the question; each branch is a potential cause or component; leaves are the facts you need. Good trees are MECE at every level.'},
-  {id:'hyp-led',title:'Hypothesis-Led Thinking',tag:'Hypothesis',body:'State your best answer first, then test it. Don\'t explore a problem with an open mind — explore it with a specific prediction you are actively trying to disprove. McKinsey calls this "point of view from day one."'},
-  {id:'profit',title:'Profitability Framework',tag:'Frameworks',body:'Profit = Revenue − Cost. Revenue = Price × Volume. Costs split into fixed and variable. Always check both sides. Within each: segment by product, channel, geography, or customer to find where the divergence is.'},
-  {id:'market-entry',title:'Market Entry Framework',tag:'Frameworks',body:'Assess: (1) Market attractiveness — size, growth, competition, profitability. (2) Competitive position — can our client win? (3) Entry mode — build, buy, partner. (4) Financials — does it meet the hurdle rate?'},
-  {id:'ma',title:'M&A Framework',tag:'Frameworks',body:'Assess: (1) Strategic rationale — why this deal, why now? (2) Target quality — business, financials, culture. (3) Valuation — what is it worth, what are we paying? (4) Integration risk — can we actually capture synergies?'},
-  {id:'charts',title:'Chart Reading',tag:'Charts',body:'Four steps: (1) State what the chart shows (axes, units, time range). (2) State the headline number or trend. (3) State the key insight (what is surprising or actionable). (4) State what you would investigate first.'},
-  {id:'synthesis',title:'Top-Down Communication',tag:'Communication',body:'Lead with the conclusion, then support it. Never narrate your analysis first. The Pyramid Principle: Answer → Key arguments → Evidence. In a case: "The root cause is X. This is supported by A, B, and C."'},
-  {id:'estimation',title:'Estimation Technique',tag:'Quant',body:'Segment, estimate each segment, multiply. Anchor on facts you know (US population ≈ 330M, avg household ≈ 2.5 people). Show your math explicitly. State your key assumptions. Sanity-check the answer.'},
-  {id:'case-mgmt',title:'Managing the Case',tag:'Case Management',body:'You run the conversation: summarize what you\'ve learned, state what you will do next, ask one focused question at a time. If the client pushes back, acknowledge the constraint and redirect — never freeze.'},
-];
-
-function LearnSubtab(){
-  const [seen,setSeen]=useLocalState('magverse:learnSeen',{});
-  const [open,setOpen]=useState(null);
-  const tags=[...new Set(LEARN_CARDS.map(c=>c.tag))];
-  const [filterTag,setFilterTag]=useState('');
-  const filtered=filterTag?LEARN_CARDS.filter(c=>c.tag===filterTag):LEARN_CARDS;
-
-  return (
-    <div>
-      <div className="flex gap-2 flex-wrap mb-5">
-        <button onClick={()=>setFilterTag('')} className="text-xs px-3 py-1 rounded-full" style={{background:!filterTag?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:!filterTag?'#818cf8':'#64748b'}}>All</button>
-        {tags.map(t=><button key={t} onClick={()=>setFilterTag(t)} className="text-xs px-3 py-1 rounded-full" style={{background:filterTag===t?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:filterTag===t?'#818cf8':'#64748b'}}>{t}</button>)}
-      </div>
-      <div className="grid grid-cols-1 gap-3" style={{maxWidth:'720px'}}>
-        {filtered.map(card=>(
-          <div key={card.id} className="glass rounded-xl p-4 border-subtle cursor-pointer hover:bg-white/2" onClick={()=>setOpen(open===card.id?null:card.id)}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8'}}>{card.tag}</span>
-                <span className="text-sm font-medium">{card.title}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                {seen[card.id]&&<span className="text-xs" style={{color:'#34d399'}}>✓</span>}
-                <span className="text-xs" style={{color:'#475569'}}>{open===card.id?'▲':'▼'}</span>
-              </div>
-            </div>
-            {open===card.id&&(
-              <div className="mt-3">
-                <div className="text-sm leading-relaxed mb-3" style={{color:'#94a3b8'}}>{card.body}</div>
-                <button onClick={e=>{e.stopPropagation();setSeen(s=>({...s,[card.id]:true}));}} className="text-xs px-3 py-1 rounded-lg" style={{background:'rgba(52,211,153,0.15)',color:'#34d399'}}>Mark as reviewed</button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /* ----------- Review ----------- */
-function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError}){
+function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError,onGoToLearn}){
   const [dimFilter,setDimFilter]=useState('');
   const [genPlan,setGenPlan]=useState(false);
   const errorLog=consulting.errorLog||[];
   const cases=consulting.cases||[];
   const plan=consulting.practiceplan;
 
-  const filtered=dimFilter?errorLog.filter(e=>e.dimension===dimFilter):errorLog;
+  const filtered=dimFilter?errorLog.filter(e=>migrateConsultingDimension(e.dimension)===dimFilter):errorLog;
   const open=filtered.filter(e=>!e.resolved).sort((a,b)=>b.createdAt-a.createdAt);
   const resolved=filtered.filter(e=>e.resolved);
 
@@ -13940,7 +13422,7 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
     try{
       const logSummary=(consulting.errorLog||[]).slice(-30).map(e=>`${e.dimension}: ${e.description}`).join('\n');
       const drillSummary=(consulting.drills||[]).slice(-20).map(d=>`${d.dimension} ${d.drillType}: ${d.score}/10`).join('\n');
-      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:400,messages:[{role:'system',content:'You are a case coach. Return JSON: {"drills":[{"dimension":"","drillType":"","rationale":"","priority":1},{"dimension":"","drillType":"","rationale":"","priority":2},{"dimension":"","drillType":"","rationale":"","priority":3}],"insight":"1 sentence summary of current weakness pattern"}'},{role:'user',content:`Error log (recent):\n${logSummary||'(none)'}\n\nDrill history:\n${drillSummary||'(none)'}`}]})});
+      const resp=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model:'gpt-4o-mini',response_format:{type:'json_object'},max_tokens:400,messages:[{role:'system',content:buildPracticePlanSystem()},{role:'user',content:`Error log (recent):\n${logSummary||'(none)'}\n\nDrill history:\n${drillSummary||'(none)'}`}]})});
       const j=await resp.json();
       const parsed=JSON.parse(j.choices[0].message.content);
       setConsulting(c=>({...c,practiceplan:{...parsed,generatedAt:Date.now(),weekOf:new Date().toISOString().slice(0,10)}}));
@@ -13963,7 +13445,7 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
               <div key={i} className="flex items-start gap-3 p-3 rounded-lg" style={{background:'rgba(255,255,255,0.03)'}}>
                 <span className="text-xs w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 font-bold" style={{background:'rgba(99,102,241,0.2)',color:'#818cf8'}}>#{d.priority||i+1}</span>
                 <div>
-                  <span className="text-sm font-medium">{C_DIM_LABELS[d.dimension]||d.dimension}</span>
+                  <span className="text-sm font-medium">{C_DIM_LABELS[migrateConsultingDimension(d.dimension)]||d.dimension}</span>
                   <span className="text-xs ml-2" style={{color:'#64748b'}}>— {d.drillType}</span>
                   {d.rationale&&<div className="text-xs mt-0.5" style={{color:'#64748b'}}>{d.rationale}</div>}
                 </div>
@@ -13976,7 +13458,7 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
       <div className="flex items-center justify-between">
         <div className="flex gap-2 flex-wrap">
           <button onClick={()=>setDimFilter('')} className="text-xs px-3 py-1 rounded-full" style={{background:!dimFilter?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:!dimFilter?'#818cf8':'#64748b'}}>All</button>
-          {[...new Set(errorLog.map(e=>e.dimension))].map(d=><button key={d} onClick={()=>setDimFilter(d)} className="text-xs px-3 py-1 rounded-full" style={{background:dimFilter===d?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:dimFilter===d?'#818cf8':'#64748b'}}>{C_DIM_LABELS[d]||d}</button>)}
+          {[...new Set(errorLog.map(e=>migrateConsultingDimension(e.dimension)))].map(d=><button key={d} onClick={()=>setDimFilter(d)} className="text-xs px-3 py-1 rounded-full" style={{background:dimFilter===d?'rgba(99,102,241,0.25)':'rgba(255,255,255,0.04)',color:dimFilter===d?'#818cf8':'#64748b'}}>{C_DIM_LABELS[d]||d}</button>)}
         </div>
         <button onClick={generatePlan} disabled={genPlan} className="text-xs px-4 py-1.5 rounded-lg font-medium" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'#fff',opacity:genPlan?0.5:1}}>
           {genPlan?'Generating…':'Generate Practice Plan'}
@@ -13992,14 +13474,18 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(248,113,113,0.15)',color:'#f87171'}}>{C_DIM_LABELS[e.dimension]||e.dimension}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(248,113,113,0.15)',color:'#f87171'}}>{C_DIM_LABELS[migrateConsultingDimension(e.dimension)]||e.dimension}</span>
                     <span className="text-xs" style={{color:'#475569'}}>{new Date(e.createdAt).toLocaleDateString()}</span>
                   </div>
                   <div className="text-sm">{e.description}</div>
                   {e.feedback&&<div className="text-xs mt-1" style={{color:'#64748b'}}>{e.feedback.slice(0,150)}{e.feedback.length>150?'…':''}</div>}
                 </div>
                 <div className="flex flex-col gap-1 flex-shrink-0">
-                  {onDrillFromError&&<button onClick={()=>onDrillFromError(e.dimension)} className="text-xs px-2 py-1 rounded whitespace-nowrap" style={{color:'#818cf8',background:'rgba(99,102,241,0.12)'}}>Drill →</button>}
+                  {onDrillFromError&&<button onClick={()=>onDrillFromError(migrateConsultingDimension(e.dimension))} className="text-xs px-2 py-1 rounded whitespace-nowrap" style={{color:'#818cf8',background:'rgba(99,102,241,0.12)'}}>Drill →</button>}
+                  {onGoToLearn&&(()=>{
+                    const mod=findModuleForCompetency(e.dimension, consulting.learnProgress||{});
+                    return mod ? <button onClick={()=>onGoToLearn(mod.id)} className="text-xs px-2 py-1 rounded whitespace-nowrap" style={{color:'#a5b4fc',background:'rgba(99,102,241,0.08)'}}>Learn →</button> : null;
+                  })()}
                   <button onClick={()=>resolve(e.id)} className="text-xs px-2 py-1 rounded" style={{color:'#34d399',background:'rgba(52,211,153,0.1)'}}>Resolve</button>
                 </div>
               </div>
@@ -14015,7 +13501,7 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
             {resolved.slice(0,5).map(e=>(
               <div key={e.id} className="glass rounded-xl p-3 border-subtle opacity-50">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(52,211,153,0.1)',color:'#34d399'}}>{C_DIM_LABELS[e.dimension]||e.dimension}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full" style={{background:'rgba(52,211,153,0.1)',color:'#34d399'}}>{C_DIM_LABELS[migrateConsultingDimension(e.dimension)]||e.dimension}</span>
                   <span className="text-sm">{e.description}</span>
                 </div>
               </div>
@@ -14034,7 +13520,7 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
                   <span className="text-sm font-medium">{c.title}</span>
                   <span className="text-xs" style={{color:'#64748b'}}>{new Date(c.startedAt).toLocaleDateString()}</span>
                 </div>
-                {c.competencyScores&&<div className="flex gap-2 flex-wrap">{Object.entries(c.competencyScores).map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{k.slice(0,4)}:{v}</span>)}</div>}
+                {c.competencyScores&&<div className="flex gap-2 flex-wrap">{Object.entries(c.competencyScores).filter(([k])=>k!=='ObjectiveDiscipline').map(([k,v])=><span key={k} className="text-xs" style={{color:v>=7?'#34d399':v>=5?'#f59e0b':'#f87171'}}>{(C_DIM_LABELS[migrateConsultingDimension(k)]||k).slice(0,12)}:{v}</span>)}</div>}
               </div>
             ))}
           </div>
@@ -14047,7 +13533,9 @@ function ReviewSubtab({consulting,setConsulting,apiKey,toasts,onDrillFromError})
 /* ----------- Case Tracker ----------- */
 const CASE_SOURCES = ['Magverse','RocketBlocks','Case Partner','Casebook','Club','Interview Prep','Other'];
 const CASE_TYPES_TRACKER = ['Profitability','Market Entry','M&A','Growth','Operations','Pricing','Estimation','Other'];
-const CASE_TAGS = ['Structuring','Frameworks','Quantitative','Mental Math','Charts','Brainstorming','Business Intuition','Hypothesis-Driven','Synthesis','Recommendation','Communication','Executive Presence','Time Management','Clarifying Questions'];
+// Derived from the canonical competency model (consultingCompetencies.js) plus two genuine
+// interview-craft/logistics tags that aren't skills, so don't belong in the competency model itself.
+const CASE_TAGS = [...PRIMARY_COMPETENCIES.map(c=>c.label), 'Time Management', 'Executive Presence'];
 
 function CaseTrackerSubtab({consulting, setConsulting, toasts}){
   const caseLog = consulting.caseLog || [];
@@ -14061,7 +13549,7 @@ function CaseTrackerSubtab({consulting, setConsulting, toasts}){
   const [draft, setDraft] = useState(emptyDraft);
 
   function openAdd(){ setDraft({...emptyDraft(),id:uid('cl')}); setEditId(null); setShowForm(true); }
-  function openEdit(entry){ setDraft({...entry,wellTags:entry.wellTags||[],struggleTags:entry.struggleTags||(entry.didWell?[]:[]),}); setEditId(entry.id); setShowForm(true); }
+  function openEdit(entry){ setDraft({...entry,wellTags:entry.wellTags||[],struggleTags:entry.struggleTags||[]}); setEditId(entry.id); setShowForm(true); }
   function save(){
     if(!draft.caseName.trim()){toasts.push('Case name required');return;}
     if(editId){
@@ -14369,8 +13857,13 @@ function CaseTrackerSubtab({consulting, setConsulting, toasts}){
 function ConsultingPanel({data, setData, toasts, isMobile}){
   const [subtab,setSubtab]=useState('home');
   const [drillInit,setDrillInit]=useState({dim:'',type:''});
-  const consulting=data.consulting||getDefaultConsulting();
-  const setConsulting=patch=>setData(d=>({...d,consulting:{...(d.consulting||getDefaultConsulting()),...(typeof patch==='function'?patch(d.consulting||getDefaultConsulting()):patch)}}));
+  const [learnInit,setLearnInit]=useState('');
+  const [caseInit,setCaseInit]=useState('');
+  // Spread over the defaults (not just `||`) so an existing user's older-saved consulting blob
+  // still gets any newly-added key (e.g. unpromptedLog, learnProgress) — same defensive pattern
+  // Strategy's emptyStrategy() uses, no migration script needed.
+  const consulting={...getDefaultConsulting(),...(data.consulting||{})};
+  const setConsulting=patch=>setData(d=>({...d,consulting:{...getDefaultConsulting(),...(d.consulting||{}),...(typeof patch==='function'?patch({...getDefaultConsulting(),...(d.consulting||{})}):patch)}}));
   const apiKey=data.settings?.apiKey||'';
 
   // Voice preference is session-level and persisted in consulting state
@@ -14378,6 +13871,8 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
   const setVoiceEnabled=val=>setConsulting(c=>({...c,consultingVoiceEnabled:!!val}));
 
   const goToDrill=(dim,type='')=>{setDrillInit({dim,type});setSubtab('drills');};
+  const goToLearnModule=(moduleId)=>{setLearnInit(moduleId);setSubtab('learn');};
+  const goToCase=(caseId)=>{setCaseInit(caseId);setSubtab('cases');};
 
   const SUBTABS=[{id:'home',label:'Home'},{id:'drills',label:'Drills'},{id:'cases',label:'Cases'},{id:'tracker',label:'Tracker'},{id:'unprompted',label:'Unprompted'},{id:'learn',label:'Learn'},{id:'review',label:'Review'}];
 
@@ -14401,12 +13896,12 @@ function ConsultingPanel({data, setData, toasts, isMobile}){
         ))}
       </div>
       {subtab==='home'       &&<ConsultingHome consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} setSubtab={setSubtab} onDrillFromError={goToDrill}/>}
-      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} initDim={drillInit.dim} initType={drillInit.type} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
-      {subtab==='cases'      &&<CasesSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
+      {subtab==='drills'     &&<DrillsSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} initDim={drillInit.dim} initType={drillInit.type} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} onGoToLearn={goToLearnModule}/>}
+      {subtab==='cases'      &&<CasePanel consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled} onGoToLearn={goToLearnModule} onGoToDrill={goToDrill} caseInit={caseInit} isMobile={isMobile}/>}
       {subtab==='unprompted' &&<UnpromptedSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} voiceEnabled={voiceEnabled} setVoiceEnabled={setVoiceEnabled}/>}
-      {subtab==='learn'      &&<LearnSubtab/>}
+      {subtab==='learn'      &&<LearnPanel consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onGoToDrill={goToDrill} onGoToCase={goToCase} initModuleId={learnInit}/>}
       {subtab==='tracker'    &&<CaseTrackerSubtab consulting={consulting} setConsulting={setConsulting} toasts={toasts}/>}
-      {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onDrillFromError={goToDrill}/>}
+      {subtab==='review'     &&<ReviewSubtab consulting={consulting} setConsulting={setConsulting} apiKey={apiKey} toasts={toasts} onDrillFromError={goToDrill} onGoToLearn={goToLearnModule}/>}
     </div>
   );
 }
