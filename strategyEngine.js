@@ -158,7 +158,7 @@ const CONCEPT_LABELS = {
 };
 // concept id -> where its content lives in STRATEGY_CONTENT (no parallel taxonomy — ties back to real ids)
 const CONCEPT_TO_CONTENT = {
-  diagnosis:{lessonId:'p1w2-l02'}, 'guiding-policy':{lessonId:'p1w1-l01'}, 'coherent-action':{lessonId:'p1w1-l02'},
+  diagnosis:{lessonId:'p1w2-l03'}, 'guiding-policy':{lessonId:'p1w1-l01'}, 'coherent-action':{lessonId:'p1w1-l02'},
   tradeoffs:{frameworkId:'positioning-tradeoffs', lessonId:'p2w2-l02'}, positioning:{frameworkId:'positioning-tradeoffs', lessonId:'p2w2-l02'},
   'activity-system-fit':{frameworkId:'value-chain-activity-analysis', lessonId:'p2w2-l01'},
   'added-value':{frameworkId:'added-value-wtp-soc', lessonId:'p2w1-l02'},
@@ -478,4 +478,25 @@ function pickPreCaseFocus(strategy, n){
   return Object.entries(totals).map(([dimId, t])=>({dimId, avg:t.sum/t.n}))
     .sort((a,b)=>a.avg-b.avg).slice(0, n||2)
     .map(x=>CASE_SCORECARD_DIMENSIONS.find(d=>d.id===x.dimId)?.label).filter(Boolean);
+}
+
+/* ---------- lesson block rendering (Strategy Experience Upgrade — Pass A) ---------- */
+
+// Returns a lesson's ordered content blocks for the new block-based renderer. Native lessons
+// declare blocks[] directly; every other lesson (the ones not yet migrated) falls back to a
+// deterministic mapping from the original 8 fields, so there is exactly one rendering code
+// path and no lesson ever looks unfinished. Pure and additive — does not touch mastery,
+// scheduling, or recommender logic.
+function getLessonBlocks(lesson){
+  if(!lesson) return [];
+  if(Array.isArray(lesson.blocks) && lesson.blocks.length) return lesson.blocks;
+  return [
+    {type:'text', heading:'Core Idea', body:lesson.coreIdea},
+    {type:'text', heading:'Why It Matters', body:lesson.whyItMatters},
+    {type:'text', heading:'Mental Model', body:lesson.mentalModel},
+    {type:'example', heading:'Real Company Example', body:lesson.example},
+    {type:'counterexample', heading:'Counterexample / Limitation', body:lesson.limitation},
+    {type:'text', heading:'Application', body:lesson.application, emphasis:true},
+    {type:'source', body:lesson.source},
+  ].filter(b=>b.body && String(b.body).trim());
 }
