@@ -74,11 +74,81 @@ function mergeCapabilityEvidenceInto(capabilities, evidenceMap){
 
 /* ==================== root panel ==================== */
 
-const STRATEGY_TABS = [
-  {id:'home', label:'Home'}, {id:'roadmap', label:'Roadmap'}, {id:'review', label:'Review'},
-  {id:'frameworks', label:'Frameworks'}, {id:'sources', label:'Sources'}, {id:'cases', label:'Cases'},
-  {id:'companies', label:'Companies'}, {id:'decisions', label:'Decisions'}, {id:'journal', label:'Journal'}, {id:'playbook', label:'Playbook'},
+// Grouped nav (Strategy Experience Upgrade, Pass A) — a presentation layer over the SAME
+// tab ids the router below already dispatches on. Nothing about setTab, sessionStorage nav
+// persistence, or the router changes; this only changes how tabs are grouped/labeled on screen.
+const STRATEGY_NAV_GROUPS = [
+  {id:'home', label:'Home', tabs:[{id:'home', label:'Home'}]},
+  {id:'learn', label:'Learn', tabs:[{id:'roadmap', label:'Curriculum'}, {id:'review', label:'Review'}]},
+  {id:'practice', label:'Practice', tabs:[{id:'cases', label:'Cases'}]},
+  {id:'apply', label:'Apply', tabs:[{id:'companies', label:'Companies'}, {id:'decisions', label:'Decisions'}]},
+  {id:'knowledge', label:'Knowledge', tabs:[{id:'frameworks', label:'Frameworks'}, {id:'sources', label:'Sources'}]},
+  {id:'reflect', label:'Reflect', tabs:[{id:'journal', label:'Journal'}, {id:'playbook', label:'Playbook'}]},
 ];
+function groupForTab(tab){
+  for(const g of STRATEGY_NAV_GROUPS){ if(g.tabs.some(t=>t.id===tab)) return g.id; }
+  if(tab==='lesson') return 'learn';
+  if(tab==='case') return 'practice';
+  if(tab==='company') return 'apply';
+  return 'home';
+}
+function StrategyNav({tab, setTab, isMobile}){
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const activeGroupId = groupForTab(tab);
+  if(isMobile){
+    const activeGroup = STRATEGY_NAV_GROUPS.find(g=>g.id===activeGroupId);
+    return (
+      <div className="mb-4">
+        <button onClick={()=>setDrawerOpen(true)} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)', color:T.text}}>
+          <span>{activeGroup?.label || 'Menu'}</span><span style={{color:T.faint}}>▾</span>
+        </button>
+        {drawerOpen && (
+          <div className="fixed inset-0 z-50 flex justify-end">
+            <div className="absolute inset-0 bg-black/50" onClick={()=>setDrawerOpen(false)}></div>
+            <div className="relative w-72 h-full glass p-4 overflow-auto" style={{background:'rgba(10,10,15,0.98)'}}>
+              {STRATEGY_NAV_GROUPS.map(g=>(
+                <div key={g.id} className="mb-4">
+                  <div className="text-xs uppercase tracking-wide mb-1" style={{color:T.faint}}>{g.label}</div>
+                  {g.tabs.map(t=>(
+                    <button key={t.id} onClick={()=>{ setTab(t.id); setDrawerOpen(false); }}
+                      className="w-full text-left px-2 py-1.5 rounded-lg text-sm"
+                      style={{background: tab===t.id ? 'rgba(99,102,241,0.18)' : 'transparent', color: tab===t.id ? T.accent : T.dim, fontWeight: tab===t.id?600:400}}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  const activeGroup = STRATEGY_NAV_GROUPS.find(g=>g.id===activeGroupId);
+  return (
+    <div className="mb-4">
+      <div className="flex gap-1 flex-wrap">
+        {STRATEGY_NAV_GROUPS.map(g=>(
+          <button key={g.id} onClick={()=>setTab(g.tabs[0].id)}
+            className="px-3 py-1.5 rounded-lg text-sm"
+            style={{background: activeGroupId===g.id ? 'rgba(99,102,241,0.18)' : 'transparent', color: activeGroupId===g.id ? T.accent : T.mid, fontWeight: activeGroupId===g.id?600:400}}>
+            {g.label}
+          </button>
+        ))}
+      </div>
+      {activeGroup && activeGroup.tabs.length>1 && (
+        <div className="flex gap-1 flex-wrap mt-1.5 pt-1.5" style={{borderTop:'1px solid rgba(255,255,255,0.05)'}}>
+          {activeGroup.tabs.map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} className="px-2.5 py-1 rounded-md text-xs"
+              style={{background: tab===t.id ? 'rgba(255,255,255,0.08)' : 'transparent', color: tab===t.id ? T.text : T.faint}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 const NAV_KEY = 'magverse:strategy:nav';
 
 function StrategyPanel({data, setData, toasts, isMobile}){
@@ -285,20 +355,12 @@ function StrategyPanel({data, setData, toasts, isMobile}){
         <PrimaryButton onClick={()=>setCoachOpen(true)}>Ask the Coach</PrimaryButton>
       </div>
 
-      <div className="flex gap-1 mb-4 flex-wrap">
-        {STRATEGY_TABS.map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)}
-            className="px-3 py-1.5 rounded-lg text-sm"
-            style={{background: tab===t.id ? 'rgba(99,102,241,0.18)' : 'transparent', color: tab===t.id ? T.accent : T.mid, fontWeight: tab===t.id?600:400}}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <StrategyNav tab={tab} setTab={setTab} isMobile={isMobile} />
 
-      {tab==='home' && <StrategyHome strategy={strategy} content={content} nextSession={nextSession} setTab={setTab} openLesson={openLesson} openCase={openCase} requestStartCase={requestStartCase} />}
+      {tab==='home' && <StrategyHome strategy={strategy} content={content} nextSession={nextSession} setTab={setTab} openLesson={openLesson} openCase={openCase} openCompany={openCompany} requestStartCase={requestStartCase} />}
       {tab==='roadmap' && <StrategyRoadmap strategy={strategy} content={content} openLesson={openLesson} />}
       {tab==='review' && <StrategyReview strategy={strategy} recordReview={recordReview} />}
-      {tab==='lesson' && activeLessonId && <LessonViewer lessonId={activeLessonId} strategy={strategy} setCoachContext={setCoachContext}
+      {tab==='lesson' && activeLessonId && <LessonViewerV2 lessonId={activeLessonId} strategy={strategy} setCoachContext={setCoachContext}
         markLessonComplete={markLessonComplete} saveReflectionDraft={saveReflectionDraft} saveNote={saveNote} onBack={()=>setTab('roadmap')} />}
       {tab==='frameworks' && <FrameworkLibrary strategy={strategy} content={content} toggleFrameworkLearned={toggleFrameworkLearned} />}
       {tab==='sources' && <SourceLibrary strategy={strategy} content={content} upStrategy={upStrategy} />}
@@ -355,37 +417,102 @@ function NextSessionCard({nextSession, openLesson, openCase, requestStartCase, s
 
 const STATUS_RANK = { WEAK:0, DEVELOPING:1, STRONG:2, MASTERED:3 };
 
-function StrategyHome({strategy, content, nextSession, setTab, openLesson, openCase, requestStartCase}){
+function currentPhaseFor(strategy, content){
+  for(const phase of content.phases){
+    if(phase.status!=='authored') continue;
+    for(const weekId of phase.weekIds){
+      const week = content.weeks[weekId];
+      const wp = (strategy.weekProgress||{})[weekId] || {lessonsRead:[]};
+      if((wp.lessonsRead||[]).length < week.lessonIds.length) return phase;
+    }
+  }
+  const authored = content.phases.filter(p=>p.status==='authored');
+  return authored[authored.length-1] || null;
+}
+
+function buildCurrentThread(strategy, content){
+  const items = [];
+  Object.entries(strategy.weekProgress||{}).forEach(([weekId, wp])=>{
+    (wp.lessonsRead||[]).forEach(lessonId=>{
+      const lesson = content.lessons[lessonId];
+      if(lesson && wp.completedAt) items.push({kind:'Lesson', label:lesson.title, ts:wp.completedAt, lessonId});
+    });
+  });
+  (strategy.cases||[]).forEach(c=>{
+    const cc = content.cases[c.caseContentId];
+    const ts = c.timer?.finishedAt ? new Date(c.timer.finishedAt).toISOString() : c.dateStarted;
+    if(cc && ts) items.push({kind:'Case', label:cc.title, ts, caseAttemptId:c.id});
+  });
+  (strategy.companies||[]).forEach(co=>{
+    if(co.updatedAt) items.push({kind:'Company', label:co.name, ts:co.updatedAt, companyId:co.id});
+  });
+  (strategy.decisions||[]).forEach(d=>{
+    if(d.finalDecision && d.finalDecision.trim() && d.date) items.push({kind:'Decision', label:d.decision||'Decision', ts:new Date(d.date).toISOString(), decisionId:d.id});
+  });
+  return items.sort((a,b)=>new Date(b.ts)-new Date(a.ts)).slice(0,4);
+}
+
+function StrategyHome({strategy, content, nextSession, setTab, openLesson, openCase, openCompany, requestStartCase}){
+  const phase = currentPhaseFor(strategy, content);
   const tested = CAPABILITY_IDS.map(id=>({id, status: deriveMasteryStatus(strategy.learnerModel.capabilities[id]?.evidence)}))
     .filter(c=>c.status!=='UNTESTED').sort((a,b)=>STATUS_RANK[a.status]-STATUS_RANK[b.status]);
-  const recent = getJournalFeed(strategy, content).slice(0,4);
+  const dueCount = Object.values(strategy.conceptMastery||{}).filter(c=>conceptPriority(c, todayStr())>0.4).length;
+  const recentJournal = getJournalFeed(strategy, content).slice(0,3);
+  const thread = buildCurrentThread(strategy, content).slice().reverse();
+
+  const goToThreadItem = (item) => {
+    if(item.lessonId) openLesson(item.lessonId);
+    else if(item.caseAttemptId) openCase(item.caseAttemptId);
+    else if(item.companyId && openCompany) openCompany(item.companyId);
+    else if(item.decisionId) setTab('decisions');
+  };
+
   return (
-    <div className="space-y-5">
-      <div className="glass rounded-2xl p-5" style={{border:'1px solid rgba(99,102,241,0.25)'}}>
+    <div className="space-y-6">
+      {phase && (
+        <div>
+          <div className="text-xs uppercase tracking-wide" style={{color:T.faint}}>Phase {phase.num} · {phase.name}</div>
+          {phase.bigQuestion && <div style={{fontSize:19, fontWeight:600, color:T.text, marginTop:4, lineHeight:1.35}}>{phase.bigQuestion}</div>}
+        </div>
+      )}
+
+      <div className="rounded-2xl p-5" style={{border:'1px solid rgba(99,102,241,0.25)', background:'rgba(99,102,241,0.05)'}}>
         <div className="text-[11px] uppercase tracking-wide mb-1" style={{color:T.accentBright}}>Continue</div>
         <NextSessionCard nextSession={nextSession} openLesson={openLesson} openCase={openCase} requestStartCase={requestStartCase} setTab={setTab} />
       </div>
 
       <div>
-        <div className="text-xs uppercase tracking-wide mb-1" style={{color:T.faint}}>Current development</div>
-        {tested.length===0
-          ? <div className="text-sm py-2" style={{color:T.faint}}>Complete a case or a decision review to start building your capability profile.</div>
-          : <>
-          <div className="text-[11px] mb-1" style={{color:T.faint}}>Weakest first — <span style={{color:STATUS_COLOR.WEAK}}>weak</span>, <span style={{color:STATUS_COLOR.DEVELOPING}}>developing</span>, <span style={{color:STATUS_COLOR.STRONG}}>strong</span>, <span style={{color:STATUS_COLOR.MASTERED}}>mastered</span></div>
-          {tested.slice(0,6).map(c=>(
-            <div key={c.id} className="flex items-center justify-between py-1.5" style={{borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
-              <span className="text-sm" style={{color:T.dim}}>{CAPABILITY_LABELS[c.id]}</span>
-              <span className="text-xs font-medium" style={{color:STATUS_COLOR[c.status]}}>{c.status}</span>
-            </div>
-          ))}
-          </>}
+        <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Your development</div>
+        {tested.length===0 && dueCount===0
+          ? <div className="text-sm" style={{color:T.faint}}>Complete a case or a decision review to start building your capability profile.</div>
+          : <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+            {tested.slice(0,2).map(c=>(
+              <span key={c.id} className="text-sm" style={{color:T.dim}}>{CAPABILITY_LABELS[c.id]}: <span style={{color:STATUS_COLOR[c.status], fontWeight:600}}>{c.status}</span></span>
+            ))}
+            {dueCount>0 && <span className="text-sm" style={{color:T.dim}}>{dueCount} concept{dueCount===1?'':'s'} due for review</span>}
+          </div>}
       </div>
 
-      <div>
-        <div className="text-xs uppercase tracking-wide mb-1" style={{color:T.faint}}>Recent work</div>
-        {recent.length===0
-          ? <div className="text-sm py-2" style={{color:T.faint}}>Nothing yet.</div>
-          : recent.map(item=>(
+      {thread.length>0 && (
+        <div>
+          <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Current thread</div>
+          <div className="flex items-center flex-wrap gap-1.5">
+            {thread.map((item,i)=>(
+              <React.Fragment key={i}>
+                {i>0 && <span style={{color:T.faint}}>→</span>}
+                <button onClick={()=>goToThreadItem(item)} className="text-xs px-2 py-1 rounded-full" style={{background:'rgba(255,255,255,0.05)', color:T.mid}}>
+                  {item.kind}: {item.label.length>28 ? item.label.slice(0,28)+'…' : item.label}
+                </button>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {recentJournal.length>0 && (
+        <div>
+          <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Recent thinking</div>
+          {recentJournal.map(item=>(
             <div key={item.id} className="py-1.5" style={{borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
               <div className="flex items-center gap-2">
                 <Pill>{item.kind}</Pill>
@@ -394,13 +521,14 @@ function StrategyHome({strategy, content, nextSession, setTab, openLesson, openC
               <div className="text-sm mt-0.5" style={{color:T.dim}}>{item.text.length>110 ? item.text.slice(0,110)+'…' : item.text}</div>
             </div>
           ))}
-      </div>
+        </div>
+      )}
 
       <div>
-        <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Or do something else</div>
+        <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Shortcuts</div>
         <div className="flex flex-wrap gap-2 mb-3">
-          {[['cases','New Case'],['companies','New Company'],['decisions','New Decision'],['review','Review'],['journal','Journal'],['playbook','Playbook'],['frameworks','Frameworks']].map(([id,label])=>(
-            <SecondaryButton key={id} onClick={()=>setTab(id)}>{label}</SecondaryButton>
+          {STRATEGY_NAV_GROUPS.filter(g=>g.id!=='home').map(g=>(
+            <SecondaryButton key={g.id} onClick={()=>setTab(g.tabs[0].id)}>{g.label}</SecondaryButton>
           ))}
         </div>
         <div className="flex gap-4"><StatChip label="day streak" value={strategy.streak.count} /><StatChip label="hours logged" value={getTotalHours(strategy)} /></div>
@@ -411,49 +539,74 @@ function StrategyHome({strategy, content, nextSession, setTab, openLesson, openC
 
 /* ==================== Roadmap / Review ==================== */
 
+function lessonTypeBadge(lesson){
+  const t = (lesson.title||'').toLowerCase();
+  if(t.includes('synthesis')) return 'SYNTHESIS';
+  if(t.includes('decision') || t.includes('tree') || t.includes('expected value')) return 'DECISION';
+  if(t.includes('checklist') || t.includes('bias')) return 'REVIEW';
+  if(t.includes('model') || t.includes('economics') || t.includes('leverage') || t.includes('structure')) return 'MODEL';
+  return 'CONCEPT';
+}
+
 function StrategyRoadmap({strategy, content, openLesson}){
   const [openPhase, setOpenPhase] = useState(content.phases.find(p=>p.status==='authored')?.id);
   return (
-    <div className="space-y-2">
-      {content.phases.map(phase=>{
+    <div>
+      {content.phases.map((phase,pi)=>{
         const isOpen = openPhase===phase.id;
         const authored = phase.status==='authored';
+        const totalLessons = phase.weekIds.reduce((s,wid)=>s+content.weeks[wid].lessonIds.length, 0);
+        const doneLessons = phase.weekIds.reduce((s,wid)=>{
+          const wp = strategy.weekProgress[wid] || {lessonsRead:[]};
+          return s + (wp.lessonsRead||[]).length;
+        }, 0);
+        const complete = authored && totalLessons>0 && doneLessons>=totalLessons;
         return (
-          <div key={phase.id} className="glass rounded-xl overflow-hidden" style={{opacity: authored?1:0.55}}>
-            <button onClick={()=>authored && setOpenPhase(isOpen?null:phase.id)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left" style={{cursor: authored?'pointer':'default'}}>
-              <div>
-                <span className="text-xs" style={{color:T.faint}}>Phase {phase.num}</span>
-                <div className="text-sm font-medium" style={{color:T.text}}>{phase.name}</div>
+          <div key={phase.id} className="flex gap-3" style={{opacity: authored?1:0.45}}>
+            <div className="flex flex-col items-center" style={{width:22}}>
+              <div style={{width:22, height:22, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, flexShrink:0,
+                background: complete ? '#10b981' : (isOpen ? 'rgba(99,102,241,0.3)' : 'rgba(255,255,255,0.08)'),
+                color: complete ? '#fff' : (isOpen ? T.accent : T.faint)}}>
+                {complete ? '✓' : phase.num}
               </div>
-              {!authored && <Pill>Not yet authored</Pill>}
-            </button>
-            {isOpen && authored && (
-              <div className="px-4 pb-3 space-y-3">
-                {phase.weekIds.map(weekId=>{
-                  const week = content.weeks[weekId];
-                  const wp = strategy.weekProgress[weekId] || {lessonsRead:[]};
-                  return (
-                    <div key={weekId}>
-                      <div className="text-xs font-medium mb-1" style={{color:T.mid}}>Week {week.num} — {week.name}</div>
-                      <div className="space-y-1">
-                        {week.lessonIds.map(lessonId=>{
-                          const lesson = content.lessons[lessonId];
-                          const done = (wp.lessonsRead||[]).includes(lessonId);
-                          return (
-                            <button key={lessonId} onClick={()=>openLesson(lessonId)}
-                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-sm hover:bg-white/5">
-                              <span style={{width:8,height:8,borderRadius:99,background: done?'#10b981':'rgba(255,255,255,0.15)',flexShrink:0}}></span>
-                              <span style={{color: done?T.mid:T.text}}>{lesson.title}</span>
-                            </button>
-                          );
-                        })}
+              {pi<content.phases.length-1 && <div style={{width:2, flex:1, background:'rgba(255,255,255,0.08)', marginTop:2}}></div>}
+            </div>
+            <div className="flex-1 pb-6 min-w-0">
+              <button onClick={()=>authored && setOpenPhase(isOpen?null:phase.id)} className="text-left w-full" style={{cursor: authored?'pointer':'default'}}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span style={{fontSize:16, fontWeight:600, color:T.text}}>{phase.name}</span>
+                  {!authored && <Pill>Not yet authored</Pill>}
+                </div>
+                {phase.bigQuestion && <div className="text-sm mt-1" style={{color:T.mid}}>{phase.bigQuestion}</div>}
+              </button>
+              {isOpen && authored && (
+                <div className="mt-3 space-y-3">
+                  {phase.weekIds.map(weekId=>{
+                    const week = content.weeks[weekId];
+                    const wp = strategy.weekProgress[weekId] || {lessonsRead:[]};
+                    return (
+                      <div key={weekId}>
+                        <div className="text-xs font-medium mb-1" style={{color:T.faint}}>Week {week.num} — {week.name}</div>
+                        <div className="space-y-0.5">
+                          {week.lessonIds.map(lessonId=>{
+                            const lesson = content.lessons[lessonId];
+                            const done = (wp.lessonsRead||[]).includes(lessonId);
+                            return (
+                              <button key={lessonId} onClick={()=>openLesson(lessonId)}
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-white/5">
+                                <span style={{width:7, height:7, borderRadius:99, background: done?'#10b981':'rgba(255,255,255,0.15)', flexShrink:0}}></span>
+                                <span className="text-sm flex-1" style={{color: done?T.mid:T.text}}>{lesson.title}</span>
+                                <span className="text-[10px] flex-shrink-0" style={{color:T.faint}}>{lessonTypeBadge(lesson)}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         );
       })}
@@ -493,74 +646,10 @@ function StrategyReview({strategy, recordReview}){
   );
 }
 
-/* ==================== Lesson ==================== */
-
-function LessonSection({title, children}){
-  if(!children) return null;
-  return (
-    <details className="glass rounded-xl px-4 py-3" open>
-      <summary className="text-sm font-medium cursor-pointer" style={{color:T.accent}}>{title}</summary>
-      <div className="text-sm mt-2 leading-relaxed" style={{color:T.dim}}>{children}</div>
-    </details>
-  );
-}
-
-function LessonViewer({lessonId, strategy, markLessonComplete, saveReflectionDraft, saveNote, setCoachContext, onBack}){
-  const content = STRATEGY_CONTENT;
-  const lesson = content.lessons[lessonId];
-  const weekId = lesson?.weekId;
-  const wp = (weekId && strategy.weekProgress[weekId]) || {lessonsRead:[], reflections:{}};
-  const done = (wp.lessonsRead||[]).includes(lessonId);
-  const [reflection, setReflection] = useState((wp.reflections||{})[lessonId] || '');
-
-  useEffect(()=>{ if(lesson) setCoachContext({type:'lesson', id:lessonId}); }, [lessonId]);
-  useEffect(()=>{ setReflection((wp.reflections||{})[lessonId] || ''); }, [lessonId]);
-  useEffect(()=>{
-    if(!lesson) return;
-    const t = setTimeout(()=>{ if(reflection !== ((wp.reflections||{})[lessonId]||'')) saveReflectionDraft(lessonId, weekId, reflection); }, 1500);
-    return ()=>clearTimeout(t);
-  }, [reflection]);
-
-  if(!lesson) return (
-    <div className="text-sm" style={{color:T.faint}}>Lesson not found. <button onClick={onBack} style={{color:T.accent}}>← Back to roadmap</button></div>
-  );
-  return (
-    <div className="space-y-3">
-      <button onClick={onBack} className="text-xs" style={{color:T.faint}}>← Back to roadmap</button>
-      <h2 className="text-lg font-semibold" style={{color:T.text}}>{lesson.title}</h2>
-
-      <LessonSection title="Core Idea">{lesson.coreIdea}</LessonSection>
-      <LessonSection title="Why It Matters">{lesson.whyItMatters}</LessonSection>
-      <LessonSection title="Mental Model">{lesson.mentalModel}</LessonSection>
-      <LessonSection title="Real Company Example">{lesson.example}</LessonSection>
-      <LessonSection title="Counterexample / Limitation">{lesson.limitation}</LessonSection>
-      <LessonSection title="Source">{lesson.source}</LessonSection>
-
-      <div className="glass rounded-xl px-4 py-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
-        <div className="text-sm font-medium mb-1" style={{color:T.accent}}>Application</div>
-        <div className="text-sm" style={{color:T.dim}}>{lesson.application}</div>
-      </div>
-      <div className="glass rounded-xl px-4 py-3" style={{border:'1px solid rgba(139,92,246,0.2)'}}>
-        <div className="text-sm font-medium mb-1" style={{color:'#c4b5fd'}}>Strategic Question</div>
-        <div className="text-sm" style={{color:T.dim}}>{lesson.strategicQuestion}</div>
-      </div>
-
-      <div className="glass rounded-xl p-4">
-        <div className="text-sm font-medium mb-2" style={{color:T.text}}>What did you learn?</div>
-        <textarea value={reflection} onChange={e=>setReflection(e.target.value)} onBlur={e=>saveReflectionDraft(lessonId, weekId, e.target.value)} rows={4}
-          placeholder="Write your own answer before moving on..."
-          className="w-full rounded-lg p-2 text-sm" style={FIELD_STYLE} />
-        <div className="flex gap-2 mt-2">
-          <button onClick={()=>markLessonComplete(lessonId, weekId, reflection)}
-            className="px-4 py-2 rounded-lg text-sm font-medium text-white" style={{background: done?'#10b981':'linear-gradient(135deg,#6366f1,#8b5cf6)'}}>
-            {done ? 'Update reflection' : 'Mark Complete'}
-          </button>
-          <SecondaryButton onClick={()=>saveNote(lesson.title, reflection)}>Save to Notes</SecondaryButton>
-        </div>
-      </div>
-    </div>
-  );
-}
+/* ==================== Lesson ====================
+   The lesson viewer itself (LessonViewerV2) now lives in strategyLessonRenderer.jsx — a
+   block-based renderer that replaces the old LessonSection/LessonViewer stacked-accordion
+   pattern. See that file for the new lesson experience (Strategy Experience Upgrade, Pass A/B). */
 
 /* ==================== Frameworks / Sources ==================== */
 
@@ -575,7 +664,7 @@ function FrameworkLibrary({strategy, content, toggleFrameworkLearned}){
               <span className="text-sm font-medium" style={{color:T.text}}>{fw.name}</span>
               {learned && <Pill color="#10b981">Internalized</Pill>}
             </summary>
-            <div className="text-sm mt-3 space-y-2" style={{color:T.dim}}>
+            <div className="mt-3 space-y-2" style={{color:T.dim, fontSize:15, lineHeight:1.6}}>
               <p>{fw.what}</p>
               <p><span style={{color:T.accent}}>When to use: </span>{fw.whenToUse}</p>
               <p><span style={{color:'#f59e0b'}}>When NOT to: </span>{fw.whenNotTo}</p>

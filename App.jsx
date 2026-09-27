@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v99 executing');
+console.log('[Magverse] App.jsx v106 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
