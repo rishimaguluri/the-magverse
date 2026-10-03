@@ -1,5 +1,5 @@
 // Using global React and ReactDOM UMD builds (loaded in index.html)
-console.log('[Magverse] App.jsx v106 executing');
+console.log('[Magverse] App.jsx v107 executing');
 const { useEffect, useState, useRef, useReducer } = React;
 
 // Simple helpers
@@ -174,9 +174,12 @@ const defaultState = () => ({
     {id:'mm5',name:'Core-Satellite Portfolio',description:'Stable core (diversified, low-turnover) + smaller satellite of higher-conviction active ideas. Core limits catastrophic error; satellite captures upside of concentrated research.',whenToUse:'Portfolio construction and risk management.',example:'70% core exposure, 30% satellite of 5-10 high-conviction small-cap positions.',tags:['portfolio','investing']},
     {id:'mm6',name:'Uncorrelated Return Streams',description:"Dalio: combining 15-20 genuinely uncorrelated return streams reduces portfolio risk ~75% while keeping expected return constant. Diversification only works when correlations are truly low.",whenToUse:'Portfolio construction, risk budgeting.',example:'Domestic equity + EM + commodities + TIPS + alternatives — check correlation matrix, not just asset class labels.',tags:['portfolio','investing']},
   ],
-  // §12 Deep Work Ramp
+  // §12 Deep Work Ramp — kept only as migration source for planner.legacyRampSessions, never
+  // written to again (see PlannerPage.jsx / plannerStorage.js's migrateLegacyRampSessions()).
   rampSessions: [],
   rampRitual: { cue: '', timerMin: 75 },
+  // §12b Navigator — the conversational planning companion that replaced Deep Work Ramp.
+  planner: null,
   /* §10 — Philosophy briefing (seeded from session state as of Aug 2026) */
   philosophyBriefing: {
     currentTheme:"The Good Life — Happiness, Flow & Deep Focus",
@@ -557,7 +560,7 @@ function App(){
             {active==='golden-egg'    && <GoldenEggPanel    data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='research'      && <ResearchPanel     data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='mental-models' && <MentalModelsPanel data={data} setData={setData} toasts={toasts} />}
-            {active==='ramp'          && <DeepWorkRampPanel data={data} setData={setData} toasts={toasts} />}
+            {active==='planner'       && <PlannerPage data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
             {active==='review'        && <ReviewPanel       data={data} toasts={toasts} />}
             {active==='strategy'      && <StrategyPanel     data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
           </div>
@@ -1270,7 +1273,7 @@ function BottomNav({active, setActive, inboxCount=0}){
     {id:'golden-egg',   label:'Fund',        icon:IconEgg},
     {id:'strategy',     label:'Strategy',    icon:IconStrategy},
     {id:'research',     label:'Research',    icon:IconResearch},
-    {id:'ramp',         label:'Ramp',        icon:IconRamp},
+    {id:'planner',      label:PLANNER_FEATURE_NAME, icon:IconNavigator},
     {id:'review',       label:'Review',      icon:IconReview},
     {id:'settings',     label:'More',        icon:IconGear},
   ];
@@ -1304,7 +1307,7 @@ function Sidebar({collapsed, setCollapsed, active, setActive, inboxCount=0}){
     {id:'strategy',    label:'Strategy',     icon:IconStrategy},
     {id:'research',    label:'Research',     icon:IconResearch},
     {id:'mental-models',label:'Models',      icon:IconBrain},
-    {id:'ramp',        label:'Deep Work',    icon:IconRamp},
+    {id:'planner',     label:PLANNER_FEATURE_NAME, icon:IconNavigator},
     {id:'review',      label:'Review',       icon:IconReview},
     {id:'notes',       label:'Notes',        icon:IconNotes},
     {id:'chathubs',    label:'Learning Hub', icon:IconChat},
@@ -8113,7 +8116,7 @@ function IconBriefcase(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fi
 function IconEgg(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2C8 2 4 8 4 13a8 8 0 0 0 16 0c0-5-4-11-8-11z"/></svg> }
 function IconResearch(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6"/><path d="M8 11h6"/></svg> }
 function IconBrain(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.44-4.66"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.44-4.66"/></svg> }
-function IconRamp(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> }
+function IconNavigator(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M15 9l-3.5 3.5L9 14l1.5-3.5L15 9z" fill="currentColor" stroke="none"/></svg> }
 function IconReview(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg> }
 function IconConsulting(){ return <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><path d="M12 11l-4 4"/><path d="M12 11l4 4"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/></svg> }
 
@@ -11881,463 +11884,7 @@ function MentalModelsPanel({data, setData, toasts}){
   );
 }
 
-/* ================== §12 DEEP WORK RAMP PANEL ================== */
-const DW_END_KEY   = 'magverse:deepwork:timerEndMs';
-const DW_DRAFT_KEY = 'magverse:deepwork:timerDraft';
-const DW_START_KEY = 'magverse:deepwork:timerStartedAt';
-const DW_STATE_KEY = 'magverse:deepwork:reducerState';
-
-function makeDraft(timerMin){
-  return {deliverable:'',residue:'',intention:'',challengeRating:'edge',envChecks:[false,false,false,false],timerLengthMin:timerMin||75};
-}
-
-function dwReducer(state,action){
-  switch(action.type){
-    case 'BEGIN_SETUP': return {...state,phase:'setup',stepIdx:0};
-    case 'NEXT_STEP':   return {...state,stepIdx:state.stepIdx+1};
-    case 'PREV_STEP':   return {...state,stepIdx:Math.max(0,state.stepIdx-1)};
-    case 'UPD_DRAFT':   return {...state,draft:{...state.draft,...action.patch}};
-    case 'START':       return {...state,phase:'active',captures:[]};
-    case 'PAUSE':       return {...state,phase:'paused'};
-    case 'RESUME':      return {...state,phase:'active'};
-    case 'STOP_EARLY':
-    case 'TIMER_DONE':  return {...state,phase:'reflecting'};
-    case 'ADD_CAP':     return {...state,captures:[...state.captures,{text:action.text,ts:new Date().toISOString()}]};
-    case 'UPD_CLOSE':   return {...state,closeout:{...state.closeout,...action.patch}};
-    case 'SHOW_HIST':   return {...state,phase:'history'};
-    case 'BACK':        return {...state,phase:'idle'};
-    case 'RESET':       return {phase:'idle',stepIdx:0,draft:makeDraft(action.timerMin),captures:[],closeout:{outcomeNote:'',nextMicro:''}};
-    default: return state;
-  }
-}
-
-function DeepWorkRampPanel({data, setData, toasts}){
-  const rampSessions = data.rampSessions || [];
-  const ritual = data.rampRitual || {cue:'',timerMin:75};
-
-  const [st,dispatch] = useReducer(dwReducer,null,()=>{
-    try{
-      const saved=localStorage.getItem(DW_STATE_KEY);
-      if(saved){ const p=JSON.parse(saved); if(p&&p.phase) return p; }
-    }catch{}
-    return {phase:'idle',stepIdx:0,draft:makeDraft(ritual.timerMin),captures:[],closeout:{outcomeNote:'',nextMicro:''}};
-  });
-  const [cueInput,setCueInput]=useState(ritual.cue||'');
-  const [captureInput,setCaptureInput]=useState('');
-  const [timerSecs,setTimerSecs]=useState(0);
-  const timerRef=useRef(null);
-  const sessionStartRef=useRef(null);
-
-  // Persist reducer state so tab refresh keeps session alive
-  useEffect(()=>{
-    try{ localStorage.setItem(DW_STATE_KEY,JSON.stringify(st)); }catch{}
-  },[st]);
-
-  // On mount: check if timer was running (cross-tab / refresh restore)
-  useEffect(()=>{
-    try{
-      const endMs=parseInt(localStorage.getItem(DW_END_KEY)||'0');
-      if(!endMs) return;
-      const startedAt=localStorage.getItem(DW_START_KEY);
-      if(startedAt) sessionStartRef.current=startedAt;
-      const remaining=Math.ceil((endMs-Date.now())/1000);
-      if(remaining>0){
-        setTimerSecs(remaining);
-      } else {
-        localStorage.removeItem(DW_END_KEY);
-        localStorage.removeItem(DW_DRAFT_KEY);
-        localStorage.removeItem(DW_START_KEY);
-        if(st.phase==='active'||st.phase==='paused') dispatch({type:'TIMER_DONE'});
-      }
-    }catch{}
-  },[]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Timer tick
-  useEffect(()=>{
-    if(st.phase!=='active'){ clearInterval(timerRef.current); return; }
-    timerRef.current=setInterval(()=>{
-      try{
-        const endMs=parseInt(localStorage.getItem(DW_END_KEY)||'0');
-        const remaining=endMs?Math.ceil((endMs-Date.now())/1000):0;
-        if(remaining<=0){
-          clearInterval(timerRef.current);
-          localStorage.removeItem(DW_END_KEY);
-          localStorage.removeItem(DW_DRAFT_KEY);
-          localStorage.removeItem(DW_START_KEY);
-          setTimerSecs(0);
-          dispatch({type:'TIMER_DONE'});
-        } else {
-          setTimerSecs(remaining);
-        }
-      }catch{}
-    },1000);
-    return()=>clearInterval(timerRef.current);
-  },[st.phase]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function startSession(){
-    const secs=(st.draft.timerLengthMin||75)*60;
-    const endMs=Date.now()+secs*1000;
-    const startedAt=new Date().toISOString();
-    sessionStartRef.current=startedAt;
-    try{
-      localStorage.setItem(DW_END_KEY,String(endMs));
-      localStorage.setItem(DW_DRAFT_KEY,JSON.stringify(st.draft));
-      localStorage.setItem(DW_START_KEY,startedAt);
-    }catch{}
-    setTimerSecs(secs);
-    dispatch({type:'START'});
-  }
-
-  function pauseSession(){
-    try{
-      const endMs=parseInt(localStorage.getItem(DW_END_KEY)||'0');
-      if(endMs) localStorage.setItem(DW_END_KEY+'_paused',String(endMs-Date.now()));
-      localStorage.removeItem(DW_END_KEY);
-    }catch{}
-    clearInterval(timerRef.current);
-    dispatch({type:'PAUSE'});
-  }
-
-  function resumeSession(){
-    try{
-      const remainMs=parseInt(localStorage.getItem(DW_END_KEY+'_paused')||'0');
-      if(remainMs>0){
-        localStorage.setItem(DW_END_KEY,String(Date.now()+remainMs));
-        localStorage.removeItem(DW_END_KEY+'_paused');
-      }
-    }catch{}
-    dispatch({type:'RESUME'});
-  }
-
-  function stopEarly(){
-    try{
-      localStorage.removeItem(DW_END_KEY);
-      localStorage.removeItem(DW_END_KEY+'_paused');
-      localStorage.removeItem(DW_DRAFT_KEY);
-      localStorage.removeItem(DW_START_KEY);
-    }catch{}
-    clearInterval(timerRef.current);
-    dispatch({type:'STOP_EARLY'});
-  }
-
-  function finishSession(){
-    try{
-      localStorage.removeItem(DW_END_KEY);
-      localStorage.removeItem(DW_DRAFT_KEY);
-      localStorage.removeItem(DW_START_KEY);
-      localStorage.removeItem(DW_STATE_KEY);
-    }catch{}
-    const session={
-      id:uid(), startedAt:sessionStartRef.current||new Date().toISOString(),
-      deliverable:st.draft.deliverable, implementationIntention:st.draft.intention,
-      challengeRating:st.draft.challengeRating, timerLengthMin:st.draft.timerLengthMin,
-      completed:true, outcomeNote:st.closeout.outcomeNote, nextMicroAction:st.closeout.nextMicro,
-      captures:st.captures||[],
-    };
-    setData(d=>({...d,rampSessions:[...(d.rampSessions||[]),session]}));
-    toasts.push('Session logged');
-    dispatch({type:'RESET',timerMin:ritual.timerMin});
-    sessionStartRef.current=null;
-  }
-
-  const ENV_ITEMS=['Single focused tab/app open','Phone in another room or on DND','Water or coffee ready','Headphones/quiet environment set'];
-  const totalSecs=(st.draft.timerLengthMin||75)*60;
-  const pct=timerSecs>0?Math.round(100*timerSecs/totalSecs):0;
-  const minsLeft=Math.floor(timerSecs/60), secsLeft=timerSecs%60;
-  const recentSessions=rampSessions.slice(-10).reverse();
-
-  const steps=[
-    {label:'Residue Dump',     emoji:'&#129504;', tip:'Leave the last task behind. What were you doing, and exactly where did you leave it?'},
-    {label:'Define Deliverable',emoji:'&#127919;', tip:'One concrete, checkable output. Not "work on X" — "complete the Y section of Z."'},
-    {label:'Implementation Intention',emoji:'&#9999;&#65039;', tip:'"When the timer starts, I will [deliverable] until [stopping point]."'},
-    {label:'Environment Lock', emoji:'&#128274;', tip:'Quick checklist — distraction removal is the cheapest focus upgrade.'},
-    {label:'Challenge Calibration',emoji:'&#9878;&#65039;', tip:'Flow requires the task to sit slightly above current skill. Too easy or too hard — adjust scope.'},
-    {label:'Entry Cue',        emoji:'&#127908;', tip:'Run your fixed micro-ritual — same sequence every time.'},
-  ];
-
-  // ── History ──
-  if(st.phase==='history'){
-    return (
-      <div>
-        <div className="flex items-center gap-3 mb-5">
-          <button onClick={()=>dispatch({type:'BACK'})} className="text-sm" style={{color:'#6366f1'}}>&#8592; Back</button>
-          <h2 className="text-xl font-bold">Session History</h2>
-          <span className="text-xs ml-1" style={{color:'#334155'}}>{rampSessions.length} total</span>
-        </div>
-        {!recentSessions.length && <div className="text-sm text-center py-8" style={{color:'#334155'}}>No sessions yet.</div>}
-        <div className="space-y-3">
-          {recentSessions.map(s=>(
-            <div key={s.id} className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
-              <div className="text-sm font-medium mb-1" style={{color:'#e2e8f0'}}>{s.deliverable}</div>
-              <div className="flex flex-wrap gap-3 text-xs mb-1" style={{color:'#475569'}}>
-                <span>{new Date(s.startedAt).toLocaleDateString('en',{month:'short',day:'numeric'})}</span>
-                <span>{s.timerLengthMin}min</span>
-                <span style={{color:s.challengeRating==='edge'?'#10b981':s.challengeRating==='hard'?'#f59e0b':'#64748b'}}>{s.challengeRating}</span>
-              </div>
-              {s.outcomeNote&&<div className="text-xs" style={{color:'#64748b'}}>Outcome: {s.outcomeNote}</div>}
-              {s.nextMicroAction&&<div className="text-xs mt-0.5" style={{color:'#6366f1'}}>Next: {s.nextMicroAction}</div>}
-              {(s.captures||[]).length>0&&(
-                <div className="mt-2 space-y-0.5">
-                  <div className="text-xs" style={{color:'#334155'}}>Captures:</div>
-                  {s.captures.map((c,i)=><div key={i} className="text-xs pl-2" style={{color:'#64748b',borderLeft:'2px solid rgba(99,102,241,0.3)'}}>{c.text}</div>)}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Active session (objective-first) ──
-  if(st.phase==='active'||st.phase==='paused'){
-    const isPaused=st.phase==='paused';
-    return (
-      <div className="space-y-4 nb-nolift">
-        {/* Objective — primary focus */}
-        <div className="rounded-2xl p-4" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.22)'}}>
-          <div className="text-xs font-bold uppercase tracking-widest mb-2" style={{color:'#6366f1'}}>Current objective</div>
-          <div className="text-base font-semibold leading-snug" style={{color:'#c7d2fe'}}>{st.draft.deliverable||'—'}</div>
-          {st.draft.intention&&st.draft.intention!==st.draft.deliverable&&(
-            <div className="text-xs mt-2 italic" style={{color:'#475569'}}>{st.draft.intention}</div>
-          )}
-        </div>
-
-        {/* Timer — secondary */}
-        <div className="flex items-center justify-between rounded-xl p-3" style={{background:'rgba(255,255,255,0.025)',border:'1px solid rgba(255,255,255,0.06)'}}>
-          <div className="flex items-center gap-3">
-            <div className="relative w-10 h-10">
-              <svg viewBox="0 0 40 40" className="w-full h-full -rotate-90">
-                <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3"/>
-                <circle cx="20" cy="20" r="16" fill="none" stroke={isPaused?'#f59e0b':'#6366f1'} strokeWidth="3" strokeLinecap="round"
-                  strokeDasharray={String(2*Math.PI*16)} strokeDashoffset={String(2*Math.PI*16*(1-pct/100))} style={{transition:'stroke-dashoffset 1s linear'}}/>
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span style={{fontSize:'8px',fontWeight:700,color:isPaused?'#f59e0b':'#94a3b8'}}>{isPaused?'II':'▶'}</span>
-              </div>
-            </div>
-            <div>
-              <div className="text-xl font-bold tabular-nums">{String(minsLeft).padStart(2,'0')}:{String(secsLeft).padStart(2,'0')}</div>
-              <div className="text-xs" style={{color:'#334155'}}>{isPaused?'paused':'remaining'}</div>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            {!isPaused?(
-              <button onClick={pauseSession} style={{padding:'6px 12px',borderRadius:'8px',border:'1px solid rgba(255,255,255,0.1)',background:'none',color:'#64748b',fontSize:'0.78rem',cursor:'pointer'}} className="hover:bg-white/5">Pause</button>
-            ):(
-              <button onClick={resumeSession} style={{padding:'6px 12px',borderRadius:'8px',border:'1px solid rgba(99,102,241,0.4)',background:'rgba(99,102,241,0.15)',color:'#818cf8',fontSize:'0.78rem',cursor:'pointer',fontWeight:600}}>Resume</button>
-            )}
-            <button onClick={stopEarly} style={{padding:'6px 12px',borderRadius:'8px',border:'1px solid rgba(255,255,255,0.06)',background:'none',color:'#475569',fontSize:'0.78rem',cursor:'pointer'}} className="hover:text-red-400">Stop</button>
-          </div>
-        </div>
-
-        {/* Quick capture */}
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{color:'#334155'}}>Quick capture</div>
-          <div className="flex gap-2">
-            <input value={captureInput} onChange={e=>setCaptureInput(e.target.value)}
-              onKeyDown={e=>{
-                if(e.key==='Enter'&&captureInput.trim()){
-                  dispatch({type:'ADD_CAP',text:captureInput.trim()});
-                  setCaptureInput('');
-                }
-              }}
-              placeholder="Capture a thought, idea, or distraction — don't break flow"
-              style={{flex:1,background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:'8px',padding:'8px 12px',fontSize:'0.82rem',color:'#e2e8f0',outline:'none'}}/>
-            <button onClick={()=>{if(captureInput.trim()){dispatch({type:'ADD_CAP',text:captureInput.trim()});setCaptureInput('');}}}
-              style={{padding:'8px 12px',borderRadius:'8px',background:'rgba(99,102,241,0.12)',border:'1px solid rgba(99,102,241,0.25)',color:'#818cf8',cursor:'pointer',fontSize:'0.78rem',fontWeight:600}}>
-              Save
-            </button>
-          </div>
-          {st.captures.length>0&&(
-            <div className="mt-2 space-y-1">
-              {st.captures.map((c,i)=>(
-                <div key={i} className="flex items-start gap-2 text-xs py-1 pl-2" style={{color:'#64748b',borderLeft:'2px solid rgba(99,102,241,0.3)'}}>
-                  <span style={{flex:1}}>{c.text}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Reflecting / Close-out ──
-  if(st.phase==='reflecting'){
-    return (
-      <div className="space-y-4">
-        <div className="text-xl font-bold">Session Close-Out</div>
-        <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(16,185,129,0.2)'}}>
-          <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#10b981'}}>Deliverable was:</div>
-          <div className="text-sm mb-3" style={{color:'#c7d2fe'}}>{st.draft.deliverable}</div>
-          <textarea rows={3} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
-            placeholder="What actually got done vs. what you planned?"
-            value={st.closeout.outcomeNote} onChange={e=>dispatch({type:'UPD_CLOSE',patch:{outcomeNote:e.target.value}})}/>
-        </div>
-        {st.captures.length>0&&(
-          <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(255,255,255,0.06)'}}>
-            <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#475569'}}>Session captures ({st.captures.length})</div>
-            {st.captures.map((c,i)=>(
-              <div key={i} className="text-xs py-1 pl-2 mb-1" style={{color:'#94a3b8',borderLeft:'2px solid rgba(99,102,241,0.3)'}}>{c.text}</div>
-            ))}
-          </div>
-        )}
-        <div className="glass rounded-xl p-4" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
-          <div className="text-xs font-semibold uppercase tracking-widest mb-2" style={{color:'#6366f1'}}>Exact next micro-action</div>
-          <div className="text-xs mb-2" style={{color:'#475569'}}>Where exactly did you leave off? Feeds the next session's residue dump.</div>
-          <textarea rows={2} className="w-full bg-transparent text-sm rounded-lg p-2.5 resize-none" style={{border:'1px solid rgba(255,255,255,0.06)',color:'#e2e8f0'}}
-            placeholder="The NEXT specific micro-action when I return: ..."
-            value={st.closeout.nextMicro} onChange={e=>dispatch({type:'UPD_CLOSE',patch:{nextMicro:e.target.value}})}/>
-        </div>
-        <button onClick={finishSession} className="w-full py-3 rounded-xl font-bold text-sm" style={{background:'rgba(16,185,129,0.15)',color:'#10b981',border:'1px solid rgba(16,185,129,0.25)'}}>Log &amp; Finish</button>
-      </div>
-    );
-  }
-
-  // ── Setup wizard ──
-  if(st.phase==='setup'){
-    const step=steps[st.stepIdx];
-    return (
-      <div className="space-y-4">
-        <div className="flex gap-1 mb-2">
-          {steps.map((_,i)=>(
-            <div key={i} className="flex-1 h-1 rounded-full" style={{background:i<=st.stepIdx?'#6366f1':'rgba(255,255,255,0.08)'}}/>
-          ))}
-        </div>
-        <div className="flex items-start gap-3">
-          <span style={{fontSize:'24px'}} dangerouslySetInnerHTML={{__html:step.emoji}}/>
-          <div>
-            <div className="font-bold">Step {st.stepIdx+1} of {steps.length}: {step.label}</div>
-            <div className="text-xs mt-0.5" style={{color:'#475569'}}>{step.tip}</div>
-          </div>
-        </div>
-
-        {st.stepIdx===0&&(
-          <textarea rows={4} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-            placeholder="What were you just doing, and where exactly did you leave it?"
-            value={st.draft.residue} onChange={e=>dispatch({type:'UPD_DRAFT',patch:{residue:e.target.value}})}/>
-        )}
-
-        {st.stepIdx===1&&(<>
-          <textarea rows={3} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-            placeholder='E.g. "Write the counter-argument section of the Company X thesis"'
-            value={st.draft.deliverable} onChange={e=>dispatch({type:'UPD_DRAFT',patch:{deliverable:e.target.value}})}/>
-          {!st.draft.deliverable.trim()&&<div className="text-xs" style={{color:'#f59e0b'}}>&#9888; Be specific — reject vague goals like "work on thesis"</div>}
-        </>)}
-
-        {st.stepIdx===2&&(<>
-          <div className="text-xs mb-2" style={{color:'#475569'}}>Auto-generated — edit freely:</div>
-          <textarea rows={3} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(99,102,241,0.2)',color:'#c7d2fe'}}
-            value={st.draft.intention||('When the timer starts, I will '+(st.draft.deliverable||'[deliverable]')+' until the session ends.')}
-            onChange={e=>dispatch({type:'UPD_DRAFT',patch:{intention:e.target.value}})}/>
-        </>)}
-
-        {st.stepIdx===3&&(
-          <div className="space-y-2">
-            {ENV_ITEMS.map((item,i)=>(
-              <label key={i} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.02)',border:'1px solid '+(st.draft.envChecks[i]?'rgba(16,185,129,0.25)':'rgba(255,255,255,0.06)')}}>
-                <input type="checkbox" checked={st.draft.envChecks[i]} onChange={e=>{const c=[...st.draft.envChecks];c[i]=e.target.checked;dispatch({type:'UPD_DRAFT',patch:{envChecks:c}});}}/>
-                <span className="text-sm" style={{color:st.draft.envChecks[i]?'#10b981':'#94a3b8'}}>{item}</span>
-              </label>
-            ))}
-          </div>
-        )}
-
-        {st.stepIdx===4&&(
-          <div className="space-y-3">
-            {[['easy','Too easy','#475569','Cut scope or add a harder constraint'],['edge','Right at the edge','#10b981','Perfect — proceed'],['hard','Too hard','#f59e0b','Narrow scope to outline or first sub-section']].map(([v,l,c,hint])=>(
-              <div key={v} onClick={()=>dispatch({type:'UPD_DRAFT',patch:{challengeRating:v}})} className="flex items-center gap-3 p-3 rounded-xl cursor-pointer"
-                style={{background:st.draft.challengeRating===v?(c+'15'):'rgba(255,255,255,0.02)',border:'1px solid '+(st.draft.challengeRating===v?(c+'40'):'rgba(255,255,255,0.06)')}}>
-                <div className="w-4 h-4 rounded-full border-2 flex items-center justify-center" style={{borderColor:c,background:st.draft.challengeRating===v?c:'transparent'}}>
-                  {st.draft.challengeRating===v&&<div className="w-2 h-2 rounded-full bg-white"/>}
-                </div>
-                <div>
-                  <div className="text-sm font-medium" style={{color:c}}>{l}</div>
-                  <div className="text-xs" style={{color:'#475569'}}>{hint}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {st.stepIdx===5&&(
-          <div className="space-y-3">
-            <div className="text-sm" style={{color:'#94a3b8'}}>Your fixed entry ritual — same sequence every session:</div>
-            <textarea rows={4} className="w-full bg-transparent text-sm rounded-xl p-3 resize-none" style={{border:'1px solid rgba(255,255,255,0.08)',color:'#e2e8f0'}}
-              placeholder="E.g. Start lo-fi playlist, open only one tab, take 3 deep breaths, read my deliverable"
-              value={cueInput} onChange={e=>setCueInput(e.target.value)}/>
-            {cueInput.trim()!==ritual.cue&&(
-              <button onClick={()=>setData(d=>({...d,rampRitual:{...(d.rampRitual||{}),cue:cueInput.trim()}}))}
-                className="text-xs px-3 py-1.5 rounded-lg font-semibold"
-                style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>Save ritual</button>
-            )}
-            <div className="flex items-center gap-3">
-              <span className="text-sm" style={{color:'#94a3b8'}}>Session length:</span>
-              <input type="number" min={25} max={180} className="w-20 bg-transparent text-sm rounded px-2 py-1 text-center" style={{border:'1px solid rgba(255,255,255,0.1)',color:'#e2e8f0'}}
-                value={st.draft.timerLengthMin} onChange={e=>dispatch({type:'UPD_DRAFT',patch:{timerLengthMin:parseInt(e.target.value)||75}})}/>
-              <span className="text-sm" style={{color:'#475569'}}>min</span>
-            </div>
-          </div>
-        )}
-
-        <div className="flex gap-3 pt-2">
-          {st.stepIdx>0&&<button onClick={()=>dispatch({type:'PREV_STEP'})} className="px-4 py-2 rounded-xl text-sm" style={{color:'#475569',border:'1px solid rgba(255,255,255,0.08)'}}>&#8592; Back</button>}
-          {st.stepIdx<steps.length-1?(
-            <button onClick={()=>{
-              if(st.stepIdx===1&&!st.draft.deliverable.trim()){toasts.push('Write a specific deliverable first');return;}
-              if(st.stepIdx===2&&!st.draft.intention.trim()) dispatch({type:'UPD_DRAFT',patch:{intention:'When the timer starts, I will '+st.draft.deliverable+' until the session ends.'}});
-              dispatch({type:'NEXT_STEP'});
-            }} className="flex-1 py-2 rounded-xl text-sm font-bold" style={{background:'rgba(99,102,241,0.15)',color:'#818cf8',border:'1px solid rgba(99,102,241,0.25)'}}>
-              Next &#8594;
-            </button>
-          ):(
-            <button onClick={startSession} className="flex-1 py-3 rounded-xl text-sm font-bold" style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',boxShadow:'0 0 20px rgba(99,102,241,0.4)'}}>
-              &#128640; Start {st.draft.timerLengthMin}min session
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Idle / start screen ──
-  const streak=rampSessions.length;
-  const lastNext=rampSessions.length?rampSessions[rampSessions.length-1].nextMicroAction:null;
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold">Deep Work Ramp</h2>
-          <div className="text-xs mt-1" style={{color:'#475569'}}>Pre-session protocol · ~3 min to start · {streak} session{streak!==1?'s':''} logged</div>
-        </div>
-        <button onClick={()=>dispatch({type:'SHOW_HIST'})} className="text-xs px-2 py-1 rounded" style={{color:'#475569',border:'1px solid rgba(255,255,255,0.08)'}}>History</button>
-      </div>
-      {lastNext&&(
-        <div className="glass rounded-xl p-3" style={{border:'1px solid rgba(99,102,241,0.2)'}}>
-          <div className="text-xs font-semibold uppercase tracking-widest mb-1" style={{color:'#6366f1'}}>Next micro-action from last session:</div>
-          <div className="text-sm" style={{color:'#c7d2fe'}}>{lastNext}</div>
-        </div>
-      )}
-      <div className="grid gap-2">
-        {steps.map((s,i)=>(
-          <div key={i} className="flex items-center gap-3 p-3 rounded-xl" style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.05)'}}>
-            <span style={{fontSize:'18px'}} dangerouslySetInnerHTML={{__html:s.emoji}}/>
-            <div>
-              <div className="text-sm font-medium">Step {i+1}: {s.label}</div>
-              <div className="text-xs" style={{color:'#334155'}}>{s.tip.slice(0,60)}&#8230;</div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <button onClick={()=>dispatch({type:'BEGIN_SETUP'})}
-        className="w-full py-4 rounded-2xl text-base font-bold"
-        style={{background:'linear-gradient(90deg,#6366f1,#8b5cf6)',color:'white',boxShadow:'0 0 24px rgba(99,102,241,0.35)'}}>
-        Begin Ramp Protocol &#8594;
-      </button>
-    </div>
-  );
-}
+/* ================== §12 DEEP WORK -- replaced by the Navigator planning companion (PlannerPage.jsx) ================== */
 
 /* ================== §6 REVIEW DIGEST PANEL ================== */
 function ReviewPanel({data, toasts}){
