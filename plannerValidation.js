@@ -81,3 +81,59 @@ function validatePlanChanges(proposed, plannerState, events){
 
   return { valid: errors.length === 0, errors, warnings };
 }
+
+/* ---------- per-operation validation (Part "Deterministic validation" for structured ops) ---------- */
+
+// Gates a single structured AI operation (plannerOperations.js) before it's applied. Checks
+// are intentionally op-specific and narrow — applyOperation() itself still guards against
+// unknown ids defensively, this is the semantic/business layer (duplicates, bad durations,
+// overlaps, dependency cycles, invalid buckets).
+function validateOperation(op, plannerState, today){
+  const errors = [];
+  const items = plannerState.workItems || [];
+  const sessions = plannerState.workSessions || [];
+
+  switch(op.op){
+    case 'CREATE_TASK': {
+      const title = ((op.workItem && op.workItem.title) || '').trim().toLowerCase();
+      if(!title) errors.push('CREATE_TASK: title is required');
+      else if(items.some(wi => wi.status !== 'dropped' && (wi.title || '').trim().toLowerCase() === title)){
+        errors.push('CREATE_TASK: a work item titled "' + op.workItem.title + '" already exists');
+      }
+      break;
+    }
+    case 'CREATE_SESSION': {
+      if(!items.some(wi => wi.id === op.workItemId)) errors.push('CREATE_SESSION: unknown workItemId ' + op.workItemId);
+      if(op.session && op.session.plannedMinutes != null && op.session.plannedMinutes <= 0) errors.push('CREATE_SESSION: plannedMinutes must be positive');
+      break;
+    }
+    case 'MOVE_SESSION': {
+      if(op.scheduledStart && op.scheduledEnd && new Date(op.scheduledEnd) <= new Date(op.scheduledStart)){
+        errors.push('MOVE_SESSION: end must be after start');
+      } else if(op.scheduledStart && op.scheduledEnd){
+        const aS = new Date(op.scheduledStart), aE = new Date(op.scheduledEnd);
+        sessions.filter(ws => ws.id !== op.sessionId && ws.scheduledStart && ws.scheduledEnd).forEach(ws => {
+          const bS = new Date(ws.scheduledStart), bE = new Date(ws.scheduledEnd);
+          if(aS < bE && bS < aE) errors.push('MOVE_SESSION: would overlap "' + (ws.title || ws.id) + '"');
+        });
+      }
+      break;
+    }
+    case 'SET_DEPENDENCY': {
+      if(op.workItemId === op.dependsOnId){
+        errors.push('SET_DEPENDENCY: a task cannot depend on itself');
+      } else {
+        const target = items.find(wi => wi.id === op.dependsOnId);
+        if(target && (target.dependencies || []).includes(op.workItemId)) errors.push('SET_DEPENDENCY: would create a dependency cycle');
+      }
+      break;
+    }
+    case 'MOVE_TASK': {
+      if(!PRIORITY_BUCKETS.includes(op.priority)) errors.push('MOVE_TASK: invalid priority "' + op.priority + '"');
+      break;
+    }
+    default:
+      break;
+  }
+  return { valid: errors.length === 0, errors };
+}

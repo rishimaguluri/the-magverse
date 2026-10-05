@@ -98,49 +98,58 @@ function completeWorkSession(session, outcome, note){
   return { patch, followUp };
 }
 
-/* ---------- applying an AI proposal onto planner state (Part 54 — structured only) ---------- */
+/* ---------- grouping for the Later lane (Part "Auto-grouping" / "Project Clusters") ---------- */
 
-function stripSessions(p){
-  const { sessions, ...rest } = p;
-  return rest;
+const GROUP_LABELS = ['Recruiting', 'Consulting', 'Magverse', 'School', 'Personal', 'Admin'];
+
+// Heuristic, not a forced taxonomy — same spirit as inferContextTemplate. Order matters: more
+// specific categories are checked first so e.g. a "consulting case" for recruiting purposes
+// still lands in Recruiting rather than the more generic Consulting bucket.
+function inferGroupLabel(workItem){
+  const t = ((workItem.title || '') + ' ' + (workItem.outcome || '') + ' ' + (workItem.context || '')).toLowerCase();
+  if(/coffee chat|interview|resume|application|internship|recruit|bain program|mckinsey|bcg\b/.test(t)) return 'Recruiting';
+  if(/\bcase\b|casing|market sizing/.test(t)) return 'Consulting';
+  if(/magverse|navigator|strategy lesson|strategy section/.test(t)) return 'Magverse';
+  if(/stats|homework|exam|class|chapter|philosophy|international business|school|course|professor|syllabus|tophat/.test(t)) return 'School';
+  if(/\bcall\b|workout|gym|parents|appointment/.test(t)) return 'Personal';
+  return 'Admin';
 }
 
-// Merges proposedWorkItems (+ their nested proposed sessions) into plannerState. Creates a new
-// WorkItem when no matching id is given, otherwise patches the existing one. Never touches
-// companionMessage/prose — only the structured fields drive this.
-function applyAIProposal(plannerState, aiResponse, today){
-  const workItems = [...(plannerState.workItems || [])];
-  const workSessions = [...(plannerState.workSessions || [])];
-  const createdOrUpdatedIds = [];
-
-  (aiResponse.proposedWorkItems || []).forEach(p => {
-    let item;
-    const existingIdx = p.id ? workItems.findIndex(wi => wi.id === p.id) : -1;
-    if(existingIdx >= 0){
-      item = { ...workItems[existingIdx], ...stripSessions(p), updatedAt: new Date().toISOString() };
-      workItems[existingIdx] = item;
-    } else {
-      const base = stripSessions(p);
-      delete base.id;
-      const rec = recommendPriority({ ...base, status: 'not_started' }, today, workItems);
-      item = newWorkItem({ ...base, priority: base.priority || rec.priority });
-      workItems.push(item);
-    }
-    createdOrUpdatedIds.push(item.id);
-    (p.sessions || []).forEach(s => {
-      const template = inferContextTemplate(item);
-      workSessions.push(newWorkSession({
-        workItemId: item.id,
-        title: s.title || item.title,
-        plannedMinutes: s.plannedMinutes != null ? s.plannedMinutes : (item.estimatedMinutes || null),
-        beforeSteps: (s.beforeSteps && s.beforeSteps.length) ? s.beforeSteps : template.beforeSteps,
-        workSteps: s.workSteps || [],
-        definitionOfDone: s.definitionOfDone || '',
-        afterSteps: (s.afterSteps && s.afterSteps.length) ? s.afterSteps : template.afterSteps,
-      }));
-    });
+// Groups work items by inferred label, preserving each item's current array order within its
+// group (so drag-reordering, which also just reorders the underlying array, is reflected here
+// with no separate "group order" field to keep in sync).
+function groupWorkItemsByLabel(workItems){
+  const groups = {};
+  (workItems || []).forEach(wi => {
+    const label = inferGroupLabel(wi);
+    (groups[label] = groups[label] || []).push(wi);
   });
-
-  const validation = validatePlanChanges({ workItems, workSessions }, plannerState, []);
-  return { nextPlannerState: { ...plannerState, workItems, workSessions }, validation, createdOrUpdatedIds };
+  return groups;
 }
+
+/* ---------- drag-and-drop reordering (Part "Every task must be draggable") ---------- */
+
+// Moves `draggedId` into `targetPriority`'s lane, positioned immediately before
+// `beforeId` (or at the end of that lane if beforeId is null/omitted). Reorders the single
+// workItems array itself — group/lane order is just a filtered view of that array order
+// (groupByPriority/groupWorkItemsByLabel), so there is no separate "lane order" field to drift
+// out of sync. Pure function — the caller persists the result.
+function reorderWorkItems(workItems, draggedId, targetPriority, beforeId){
+  const dragged = workItems.find(wi => wi.id === draggedId);
+  if(!dragged) return workItems;
+  const updatedDragged = dragged.priority === targetPriority ? dragged : { ...dragged, priority: targetPriority, updatedAt: new Date().toISOString() };
+  const withoutDragged = workItems.filter(wi => wi.id !== draggedId);
+
+  if(beforeId){
+    const neighborIdx = withoutDragged.findIndex(wi => wi.id === beforeId);
+    if(neighborIdx >= 0) return [...withoutDragged.slice(0, neighborIdx), updatedDragged, ...withoutDragged.slice(neighborIdx)];
+  }
+  // No neighbor given (or it wasn't found) — append after the last item currently in that lane,
+  // or at the very end of the array if the lane is empty.
+  const lastLaneIdx = withoutDragged.reduce((last, wi, i) => wi.priority === targetPriority ? i : last, -1);
+  if(lastLaneIdx < 0) return [...withoutDragged, updatedDragged];
+  return [...withoutDragged.slice(0, lastLaneIdx + 1), updatedDragged, ...withoutDragged.slice(lastLaneIdx + 1)];
+}
+
+// Pass A's applyAIProposal() (whole-WorkItem re-proposal) is superseded by
+// plannerOperations.js's applyOperations() (structured per-field operations) — see that file.
