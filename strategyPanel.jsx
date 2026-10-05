@@ -77,26 +77,38 @@ function mergeCapabilityEvidenceInto(capabilities, evidenceMap){
 // Grouped nav (Strategy Experience Upgrade, Pass A) — a presentation layer over the SAME
 // tab ids the router below already dispatches on. Nothing about setTab, sessionStorage nav
 // persistence, or the router changes; this only changes how tabs are grouped/labeled on screen.
-const STRATEGY_NAV_GROUPS = [
-  {id:'home', label:'Home', tabs:[{id:'home', label:'Home'}]},
-  {id:'learn', label:'Learn', tabs:[{id:'roadmap', label:'Curriculum'}, {id:'review', label:'Review'}]},
-  {id:'practice', label:'Practice', tabs:[{id:'cases', label:'Cases'}]},
-  {id:'apply', label:'Apply', tabs:[{id:'companies', label:'Companies'}, {id:'decisions', label:'Decisions'}]},
-  {id:'knowledge', label:'Knowledge', tabs:[{id:'frameworks', label:'Frameworks'}, {id:'sources', label:'Sources'}]},
-  {id:'reflect', label:'Reflect', tabs:[{id:'journal', label:'Journal'}, {id:'playbook', label:'Playbook'}]},
-];
-function groupForTab(tab){
-  for(const g of STRATEGY_NAV_GROUPS){ if(g.tabs.some(t=>t.id===tab)) return g.id; }
+//
+// A function, not a bare const, because the Practice group's tab ORDER is archive-aware (Bain
+// Capital Sprint, Part "Location in Magverse" / "After November 20"): it leads Practice while
+// the Sprint is active, and drops after Cases once archived — computed fresh from one date
+// check each call, never a second hardcoded array to keep in sync.
+function getStrategyNavGroups(strategy){
+  const sprintActive = isSprintActive(emptyBainSprint(strategy||{}), todayStr());
+  const practiceTabs = sprintActive
+    ? [{id:'bain-sprint', label:'Bain Capital Sprint'}, {id:'cases', label:'Cases'}]
+    : [{id:'cases', label:'Cases'}, {id:'bain-sprint', label:'Bain Capital Sprint'}];
+  return [
+    {id:'home', label:'Home', tabs:[{id:'home', label:'Home'}]},
+    {id:'learn', label:'Learn', tabs:[{id:'roadmap', label:'Curriculum'}, {id:'review', label:'Review'}]},
+    {id:'practice', label:'Practice', tabs:practiceTabs},
+    {id:'apply', label:'Apply', tabs:[{id:'companies', label:'Companies'}, {id:'decisions', label:'Decisions'}]},
+    {id:'knowledge', label:'Knowledge', tabs:[{id:'frameworks', label:'Frameworks'}, {id:'sources', label:'Sources'}]},
+    {id:'reflect', label:'Reflect', tabs:[{id:'journal', label:'Journal'}, {id:'playbook', label:'Playbook'}]},
+  ];
+}
+function groupForTab(tab, strategy){
+  for(const g of getStrategyNavGroups(strategy)){ if(g.tabs.some(t=>t.id===tab)) return g.id; }
   if(tab==='lesson') return 'learn';
-  if(tab==='case') return 'practice';
+  if(tab==='case' || tab==='bain-sprint') return 'practice';
   if(tab==='company') return 'apply';
   return 'home';
 }
-function StrategyNav({tab, setTab, isMobile}){
+function StrategyNav({tab, setTab, isMobile, strategy}){
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const activeGroupId = groupForTab(tab);
+  const navGroups = getStrategyNavGroups(strategy);
+  const activeGroupId = groupForTab(tab, strategy);
   if(isMobile){
-    const activeGroup = STRATEGY_NAV_GROUPS.find(g=>g.id===activeGroupId);
+    const activeGroup = navGroups.find(g=>g.id===activeGroupId);
     return (
       <div className="mb-4">
         <button onClick={()=>setDrawerOpen(true)} className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm" style={{background:'rgba(255,255,255,0.05)', color:T.text}}>
@@ -106,7 +118,7 @@ function StrategyNav({tab, setTab, isMobile}){
           <div className="fixed inset-0 z-50 flex justify-end">
             <div className="absolute inset-0 bg-black/50" onClick={()=>setDrawerOpen(false)}></div>
             <div className="relative w-72 h-full glass p-4 overflow-auto" style={{background:'rgba(10,10,15,0.98)'}}>
-              {STRATEGY_NAV_GROUPS.map(g=>(
+              {navGroups.map(g=>(
                 <div key={g.id} className="mb-4">
                   <div className="text-xs uppercase tracking-wide mb-1" style={{color:T.faint}}>{g.label}</div>
                   {g.tabs.map(t=>(
@@ -124,11 +136,11 @@ function StrategyNav({tab, setTab, isMobile}){
       </div>
     );
   }
-  const activeGroup = STRATEGY_NAV_GROUPS.find(g=>g.id===activeGroupId);
+  const activeGroup = navGroups.find(g=>g.id===activeGroupId);
   return (
     <div className="mb-4">
       <div className="flex gap-1 flex-wrap">
-        {STRATEGY_NAV_GROUPS.map(g=>(
+        {navGroups.map(g=>(
           <button key={g.id} onClick={()=>setTab(g.tabs[0].id)}
             className="px-3 py-1.5 rounded-lg text-sm"
             style={{background: activeGroupId===g.id ? 'rgba(99,102,241,0.18)' : 'transparent', color: activeGroupId===g.id ? T.accent : T.mid, fontWeight: activeGroupId===g.id?600:400}}>
@@ -355,7 +367,7 @@ function StrategyPanel({data, setData, toasts, isMobile}){
         <PrimaryButton onClick={()=>setCoachOpen(true)}>Ask the Coach</PrimaryButton>
       </div>
 
-      <StrategyNav tab={tab} setTab={setTab} isMobile={isMobile} />
+      <StrategyNav tab={tab} setTab={setTab} isMobile={isMobile} strategy={strategy} />
 
       {tab==='home' && <StrategyHome strategy={strategy} content={content} nextSession={nextSession} setTab={setTab} openLesson={openLesson} openCase={openCase} openCompany={openCompany} requestStartCase={requestStartCase} />}
       {tab==='roadmap' && <StrategyRoadmap strategy={strategy} content={content} openLesson={openLesson} />}
@@ -365,6 +377,7 @@ function StrategyPanel({data, setData, toasts, isMobile}){
       {tab==='frameworks' && <FrameworkLibrary strategy={strategy} content={content} toggleFrameworkLearned={toggleFrameworkLearned} />}
       {tab==='sources' && <SourceLibrary strategy={strategy} content={content} upStrategy={upStrategy} />}
       {tab==='cases' && <CasePractice strategy={strategy} content={content} requestStartCase={requestStartCase} openCase={openCase} />}
+      {tab==='bain-sprint' && <BainSprintPanel data={data} setData={setData} toasts={toasts} />}
       {tab==='case' && activeCaseAttemptId && <CaseWorkspace attemptId={activeCaseAttemptId} strategy={strategy} content={content}
         updateCaseAttempt={updateCaseAttempt} setCoachContext={setCoachContext} onCaseFinished={onCaseFinished} saveNote={saveNote} onBack={()=>setTab('cases')} />}
       {tab==='companies' && <CompanyAnalysis strategy={strategy} addCompany={addCompany} openCompany={openCompany} />}
@@ -527,7 +540,7 @@ function StrategyHome({strategy, content, nextSession, setTab, openLesson, openC
       <div>
         <div className="text-xs uppercase tracking-wide mb-2" style={{color:T.faint}}>Shortcuts</div>
         <div className="flex flex-wrap gap-2 mb-3">
-          {STRATEGY_NAV_GROUPS.filter(g=>g.id!=='home').map(g=>(
+          {getStrategyNavGroups(strategy).filter(g=>g.id!=='home').map(g=>(
             <SecondaryButton key={g.id} onClick={()=>setTab(g.tabs[0].id)}>{g.label}</SecondaryButton>
           ))}
         </div>
