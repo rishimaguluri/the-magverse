@@ -152,17 +152,37 @@ function BainDealStudio({ dealId, bainSprint, onRecordMastery, onSaveNote, onPla
 
   if(!deal) return <div style={{ color: BSP_T.faint }}>Deal not found. <button onClick={onBack} style={{ color: BSP_T.accent }}>← Back</button></div>;
 
-  const tagRow = (f, key) => (
-    <div className="flex items-center justify-between gap-2 py-1.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-      <div style={{ fontSize: 13.5, color: BSP_T.dim, flex: 1 }}>{f}</div>
-      <div className="flex gap-1 flex-shrink-0">
-        {['attractive', 'unattractive', 'unknown'].map(t => (
-          <button key={t} onClick={() => setTags(s => ({ ...s, [key]: t }))} className="text-[11px] px-2 py-1 rounded-lg"
-            style={{ background: tags[key] === t ? 'rgba(99,102,241,0.25)' : 'rgba(255,255,255,0.06)', color: tags[key] === t ? BSP_T.accent : BSP_T.mid }}>{t}</button>
-        ))}
+  // "mixed" facts are genuinely ambiguous — either attractive or unattractive counts as a
+  // reasonable read; only "unknown" vs. a confident lean is treated as a real mismatch.
+  const factMatches = (userTag, read) => read === 'mixed' ? (userTag === 'attractive' || userTag === 'unattractive') : userTag === read;
+
+  const tagRow = (fact, key) => {
+    const userTag = tags[key];
+    return (
+      <div className="py-1.5" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        <div className="flex items-center justify-between gap-2">
+          <div style={{ fontSize: 13.5, color: BSP_T.dim, flex: 1 }}>{fact.text}</div>
+          <div className="flex gap-1 flex-shrink-0">
+            {['attractive', 'unattractive', 'unknown'].map(t => (
+              <button key={t} onClick={() => setTags(s => ({ ...s, [key]: t }))} className="text-[11px] px-2 py-1 rounded-lg"
+                style={{ background: userTag === t ? 'rgba(99,102,241,0.25)' : 'rgba(255,255,255,0.06)', color: userTag === t ? BSP_T.accent : BSP_T.mid }}>{t}</button>
+            ))}
+          </div>
+        </div>
+        {userTag && (
+          <div className="mt-1.5 rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.03)' }}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <span style={{ width: 6, height: 6, borderRadius: 99, background: factMatches(userTag, fact.read) ? '#34d399' : '#f59e0b', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: BSP_T.faint, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                My read: {fact.read}{factMatches(userTag, fact.read) ? ' — matches yours' : ''}
+              </span>
+            </div>
+            <div style={{ fontSize: 12.5, color: BSP_T.dim, lineHeight: 1.5 }}>{fact.rationale}</div>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-4" style={{ maxWidth: '42rem' }}>
