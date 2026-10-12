@@ -15,17 +15,26 @@ function svFmt(v, unit){
 }
 
 /* ---------- causal-chain: A -> B -> C, optionally branching ---------- */
+// Each node occupies an even-width slot and is centered within it, so a box's right edge can
+// never exceed the viewBox — the previous version positioned node i's LEFT edge at a fixed gap
+// without ever accounting for the box's own width, so the last node routinely got clipped by
+// the right edge of the SVG (the box-width term canceled out of the gap formula entirely).
 function VCausalChain({visual}){
   const nodes = visual.nodes;
   const n = nodes.length;
-  const W = Math.max(460, n*150), H = 120;
-  const gap = (W-80)/(n-1||1);
+  const boxW = 120, boxH = 58, padX = 20;
+  const W = Math.max(460, n*170);
+  const H = 130;
+  const slot = (W - 2*padX) / n;
+  const centerX = i => padX + i*slot + slot/2;
+  const y = H/2;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:'auto'}}>
-      {nodes.map((node,i)=>{
-        if(i===n-1) return null;
-        const x1=40+i*gap+60, x2=40+(i+1)*gap;
-        const y=H/2;
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:'auto',overflow:'visible'}}>
+      <defs>
+        <marker id="svArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill={SV_TEXT.faint}/></marker>
+      </defs>
+      {nodes.slice(0, n-1).map((node,i)=>{
+        const x1 = centerX(i)+boxW/2, x2 = centerX(i+1)-boxW/2;
         return (
           <g key={'e'+i}>
             <line x1={x1} y1={y} x2={x2} y2={y} stroke={SV_TEXT.faint} strokeWidth="1.5" markerEnd="url(#svArrow)"/>
@@ -33,17 +42,13 @@ function VCausalChain({visual}){
           </g>
         );
       })}
-      <defs>
-        <marker id="svArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill={SV_TEXT.faint}/></marker>
-      </defs>
       {nodes.map((node,i)=>{
-        const x=40+i*gap;
-        const y=H/2;
+        const x = centerX(i)-boxW/2;
         return (
           <g key={node.id||i}>
-            <rect x={x} y={y-26} width={120} height={52} rx="10" fill="rgba(99,102,241,0.12)" stroke="rgba(99,102,241,0.35)"/>
-            <foreignObject x={x} y={y-26} width={120} height={52}>
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',padding:'0 6px',textAlign:'center'}}>
+            <rect x={x} y={y-boxH/2} width={boxW} height={boxH} rx="10" fill="rgba(99,102,241,0.12)" stroke="rgba(99,102,241,0.35)"/>
+            <foreignObject x={x} y={y-boxH/2} width={boxW} height={boxH}>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',padding:'0 6px',textAlign:'center',boxSizing:'border-box'}}>
                 <div style={{fontSize:11,fontWeight:600,color:SV_TEXT.text,lineHeight:1.25}}>{node.label}</div>
                 {node.sub && <div style={{fontSize:9,color:SV_TEXT.faint,marginTop:2}}>{node.sub}</div>}
               </div>
