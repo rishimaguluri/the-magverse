@@ -377,7 +377,7 @@ function StrategyPanel({data, setData, toasts, isMobile}){
       {tab==='frameworks' && <FrameworkLibrary strategy={strategy} content={content} toggleFrameworkLearned={toggleFrameworkLearned} />}
       {tab==='sources' && <SourceLibrary strategy={strategy} content={content} upStrategy={upStrategy} />}
       {tab==='cases' && <CasePractice strategy={strategy} content={content} requestStartCase={requestStartCase} openCase={openCase} />}
-      {tab==='bain-sprint' && <BainSprintPanel data={data} setData={setData} toasts={toasts} />}
+      {tab==='bain-sprint' && <BainSprintPanel data={data} setData={setData} toasts={toasts} isMobile={isMobile} />}
       {tab==='case' && activeCaseAttemptId && <CaseWorkspace attemptId={activeCaseAttemptId} strategy={strategy} content={content}
         updateCaseAttempt={updateCaseAttempt} setCoachContext={setCoachContext} onCaseFinished={onCaseFinished} saveNote={saveNote} onBack={()=>setTab('cases')} />}
       {tab==='companies' && <CompanyAnalysis strategy={strategy} addCompany={addCompany} openCompany={openCompany} />}

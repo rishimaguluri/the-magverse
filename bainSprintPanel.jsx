@@ -9,7 +9,12 @@
 // LessonBlockRenderer/Prose/ConnectionFooter (strategyLessonRenderer.jsx), VisualBlock
 // (strategyVisualRenderer.jsx), computeElapsedMs/fmtDuration/fmtRelDate/deriveMasteryStatus/
 // scheduleAfterEvidence/buildNoteFromText (strategyEngine.js), parseNumericAnswer
-// (consultingQuantEngine.js), newWorkItem (plannerTypes.js), emptyPlanner (plannerStorage.js).
+// (consultingQuantEngine.js), newWorkItem (plannerTypes.js), emptyPlanner (plannerStorage.js),
+// getDefaultConsulting/recordConsultingEvidence (App.jsx/consultingEvidence.js — the PE Diligence
+// Case mode's transferable-evidence bridge into Consulting's own competencies), and the PE
+// Diligence Case mode itself: PE_DILIGENCE_CASES/getPEDiligenceCaseConfig
+// (bainDiligenceContent.js), initPEDiligenceAttempt/PE_CASE_STATE_LABELS/peDiligenceEvidencedDimensions
+// (bainDiligenceEngine.js), BainDiligenceCasePanel (BainDiligenceCasePanel.jsx).
 // Zero changes to any of those files.
 
 const BSP_T = { text: '#e2e8f0', dim: '#cbd5e1', mid: '#94a3b8', faint: '#64748b', accent: '#a5b4fc', accentBright: '#818cf8' };
@@ -437,25 +442,75 @@ function initBainCaseAttempt(caseContentId){
   };
 }
 
-function BainCasePractice({ bainSprint, onStartCase, onOpenCase }){
+function BainCasePractice({ bainSprint, onStartCase, onOpenCase, caseModeTab, setCaseModeTab, onStartDiligenceCase, onOpenDiligenceCase }){
   return (
     <div className="space-y-4">
-      <div>
-        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>Investment cases</div>
-        {BAIN_SPRINT_CONTENT.cases.map(c => (
-          <Row key={c.id} onClick={() => onStartCase(c.id)} title={c.title} sub={c.sector + ' · ' + c.difficulty + ' · ~' + c.suggestedTimeMin + ' min'}
-            right={<PrimaryButton small onClick={(e) => { e.stopPropagation(); onStartCase(c.id); }}>Start</PrimaryButton>} />
+      <div className="flex gap-1">
+        {[['investment', 'Investment Case'], ['diligence', 'PE Diligence Case']].map(([id, label]) => (
+          <button key={id} onClick={() => setCaseModeTab(id)} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: caseModeTab === id ? 'rgba(99,102,241,0.18)' : 'rgba(255,255,255,0.04)', color: caseModeTab === id ? BSP_T.accentBright : BSP_T.mid }}>{label}</button>
         ))}
       </div>
-      {bainSprint.cases.length > 0 && (
-        <div>
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>Your attempts</div>
-          {[...bainSprint.cases].reverse().map(a => {
-            const c = BAIN_SPRINT_CONTENT.cases.find(x => x.id === a.caseContentId);
-            return <Row key={a.id} onClick={() => onOpenCase(a.id)} title={c?.title} sub={fmtRelDate(a.dateStarted) + ' · ' + (a.status === 'completed' ? 'Completed' : 'In progress')}
-              right={a.recommendation && <Pill color={a.recommendation === 'invest' ? '#10b981' : '#f59e0b'}>{a.recommendation === 'invest' ? 'Would invest' : 'Would pass'}</Pill>} />;
-          })}
-        </div>
+
+      {caseModeTab === 'diligence' ? (
+        <>
+          <div className="rounded-xl p-3" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
+            <div className="text-xs leading-relaxed" style={{ color: BSP_T.mid }}>{BAIN_SPRINT_CONTENT.practiceSources[0].note}</div>
+          </div>
+          {(bainSprint.diligenceCases || []).filter(c => c.status !== 'completed').length > 0 && (
+            <div>
+              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>In progress</div>
+              {(bainSprint.diligenceCases || []).filter(c => c.status !== 'completed').map(a => {
+                const c = getPEDiligenceCaseConfig(a.caseContentId);
+                return <Row key={a.id} onClick={() => onOpenDiligenceCase(a.id)} title={c.title} sub={(PE_CASE_STATE_LABELS[a.state] || a.state) + ' · ' + (a.mode === 'practice' ? 'Practice' : 'Interview')}
+                  right={<PrimaryButton small onClick={(e) => { e.stopPropagation(); onOpenDiligenceCase(a.id); }}>Resume</PrimaryButton>} />;
+              })}
+            </div>
+          )}
+          <div>
+            <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>PE diligence cases</div>
+            {PE_DILIGENCE_CASES.map(c => (
+              <div key={c.id} className="flex items-center justify-between py-2 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                <div>
+                  <div className="text-sm font-medium" style={{ color: BSP_T.text }}>{c.title}</div>
+                  <div className="text-xs" style={{ color: BSP_T.faint }}>{c.label} · {c.difficulty} · ~{c.estimatedMin} min</div>
+                </div>
+                <div className="flex gap-1.5">
+                  <SecondaryButton onClick={() => onStartDiligenceCase(c.id, 'practice')}>Practice</SecondaryButton>
+                  <PrimaryButton small onClick={() => onStartDiligenceCase(c.id, 'interview')}>Interview</PrimaryButton>
+                </div>
+              </div>
+            ))}
+          </div>
+          {(bainSprint.diligenceCases || []).filter(c => c.status === 'completed').length > 0 && (
+            <div>
+              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>Completed</div>
+              {[...(bainSprint.diligenceCases || [])].filter(c => c.status === 'completed').reverse().map(a => {
+                const c = getPEDiligenceCaseConfig(a.caseContentId);
+                return <Row key={a.id} onClick={() => onOpenDiligenceCase(a.id)} title={c.title} sub="Completed" />;
+              })}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div>
+            <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>Investment cases</div>
+            {BAIN_SPRINT_CONTENT.cases.map(c => (
+              <Row key={c.id} onClick={() => onStartCase(c.id)} title={c.title} sub={c.sector + ' · ' + c.difficulty + ' · ~' + c.suggestedTimeMin + ' min'}
+                right={<PrimaryButton small onClick={(e) => { e.stopPropagation(); onStartCase(c.id); }}>Start</PrimaryButton>} />
+            ))}
+          </div>
+          {bainSprint.cases.length > 0 && (
+            <div>
+              <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BSP_T.faint }}>Your attempts</div>
+              {[...bainSprint.cases].reverse().map(a => {
+                const c = BAIN_SPRINT_CONTENT.cases.find(x => x.id === a.caseContentId);
+                return <Row key={a.id} onClick={() => onOpenCase(a.id)} title={c?.title} sub={fmtRelDate(a.dateStarted) + ' · ' + (a.status === 'completed' ? 'Completed' : 'In progress')}
+                  right={a.recommendation && <Pill color={a.recommendation === 'invest' ? '#10b981' : '#f59e0b'}>{a.recommendation === 'invest' ? 'Would invest' : 'Would pass'}</Pill>} />;
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -591,19 +646,23 @@ function BainIc60({ onRecordAttempt }){
 
 /* ==================== Root panel ==================== */
 
-function BainSprintPanel({ data, setData, toasts }){
+function BainSprintPanel({ data, setData, toasts, isMobile }){
   const strategy = emptyStrategy(data);
   const bainSprint = maybeArchiveSprint(emptyBainSprint(strategy), todayStr());
+  const apiKey = data.settings?.apiKey || '';
   const [bainTab, setBainTab] = useState('home');
   const [activeDealId, setActiveDealId] = useState(null);
   const [activeModuleId, setActiveModuleId] = useState(null);
   const [activeLboId, setActiveLboId] = useState(null);
   const [activeCaseAttemptId, setActiveCaseAttemptId] = useState(null);
+  const [caseModeTab, setCaseModeTab] = useState('investment');
+  const [activeDiligenceAttemptId, setActiveDiligenceAttemptId] = useState(null);
 
   const upBain = (patch) => setData(d => {
     const s = emptyStrategy(d);
     return { ...d, strategy: { ...s, bainSprint: { ...emptyBainSprint(s), ...patch } } };
   });
+  const setConsulting = (fn) => setData(d => ({ ...d, consulting: fn({ ...getDefaultConsulting(), ...(d.consulting || {}) }) }));
 
   useEffect(() => {
     if(!bainSprint.startedAt) upBain({ startedAt: new Date().toISOString() });
@@ -680,6 +739,41 @@ function BainSprintPanel({ data, setData, toasts }){
     toasts.push('Case logged — evidence recorded');
   };
 
+  const onStartDiligenceCase = (caseContentId, mode) => {
+    const attempt = initPEDiligenceAttempt(caseContentId, mode);
+    upBain({ diligenceCases: [...(bainSprint.diligenceCases || []), attempt] });
+    setActiveDiligenceAttemptId(attempt.id);
+    setBainTab('pe-case');
+  };
+  const onOpenDiligenceAttempt = (attemptId) => { setActiveDiligenceAttemptId(attemptId); setBainTab('pe-case'); };
+  const onUpdateDiligenceAttempt = (attemptId, patch) => {
+    upBain({ diligenceCases: (bainSprint.diligenceCases || []).map(c => c.id === attemptId ? { ...c, ...patch } : c) });
+  };
+  const onDiligenceCaseFinished = (attempt, caseContent) => {
+    setData(d => {
+      const s = emptyStrategy(d);
+      const bs = emptyBainSprint(s);
+      let nextCaps = { ...bs.capabilities };
+      Object.entries(attempt.dimensionScores || {}).forEach(([dimId, score]) => {
+        const curr = nextCaps[dimId] || { evidence: [], status: 'UNTESTED' };
+        const evidence = [...curr.evidence, { ts: new Date().toISOString(), score, source: 'pe-diligence-case', sourceId: attempt.id }];
+        nextCaps[dimId] = { evidence, status: deriveMasteryStatus(evidence) };
+      });
+      const nextBs = { ...bs, capabilities: nextCaps, diligenceCases: bs.diligenceCases.map(x => x.id === attempt.id ? attempt : x) };
+      return { ...d, strategy: { ...s, bainSprint: nextBs } };
+    });
+    // Transferable-evidence bridge into Consulting's OWN named competencies (never a new taxonomy) —
+    // a deliberately narrow signal, same spirit as evidenceForStrategyTransfer's Bain->Strategy bridge.
+    const { consultingComps } = peDiligenceEvidencedDimensions(caseContent);
+    const scoreValues = Object.values(attempt.dimensionScores || {});
+    if(scoreValues.length){
+      const avgScore = Math.round(scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length);
+      consultingComps.forEach(compId => {
+        recordConsultingEvidence({ sourceType: 'pe-diligence-case', sourceId: attempt.id, competency: compId, score: avgScore, observation: attempt.debriefInsight || '' }, setConsulting);
+      });
+    }
+  };
+
   const onRecordIc60 = (scenarioId, response, ratings) => {
     upBain({ ic60Attempts: [...bainSprint.ic60Attempts, { id: uid('ic60'), scenarioId, response, selfRating: ratings, ts: new Date().toISOString() }] });
     toasts.push('Rep logged');
@@ -705,8 +799,9 @@ function BainSprintPanel({ data, setData, toasts }){
       {bainTab === 'module' && activeModuleId && <BainLessonViewer moduleId={activeModuleId} bainSprint={bainSprint} onComplete={onComplete} onSaveReflectionDraft={onSaveReflectionDraft} onSaveNote={onSaveNote} onBack={() => setBainTab('learn')} />}
       {bainTab === 'lbo' && <BainReturnsLab bainSprint={bainSprint} onOpenLbo={onOpenLbo} />}
       {bainTab === 'lbo-detail' && activeLboId && <BainLboDrill problemId={activeLboId} onRecordAttempt={onRecordLboAttempt} onBack={() => setBainTab('lbo')} />}
-      {bainTab === 'cases' && <BainCasePractice bainSprint={bainSprint} onStartCase={onStartCase} onOpenCase={onOpenCaseAttempt} />}
+      {bainTab === 'cases' && <BainCasePractice bainSprint={bainSprint} onStartCase={onStartCase} onOpenCase={onOpenCaseAttempt} caseModeTab={caseModeTab} setCaseModeTab={setCaseModeTab} onStartDiligenceCase={onStartDiligenceCase} onOpenDiligenceCase={onOpenDiligenceAttempt} />}
       {bainTab === 'case' && activeCaseAttemptId && <BainCaseWorkspace attemptId={activeCaseAttemptId} bainSprint={bainSprint} onUpdateAttempt={onUpdateCaseAttempt} onCaseFinished={onCaseFinished} onSaveNote={onSaveNote} onBack={() => setBainTab('cases')} />}
+      {bainTab === 'pe-case' && activeDiligenceAttemptId && <BainDiligenceCasePanel attemptId={activeDiligenceAttemptId} bainSprint={bainSprint} apiKey={apiKey} toasts={toasts} onUpdateAttempt={onUpdateDiligenceAttempt} onCaseFinished={onDiligenceCaseFinished} onGoToModule={onOpenModule} onSaveNote={onSaveNote} onBack={() => setBainTab('cases')} isMobile={isMobile} />}
       {bainTab === 'ic60' && <BainIc60 onRecordAttempt={onRecordIc60} />}
     </div>
   );
