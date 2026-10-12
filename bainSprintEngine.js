@@ -22,7 +22,8 @@ function emptyBainSprint(strategy){
     dealMastery: {}, // {[dealId]: {dealId, studiedAt, lastPracticed, timesPracticed, evidence, nextReviewDate, reviewIntervalDays}}
     moduleProgress: {}, // {[moduleId]: {completedAt, reflection}}
     lboAttempts: [], // [{id, problemId, inputs, result, ts}]
-    cases: [], // same attempt shape as Strategy's case attempts (timer/scorecard/reflection)
+    cases: [], // same attempt shape as Strategy's case attempts (timer/scorecard/reflection) -- "Investment Case" mode
+    diligenceCases: [], // PE Diligence Case mode attempts (bainDiligenceContent.js/bainDiligenceEngine.js) -- a separate array, own id namespace, so neither mode's attempts collide
     ic60Attempts: [], // [{id, ts, scenarioId, response, selfRating:{answerFirst,thesis,economics,downside,concision}}]
     errorLog: [],
     ...((strategy && strategy.bainSprint) || {}),
@@ -205,6 +206,17 @@ function getNextBainSprintSession(bainSprint, content, today){
   const attemptedCaseIds = new Set((bainSprint.cases || []).map(c => c.caseContentId));
   const nextCase = content.cases.find(c => !attemptedCaseIds.has(c.id));
   if(nextCase) return { type: 'case-new', caseContentId: nextCase.id, title: nextCase.title, sub: 'Investment case — ' + nextCase.suggestedTimeMin + ' min' };
+
+  // Once the learner has some history (at least one completed module AND one completed
+  // Investment Case), occasionally point at the faster, candidate-led PE Diligence Case mode
+  // instead of always falling through to a free 60-second IC rep.
+  const completedModules = Object.values(bainSprint.moduleProgress || {}).filter(m => m.completedAt).length;
+  const completedInvestmentCases = (bainSprint.cases || []).filter(c => c.status === 'completed').length;
+  const attemptedDiligenceIds = new Set((bainSprint.diligenceCases || []).map(c => c.caseContentId));
+  if(completedModules >= 1 && completedInvestmentCases >= 1){
+    const nextDiligence = PE_DILIGENCE_CASES.find(c => !attemptedDiligenceIds.has(c.id));
+    if(nextDiligence) return { type: 'pe-diligence', caseContentId: nextDiligence.id, title: nextDiligence.title, sub: 'PE Diligence Case — ' + nextDiligence.estimatedMin + ' min' };
+  }
 
   const studiedDeals = Object.keys(bainSprint.dealMastery || {});
   if(studiedDeals.length) return { type: 'ic60', title: '60-second IC rep', sub: 'Keep the reflex sharp' };
