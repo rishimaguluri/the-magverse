@@ -362,4 +362,15 @@ const BAIN_SPRINT_CONTENT = {
     { week: 5, name: 'Written Case + CIM', status: 'placeholder' },
     { week: 6, name: 'Interview Simulation', status: 'placeholder' },
   ],
+
+  // Explicit source labeling for the PE Diligence Case mode (bainDiligenceContent.js) — never
+  // claim this is an official Bain Capital case format, only that it is modeled on a style seen
+  // in external interview-prep material. No proprietary case content is reproduced anywhere.
+  practiceSources: [
+    {
+      id: 'external-pe-case-prep-1',
+      label: 'External case-practice example',
+      note: 'This practice format is modeled on a candidate-led PE diligence case style seen in external interview-prep material. It is not an official Bain Capital case, and no dialogue, numbers, or case content from any source has been reproduced — every case in this mode is original synthetic content built to exercise the same skills.',
+    },
+  ],
 };
